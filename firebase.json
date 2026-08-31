@@ -1,0 +1,29 @@
+{
+	"firestore": {
+		"rules": "firestore.rules",
+		"indexes": "firestore.indexes.json"
+	},
+	"flutter": {
+		"platforms": {
+			"android": {
+				"default": {
+					"projectId": "agritrade-bef87",
+					"appId": "1:333409993687:android:a18324ec288fc026554192",
+					"fileOutput": "android/app/google-services.json"
+				}
+			},
+			"dart": {
+				"lib/firebase_options.dart": {
+					"projectId": "agritrade-bef87",
+					"configurations": {
+						"android": "1:333409993687:android:a18324ec288fc026554192",
+						"ios": "1:333409993687:ios:e436b1433d1b5251554192",
+						"macos": "1:333409993687:ios:e436b1433d1b5251554192",
+						"web": "1:333409993687:web:04793729931ec56c554192",
+						"windows": "1:333409993687:web:258dc08a033cee77554192"
+					}
+				}
+			}
+		}
+	}
+}

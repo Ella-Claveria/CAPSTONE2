@@ -1,0 +1,18 @@
+{
+  "@@locale": "en",
+  "welcomeBack": "Welcome back,",
+  "productsListed": "{count, plural, =1{1 product listed} other{{count} products listed}}",
+  "@productsListed": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "totalOrdersThisWeek": "TOTAL ORDERS\nTHIS WEEK",
+  "totalProducts": "TOTAL\nPRODUCTS",
+  "salesPerformance": "Sales Performance",
+  "monthLabel": "Month",
+  "monthlyRevenue": "Monthly Revenue",
+  "revenueUpdatesHint": "Revenue updates as orders come in.",
+  "reviews": "Reviews",
+  "noReviewsYet": "No reviews yet",
+  "noReviewsHint": "Buyers' reviews of your products will appear here.",
+  "somethingWrongProducts": "Something went wrong loading products."
+}

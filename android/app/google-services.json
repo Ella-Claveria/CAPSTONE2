@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "333409993687",
+    "project_id": "agritrade-bef87",
+    "storage_bucket": "agritrade-bef87.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:333409993687:android:a18324ec288fc026554192",
+        "android_client_info": {
+          "package_name": "com.example.agritrade"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC13bvoWl1TDq7cd5yLj7tvKSxMq1rl64E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

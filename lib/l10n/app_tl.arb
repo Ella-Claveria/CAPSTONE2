@@ -1,0 +1,15 @@
+{
+  "@@locale": "tl",
+  "welcomeBack": "Maligayang pagbabalik,",
+  "productsListed": "{count, plural, =1{1 produktong nakalista} other{{count} produktong nakalista}}",
+  "totalOrdersThisWeek": "KABUUANG ORDER\nNGAYONG LINGGO",
+  "totalProducts": "KABUUANG\nPRODUKTO",
+  "salesPerformance": "Pagganap ng Benta",
+  "monthLabel": "Buwan",
+  "monthlyRevenue": "Buwanang Kita",
+  "revenueUpdatesHint": "Ang kita ay nag-a-update habang may dumarating na order.",
+  "reviews": "Mga Review",
+  "noReviewsYet": "Wala pang review",
+  "noReviewsHint": "Lalabas dito ang mga review ng mamimili sa iyong produkto.",
+  "somethingWrongProducts": "May naganap na error sa pag-load ng produkto."
+}
