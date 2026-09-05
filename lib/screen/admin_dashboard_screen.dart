@@ -390,7 +390,7 @@ class _NotificationBell extends StatelessWidget {
                       shrinkWrap: true,
                       padding: EdgeInsets.zero,
                       itemCount: _notifications.length,
-                      separatorBuilder: (_, __) => Divider(height: 1, color: c.border),
+                      separatorBuilder: (_, _) => Divider(height: 1, color: c.border),
                       itemBuilder: (context, index) {
                         final n = _notifications[index];
                         return ListTile(
