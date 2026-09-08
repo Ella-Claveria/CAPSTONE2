@@ -14,5 +14,53 @@
   "reviews": "Reviews",
   "noReviewsYet": "No reviews yet",
   "noReviewsHint": "Buyers' reviews of your products will appear here.",
-  "somethingWrongProducts": "Something went wrong loading products."
+  "somethingWrongProducts": "Something went wrong loading products.",
+
+  "splashTagline": "Fresh from Farm to Table",
+
+  "roleSelectionTitle": "Who are you shopping as?",
+  "roleSelectionSubtitle": "Choose how you'll use AgriTrade+",
+  "roleFarmer": "Farmer",
+  "roleFarmerDescription": "Sell your harvest directly to buyers",
+  "roleBuyer": "Buyer",
+  "roleBuyerDescription": "Order fresh produce from local farmers",
+  "continueAsFarmer": "Continue as Farmer",
+  "continueAsFarmerSubtitle": "List crops & livestock, manage orders",
+  "continueAsBuyer": "Continue as Buyer",
+  "continueAsBuyerSubtitle": "Source fresh goods",
+
+  "welcomeTo": "Welcome to",
+  "farmerLoginTitle": "Farmer Login",
+  "buyerLoginTitle": "Buyer Login",
+  "adminLoginTitle": "Admin Login",
+  "emailAddress": "Email Address",
+  "password": "Password",
+  "forgotPassword": "Forgot Password?",
+  "loginButton": "Login",
+  "noAccountSignUp": "Don't have an account? ",
+  "signUp": "Sign up",
+  "createOne": "Create One.",
+  "saveLoginInfo": "Save login info",
+
+  "registerTitle": "Create Account",
+  "fullName": "Full Name",
+  "confirmPassword": "Confirm Password",
+  "registerButton": "Register",
+  "alreadyHaveAccount": "Already have an account? ",
+  "logIn": "Log in",
+
+  "navExplore": "Explore",
+  "navMessages": "Messages",
+  "navOrders": "Orders",
+  "navMap": "Map",
+  "navProfile": "Profile",
+  "navMarket": "Market",
+
+  "selectLanguage": "Select Language",
+  "english": "English",
+  "tagalog": "Tagalog",
+  "languageChanged": "Language set to {language}.",
+  "@languageChanged": {
+    "placeholders": { "language": { "type": "String" } }
+  }
 }

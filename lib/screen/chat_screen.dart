@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/message_service.dart';
 import '../services/cloudinary_service.dart';
+import '../widgets/pricing_calculator_sheet.dart';
 import 'place_order_screen.dart';
 
 /// A single conversation thread — real-time, Messenger-style.
@@ -255,8 +256,9 @@ class _ChatScreenState extends State<ChatScreen> {
     num price,
     String pricingType,
     int minimumQuantity,
-    int maximumQuantity,
-  ) async {
+    int maximumQuantity, {
+    int? initialQuantity,
+  }) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -272,7 +274,30 @@ class _ChatScreenState extends State<ChatScreen> {
           pricingType: pricingType,
           minimumQuantity: minimumQuantity,
           maximumQuantity: maximumQuantity,
+          initialQuantity: initialQuantity,
         ),
+      ),
+    );
+  }
+
+  void _openPricingCalculator(
+    num price,
+    String pricingType,
+    int minimumQuantity,
+    int maximumQuantity,
+  ) {
+    showPricingCalculatorSheet(
+      context,
+      pricingType: pricingType,
+      unitPrice: price,
+      minimumQuantity: minimumQuantity,
+      maximumQuantity: maximumQuantity,
+      onProceed: (quantity) => _choosePrice(
+        price,
+        pricingType,
+        minimumQuantity,
+        maximumQuantity,
+        initialQuantity: quantity,
       ),
     );
   }
@@ -674,8 +699,8 @@ class _ChatScreenState extends State<ChatScreen> {
       child: SizedBox(
         width: double.infinity,
         child: OutlinedButton(
-          onPressed: () =>
-              _choosePrice(price, type, minimumQuantity, maximumQuantity),
+          onPressed: () => _openPricingCalculator(
+              price, type, minimumQuantity, maximumQuantity),
           child: Text('$label - ₱${price.toStringAsFixed(2)}/kg'),
         ),
       ),

@@ -187,42 +187,39 @@ class FarmerRevenueService {
       marketplaceCounts[name] = (marketplaceCounts[name] ?? 0) + 1;
     }
 
+    final fallbackProductCounts = <String, int>{};
+    for (final product in products) {
+      final name = (product['name'] ?? '').toString();
+      if (name.isEmpty) continue;
+      fallbackProductCounts[name] = (fallbackProductCounts[name] ?? 0) + 1;
+    }
+
     String seasonalPick = 'Vegetables';
+    double seasonalShare = 0;
     if (seasonalCounts.isNotEmpty) {
-      seasonalPick = seasonalCounts.entries
-          .reduce((a, b) => a.value >= b.value ? a : b)
-          .key;
-    } else {
-      final productCounts = <String, int>{};
-      for (final product in products) {
-        final name = (product['name'] ?? '').toString();
-        if (name.isEmpty) continue;
-        productCounts[name] = (productCounts[name] ?? 0) + 1;
-      }
-      if (productCounts.isNotEmpty) {
-        seasonalPick = productCounts.entries
-            .reduce((a, b) => a.value >= b.value ? a : b)
-            .key;
-      }
+      final top = seasonalCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+      seasonalPick = top.key;
+      final total = seasonalCounts.values.reduce((a, b) => a + b);
+      seasonalShare = total == 0 ? 0 : top.value / total;
+    } else if (fallbackProductCounts.isNotEmpty) {
+      final top = fallbackProductCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+      seasonalPick = top.key;
+      final total = fallbackProductCounts.values.reduce((a, b) => a + b);
+      seasonalShare = total == 0 ? 0 : top.value / total;
     }
 
     String demandPick = 'Vegetables';
+    double marketShare = 0;
     if (marketplaceCounts.isNotEmpty) {
-      demandPick = marketplaceCounts.entries
-          .reduce((a, b) => a.value >= b.value ? a : b)
-          .key;
-    } else {
-      final productCounts = <String, int>{};
-      for (final product in products) {
-        final name = (product['name'] ?? '').toString();
-        if (name.isEmpty) continue;
-        productCounts[name] = (productCounts[name] ?? 0) + 1;
-      }
-      if (productCounts.isNotEmpty) {
-        demandPick = productCounts.entries
-            .reduce((a, b) => a.value >= b.value ? a : b)
-            .key;
-      }
+      final top = marketplaceCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+      demandPick = top.key;
+      final total = marketplaceCounts.values.reduce((a, b) => a + b);
+      marketShare = total == 0 ? 0 : top.value / total;
+    } else if (fallbackProductCounts.isNotEmpty) {
+      final top = fallbackProductCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
+      demandPick = top.key;
+      final total = fallbackProductCounts.values.reduce((a, b) => a + b);
+      marketShare = total == 0 ? 0 : top.value / total;
     }
 
     double averagePrice = 0;
@@ -244,6 +241,8 @@ class FarmerRevenueService {
       'seasonalPick': seasonalPick,
       'marketPick': demandPick,
       'marketAverage': averagePrice,
+      'seasonalShare': seasonalShare,
+      'marketShare': marketShare,
     };
   }
 

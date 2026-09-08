@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../widgets/agritrade_text.dart'; // Imports your custom text widget
 import 'admin_dashboard_screen.dart';
+import '../widgets/forgot_password_dialog.dart';
 
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
@@ -167,9 +168,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                           MouseRegion(
                             cursor: SystemMouseCursors.click,
                             child: GestureDetector(
-                              onTap: () {
-                                // Add forgot password logic here
-                              },
+                              onTap: () => showForgotPasswordDialog(
+                                context,
+                                initialEmail: _emailController.text.trim(),
+                              ),
                               child: Text(
                                 'Forgot Password?', 
                                 style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.blue[600])

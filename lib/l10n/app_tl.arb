@@ -11,5 +11,50 @@
   "reviews": "Mga Review",
   "noReviewsYet": "Wala pang review",
   "noReviewsHint": "Lalabas dito ang mga review ng mamimili sa iyong produkto.",
-  "somethingWrongProducts": "May naganap na error sa pag-load ng produkto."
+  "somethingWrongProducts": "May naganap na error sa pag-load ng produkto.",
+
+  "splashTagline": "Sariwa Mula sa Bukid Hanggang Mesa",
+
+  "roleSelectionTitle": "Pumili ng Iyong Tungkulin",
+  "roleSelectionSubtitle": "Piliin kung paano mo gagamitin ang AgriTrade+",
+  "roleFarmer": "Magsasaka",
+  "roleFarmerDescription": "Ibenta ang iyong ani nang direkta sa mga mamimili",
+  "roleBuyer": "Mamimili",
+  "roleBuyerDescription": "Mag-order ng sariwang ani mula sa mga lokal na magsasaka",
+  "continueAsFarmer": "Magpatuloy bilang Magsasaka",
+  "continueAsFarmerSubtitle": "Ilista ang ani at hayop, pamahalaan ang mga order",
+  "continueAsBuyer": "Magpatuloy bilang Mamimili",
+  "continueAsBuyerSubtitle": "Bumili ng sariwang produkto",
+
+  "welcomeTo": "Maligayang pagdating sa",
+  "farmerLoginTitle": "Login ng Magsasaka",
+  "buyerLoginTitle": "Login ng Mamimili",
+  "adminLoginTitle": "Login ng Admin",
+  "emailAddress": "Email Address",
+  "password": "Password",
+  "forgotPassword": "Nakalimutan ang Password?",
+  "loginButton": "Mag-login",
+  "noAccountSignUp": "Wala ka pang account? ",
+  "signUp": "Mag-sign up",
+  "createOne": "Gumawa ng Isa.",
+  "saveLoginInfo": "I-save ang login info",
+
+  "registerTitle": "Gumawa ng Account",
+  "fullName": "Buong Pangalan",
+  "confirmPassword": "Kumpirmahin ang Password",
+  "registerButton": "Magrehistro",
+  "alreadyHaveAccount": "May account ka na? ",
+  "logIn": "Mag-login",
+
+  "navExplore": "Tuklasin",
+  "navMessages": "Mensahe",
+  "navOrders": "Order",
+  "navMap": "Mapa",
+  "navProfile": "Profile",
+  "navMarket": "Market",
+
+  "selectLanguage": "Piliin ang Wika",
+  "english": "Ingles",
+  "tagalog": "Tagalog",
+  "languageChanged": "Naka-set na sa {language} ang wika."
 }

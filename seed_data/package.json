@@ -1,0 +1,14 @@
+{
+  "name": "agritrade-seed-data",
+  "private": true,
+  "version": "1.0.0",
+  "description": "One-time script to load sample historical data into AgriTrade+'s Firestore project.",
+  "type": "commonjs",
+  "scripts": {
+    "import": "node import.js",
+    "delete": "node import.js --delete"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}

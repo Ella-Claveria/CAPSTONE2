@@ -10,22 +10,19 @@ import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import 'email_verification_screen.dart';
 import '../services/connectivity_service.dart';
-
-// ============================================================
-// The 21 barangays of Laurel, Batangas.
-// This is the list the barangay dropdown uses.
-// ============================================================
-
-const List<String> kLaurelBarangays = [
-  'As-Is', 'Balakilong', 'Barangay 1', 'Barangay 2', 'Barangay 3',
-  'Barangay 4', 'Barangay 5', 'Berinayan', 'Bugaan East', 'Bugaan West',
-  'Buso-buso', 'Dayap Itaas', 'Gulod', 'J. Leviste', 'Molinete',
-  'Niyugan', 'Paliparan', 'San Gabriel', 'San Gregorio', 'Santa Maria', 'Ticub',
-];
+import '../data/laurel_barangays.dart';
+import '../services/location_permission_prompt.dart';
+import '../widgets/permission_rationale_dialog.dart';
+import 'page_transitions.dart';
+import '../l10n/app_localizations.dart';
 
 class RegisterScreen extends StatefulWidget {
-  final String role;
-  const RegisterScreen({super.key, required this.role});
+  // Which role the toggle at the top starts on. Defaults to buyer; the
+  // "remembered last login" flow passes whichever role that device last
+  // used, but the toggle is always live — the user can switch it right
+  // there on the form and the fields below adjust accordingly.
+  final String initialRole;
+  const RegisterScreen({super.key, this.initialRole = 'buyer'});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -53,6 +50,24 @@ class _RegisterScreenState extends State<RegisterScreen>
   bool _obscureConfirm = true;
   bool _triedSubmit = false; // becomes true once they tap Sign Up
 
+  late String _selectedRole = widget.initialRole;
+
+  // This form is the only one long enough to scroll, so the floating back
+  // arrow only gets its translucent backdrop once content is actually
+  // passing underneath it — at the very top it sits directly on the plain
+  // background and doesn't need one.
+  final _scrollController = ScrollController();
+  bool _scrolledDown = false;
+
+  // Farmer-only: whether we've already kicked off the location-permission
+  // prompt for this registration session (fires once, the first time they
+  // open the barangay picker).
+  bool _locationPromptShown = false;
+
+  // Whether we've already explained why we need photo-library access, the
+  // first time they tap to attach their certificate.
+  bool _photoPromptShown = false;
+
   // ---------- Entrance animation, matching the splash ----------
   late final AnimationController _animController;
   late final Animation<double> _fade;
@@ -60,7 +75,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
   final _emailPattern = RegExp(r'^[\w\.\-]+@([\w\-]+\.)+[a-zA-Z]{2,}$');
 
-  bool get _isFarmer => widget.role == 'farmer';
+  bool get _isFarmer => _selectedRole == 'farmer';
 
   @override
   void initState() {
@@ -71,6 +86,8 @@ class _RegisterScreenState extends State<RegisterScreen>
     _emailController.addListener(_onChange);
     _passwordController.addListener(_onChange);
     _confirmController.addListener(_onChange);
+
+    _scrollController.addListener(_onScroll);
 
     _animController = AnimationController(
       vsync: this,
@@ -88,6 +105,26 @@ class _RegisterScreenState extends State<RegisterScreen>
 
   void _onChange() => setState(() {});
 
+  void _onScroll() {
+    final scrolled = _scrollController.offset > 4;
+    if (scrolled != _scrolledDown) {
+      setState(() => _scrolledDown = scrolled);
+    }
+  }
+
+  void _selectRole(String role) {
+    if (role == _selectedRole) return;
+    setState(() {
+      _selectedRole = role;
+      // Farmer-only fields don't apply once switched back to buyer.
+      if (role != 'farmer') {
+        _selectedBarangay = null;
+        _certFile = null;
+        _certBytes = null;
+      }
+    });
+  }
+
   @override
   void dispose() {
     _fullNameController.dispose();
@@ -95,45 +132,44 @@ class _RegisterScreenState extends State<RegisterScreen>
     _passwordController.dispose();
     _confirmController.dispose();
     _animController.dispose();
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     super.dispose();
   }
 
   // ==========================================================
   // LIVE VALIDATION
   // ==========================================================
+  bool _hasUppercase(String p) => RegExp(r'[A-Z]').hasMatch(p);
+  bool _hasLowercase(String p) => RegExp(r'[a-z]').hasMatch(p);
+  bool _hasNumber(String p) => RegExp(r'[0-9]').hasMatch(p);
+  bool _hasSymbol(String p) => RegExp(r'''[!@#$%^&*(),.?":{}|<>_+\-=\[\]]''').hasMatch(p);
+
   bool _passwordMeetsRules(String p) =>
       p.length >= 8 &&
-      RegExp(r'[A-Za-z]').hasMatch(p) &&
-      RegExp(r'[0-9]').hasMatch(p);
+      _hasUppercase(p) &&
+      _hasLowercase(p) &&
+      _hasNumber(p) &&
+      _hasSymbol(p);
 
   String? get _nameError {
     final name = _fullNameController.text.trim();
     if (name.isEmpty) return null;
-    if (name.length < 3) return 'Masyadong maikli ang pangalan.';
+    if (name.length < 3) return 'That name looks too short.';
     return null;
   }
 
   String? get _emailError {
     final email = _emailController.text.trim();
     if (email.isEmpty) return null;
-    if (!_emailPattern.hasMatch(email)) return 'Mukhang mali ang format ng email.';
-    return null;
-  }
-
-  String? get _passwordError {
-    final p = _passwordController.text;
-    if (p.isEmpty) return null;
-    if (p.length < 8) return 'Dapat hindi bababa sa 8 characters.';
-    if (!RegExp(r'[A-Za-z]').hasMatch(p) || !RegExp(r'[0-9]').hasMatch(p)) {
-      return 'Dapat may letra at numero.';
-    }
+    if (!_emailPattern.hasMatch(email)) return "That doesn't look like a valid email.";
     return null;
   }
 
   String? get _confirmError {
     final c = _confirmController.text;
     if (c.isEmpty) return null;
-    if (c != _passwordController.text) return 'Hindi magkatugma ang password.';
+    if (c != _passwordController.text) return "Passwords don't match.";
     return null;
   }
 
@@ -164,7 +200,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     // ── Internet check ──
     if (!await hasInternet()) {
-      _showMessage('Walang internet connection. Pakisuri ang iyong koneksyon.');
+      _showMessage('No internet connection. Please check your connection.');
       return;
     }
 
@@ -175,7 +211,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       fullName: _fullNameController.text.trim(),
       email: _emailController.text.trim(),
       password: _passwordController.text,
-      role: widget.role,
+      role: _selectedRole,
     );
 
     if (!mounted) return;
@@ -197,7 +233,7 @@ class _RegisterScreenState extends State<RegisterScreen>
         if (!mounted) return;
         if (certUrl == null) {
           setState(() => _loading = false);
-          _showMessage('Hindi na-upload ang certificate. Subukan ulit.');
+          _showMessage('Certificate upload failed. Please try again.');
           return;
         }
 
@@ -229,6 +265,20 @@ class _RegisterScreenState extends State<RegisterScreen>
         }
         // ==========================================================
       }
+    } else {
+      // Buyers don't see a location-driven field during registration (that's
+      // the farmer-only barangay picker), so this is their first natural
+      // moment for it — right after their account exists, before they land
+      // on the marketplace.
+      if (mounted) {
+        await maybeRequestLocationPermission(
+          context,
+          title: 'Find farms near you',
+          message: "AgriTrade+ uses your location to show how far nearby "
+              "farms are and sort them by distance. You can skip this and "
+              "still browse everything.",
+        );
+      }
     }
 
     if (!mounted) return;
@@ -237,12 +287,10 @@ class _RegisterScreenState extends State<RegisterScreen>
     // ---- Step 3: go verify the email ----
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (_) => EmailVerificationScreen(
-          role: widget.role,
-          email: _emailController.text.trim(),
-        ),
-      ),
+      slideRoute(EmailVerificationScreen(
+        role: _selectedRole,
+        email: _emailController.text.trim(),
+      )),
     );
   }
 
@@ -255,6 +303,21 @@ class _RegisterScreenState extends State<RegisterScreen>
   // Certificate picker
   // ==========================================================
   Future<void> _pickCertificate() async {
+    // Explain why before the OS photo-library prompt appears, instead of
+    // surprising them with a permission dialog the moment they tap this.
+    if (!_photoPromptShown) {
+      _photoPromptShown = true;
+      final proceed = await showPermissionRationale(
+        context,
+        icon: Icons.photo_library_outlined,
+        title: 'Attach your certificate',
+        message: 'AgriTrade+ needs access to your photos so you can attach '
+            'a picture of your agricultural certification.',
+      );
+      if (!proceed) return;
+      if (!mounted) return;
+    }
+
     final XFile? picked = await _imagePicker.pickImage(
       source: ImageSource.gallery,
       maxWidth: 1200,
@@ -274,6 +337,53 @@ class _RegisterScreenState extends State<RegisterScreen>
       _certFile = null;
       _certBytes = null;
     });
+  }
+
+  // ==========================================================
+  // Role toggle — the default is Buyer; switching to Farmer reveals the
+  // verification fields below without leaving this page.
+  // ==========================================================
+  Widget _roleToggle() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppTheme.fieldFill,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: _roleToggleOption('buyer', AppLocalizations.of(context)!.roleBuyer, Icons.shopping_cart_outlined)),
+          Expanded(child: _roleToggleOption('farmer', AppLocalizations.of(context)!.roleFarmer, Icons.agriculture_outlined)),
+        ],
+      ),
+    );
+  }
+
+  Widget _roleToggleOption(String role, String label, IconData icon) {
+    final selected = _selectedRole == role;
+    return GestureDetector(
+      onTap: () => _selectRole(role),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? AppTheme.dark : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 17, color: selected ? Colors.white : Colors.black54),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: AppTheme.body(color: selected ? Colors.white : Colors.black87, size: 14)
+                  .copyWith(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ==========================================================
@@ -311,6 +421,101 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   // ==========================================================
+  // Live password requirements — hidden until they start typing a
+  // password, then each item turns green the moment it's satisfied.
+  // ==========================================================
+  Widget _passwordRequirements() {
+    final p = _passwordController.text;
+    if (p.isEmpty) return const SizedBox(height: 16);
+
+    final requirements = <(String, bool)>[
+      ('8+ characters', p.length >= 8),
+      ('Uppercase letter', _hasUppercase(p)),
+      ('Lowercase letter', _hasLowercase(p)),
+      ('Number', _hasNumber(p)),
+      ('Symbol', _hasSymbol(p)),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Wrap(
+        spacing: 12,
+        runSpacing: 6,
+        children: requirements.map((req) {
+          final (label, met) = req;
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                met ? Icons.check_circle : Icons.circle_outlined,
+                size: 14,
+                color: met ? Colors.green[600] : Colors.grey[400],
+              ),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: met ? FontWeight.w600 : FontWeight.normal,
+                  color: met ? Colors.green[700] : Colors.grey[600],
+                ),
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  // ==========================================================
+  // A heads-up before the farmer-only fields: this app only approves
+  // farmers within Laurel, Batangas (the barangay list below is scoped to
+  // it), so anyone outside that area shouldn't expect to get verified.
+  // ==========================================================
+  Widget _laurelNotice() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.shade300),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Only verified farmers from Laurel, Batangas will be approved.',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.amber.shade900,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Opening the barangay picker is the clearest signal a farmer has reached
+  // the location-relevant part of the form, so that's when we explain and
+  // ask for location access — once per registration session.
+  void _maybeRequestBarangayLocation() {
+    if (_locationPromptShown) return;
+    _locationPromptShown = true;
+    maybeRequestLocationPermission(
+      context,
+      title: 'Verify your barangay',
+      message: "AgriTrade+ uses your location to help confirm you're "
+          "registering from Laurel, Batangas.",
+    );
+  }
+
+  // ==========================================================
   // Barangay dropdown (Laurel only)
   // ==========================================================
   Widget _buildBarangayDropdown() {
@@ -323,10 +528,11 @@ class _RegisterScreenState extends State<RegisterScreen>
         DropdownButtonFormField<String>(
           initialValue: _selectedBarangay,
           isExpanded: true,
+          onTap: _maybeRequestBarangayLocation,
           decoration: AppTheme.inputBox(
-            hint: 'Piliin ang iyong barangay',
+            hint: 'Select your barangay',
             icon: Icons.location_on_outlined,
-            errorText: showError ? 'Pumili ng barangay sa Laurel.' : null,
+            errorText: showError ? 'Please select a barangay in Laurel.' : null,
           ),
           items: kLaurelBarangays
               .map((b) => DropdownMenuItem(value: b, child: Text(b)))
@@ -368,10 +574,10 @@ class _RegisterScreenState extends State<RegisterScreen>
                       const Icon(Icons.upload_file,
                           size: 38, color: AppTheme.mid),
                       const SizedBox(height: 8),
-                      Text('I-attach ang iyong certificate',
+                      Text('Attach your certificate',
                           style: AppTheme.body(size: 13)),
                       const SizedBox(height: 2),
-                      Text('(larawan ng dokumento)',
+                      Text('(photo of the document)',
                           style: AppTheme.body(
                               color: Colors.black45, size: 11.5)),
                     ],
@@ -393,7 +599,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                             icon: const Icon(Icons.close,
                                 color: Colors.white, size: 20),
                             onPressed: _loading ? null : _removeCertificate,
-                            tooltip: 'Alisin',
+                            tooltip: 'Remove',
                           ),
                         ),
                       ),
@@ -403,7 +609,7 @@ class _RegisterScreenState extends State<RegisterScreen>
         ),
         if (showError) ...[
           const SizedBox(height: 6),
-          const Text('Kailangan ang agricultural certification.',
+          const Text('Agricultural certification is required.',
               style: TextStyle(color: Colors.red, fontSize: 11.5)),
         ],
         const SizedBox(height: 16),
@@ -416,215 +622,234 @@ class _RegisterScreenState extends State<RegisterScreen>
     final canSubmit = _isFormValid && !_loading;
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.dark,
-          image: DecorationImage(
-            image: AssetImage('assets/background_login.png'),
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: FadeTransition(
-                opacity: _fade,
-                child: SlideTransition(
-                  position: _slide,
-                  child: Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: AppTheme.authCard(),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // ---- Back button ----
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: IconButton(
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                            icon: const Icon(Icons.arrow_back,
-                                color: AppTheme.dark),
-                            onPressed: () => Navigator.pop(context),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-
-                        // ---- Logo ----
-                        Center(
-                          child: Image.asset(
-                            'assets/logo.png',
-                            width: 70,
-                            height: 70,
-                            errorBuilder: (context, error, stackTrace) {
-                              return Container(
-                                width: 70,
-                                height: 70,
-                                decoration: const BoxDecoration(
-                                  color: AppTheme.mid,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.agriculture,
-                                    size: 38, color: Colors.white),
-                              );
-                            },
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-
-                        const Center(child: AgriTradeText(fontSize: 26)),
-                        const SizedBox(height: 6),
-                        Center(
-                          child: Text('Create an Account',
-                              style: AppTheme.heading(20)),
-                        ),
-                        const SizedBox(height: 4),
-                        Center(
-                          child: Text(
-                            _isFarmer ? 'as a Farmer' : 'as a Buyer',
-                            style: AppTheme.body(
-                                color: Colors.black54, size: 13.5),
-                          ),
-                        ),
-                        const SizedBox(height: 22),
-
-                        // ---- Full name ----
-                        _buildField(
-                          label: 'Full Name',
-                          controller: _fullNameController,
-                          hint: 'Juan F. Santos',
-                          icon: Icons.person_outline,
-                          errorText: _nameError,
-                        ),
-
-                        // ---- Email ----
-                        _buildField(
-                          label: 'Email Address',
-                          controller: _emailController,
-                          hint: 'juansantos@gmail.com',
-                          icon: Icons.email_outlined,
-                          keyboard: TextInputType.emailAddress,
-                          errorText: _emailError,
-                        ),
-
-                        // ---- Password ----
-                        _buildField(
-                          label: 'Password',
-                          controller: _passwordController,
-                          hint: 'At least 8 characters',
-                          icon: Icons.lock_outline,
-                          obscure: _obscurePassword,
-                          errorText: _passwordError,
-                          suffix: IconButton(
-                            icon: Icon(
-                              _obscurePassword
-                                  ? Icons.visibility_off
-                                  : Icons.visibility,
-                              color: Colors.grey,
-                            ),
-                            onPressed: () => setState(
-                                () => _obscurePassword = !_obscurePassword),
-                          ),
-                        ),
-
-                        // ---- Confirm password ----
-                        _buildField(
-                          label: 'Confirm Password',
-                          controller: _confirmController,
-                          hint: 'Ulitin ang password',
-                          icon: Icons.lock_reset_outlined,
-                          obscure: _obscureConfirm,
-                          errorText: _confirmError,
-                          suffix: IconButton(
-                            icon: Icon(
-                              _obscureConfirm
-                                  ? Icons.visibility_off
-                                  : Icons.visibility,
-                              color: Colors.grey,
-                            ),
-                            onPressed: () => setState(
-                                () => _obscureConfirm = !_obscureConfirm),
-                          ),
-                        ),
-
-                        // ================================================
-                        // FARMER VERIFICATION — farmers only.
-                        // Buyers never see this section.
-                        // ================================================
-                        if (_isFarmer) ...[
-                          const Divider(height: 8),
-                          const SizedBox(height: 14),
-                          _buildBarangayDropdown(),
-                          _buildCertificatePicker(),
-                        ],
-
-                        const SizedBox(height: 6),
-
-                        // ---- Sign up button ----
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: canSubmit ? _register : null,
-                            style: AppTheme.primaryButton(),
-                            child: _loading
-                                ? const SizedBox(
-                                    height: 20,
-                                    width: 20,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : Text('Sign Up',
-                                    style: AppTheme.buttonText()),
-                          ),
-                        ),
-
-                        // Gentle hint when the button is disabled.
-                        if (!_isFormValid && !_loading) ...[
-                          const SizedBox(height: 8),
-                          Center(
-                            child: Text(
-                              'Kumpletuhin muna ang lahat ng field.',
-                              style: AppTheme.body(
-                                  color: Colors.black45, size: 12),
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 14),
-
-                        // ---- Back to login ----
-                        Center(
-                          child: GestureDetector(
-                            onTap: () => Navigator.pop(context),
-                            child: RichText(
-                              text: TextSpan(
-                                style: AppTheme.body(
-                                    color: Colors.black87, size: 13.5),
-                                children: [
-                                  const TextSpan(
-                                      text: 'Already have an account? '),
-                                  TextSpan(
-                                    text: 'Sign in',
-                                    style: AppTheme.body(
-                                      color: AppTheme.dark,
-                                      size: 13.5,
-                                    ).copyWith(fontWeight: FontWeight.bold),
-                                  ),
-                                ],
+      backgroundColor: AppTheme.bgLight,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                Expanded(
+                  child: SingleChildScrollView(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.fromLTRB(24, 64, 24, 12),
+                    child: FadeTransition(
+                      opacity: _fade,
+                      child: SlideTransition(
+                        position: _slide,
+                        child: Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(20),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.06),
+                                blurRadius: 16,
+                                offset: const Offset(0, 6),
                               ),
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                          // ---- Logo ----
+                          Center(
+                            child: Image.asset(
+                              'assets/logo.png',
+                              width: 70,
+                              height: 70,
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  width: 70,
+                                  height: 70,
+                                  decoration: const BoxDecoration(
+                                    color: AppTheme.mid,
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.agriculture,
+                                      size: 38, color: Colors.white),
+                                );
+                              },
                             ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 8),
+
+                          const Center(child: AgriTradeText(fontSize: 26)),
+                          const SizedBox(height: 6),
+                          Center(
+                            child: Text(AppLocalizations.of(context)!.registerTitle,
+                                style: AppTheme.heading(20)),
+                          ),
+                          const SizedBox(height: 20),
+
+                          // ---- Role toggle (defaults to Buyer) ----
+                          Text('I am a...', style: AppTheme.label()),
+                          const SizedBox(height: 8),
+                          _roleToggle(),
+                          const SizedBox(height: 20),
+
+                          // ---- Full name ----
+                          _buildField(
+                            label: AppLocalizations.of(context)!.fullName,
+                            controller: _fullNameController,
+                            hint: 'Juan F. Santos',
+                            icon: Icons.person_outline,
+                            errorText: _nameError,
+                          ),
+
+                          // ---- Email ----
+                          _buildField(
+                            label: AppLocalizations.of(context)!.emailAddress,
+                            controller: _emailController,
+                            hint: 'juansantos@gmail.com',
+                            icon: Icons.email_outlined,
+                            keyboard: TextInputType.emailAddress,
+                            errorText: _emailError,
+                          ),
+
+                          // ---- Password ----
+                          _buildField(
+                            label: AppLocalizations.of(context)!.password,
+                            controller: _passwordController,
+                            hint: 'At least 8 characters',
+                            icon: Icons.lock_outline,
+                            obscure: _obscurePassword,
+                            suffix: IconButton(
+                              icon: Icon(
+                                _obscurePassword
+                                    ? Icons.visibility_off
+                                    : Icons.visibility,
+                                color: Colors.grey,
+                              ),
+                              onPressed: () => setState(
+                                  () => _obscurePassword = !_obscurePassword),
+                            ),
+                          ),
+                          _passwordRequirements(),
+
+                          // ---- Confirm password ----
+                          _buildField(
+                            label: AppLocalizations.of(context)!.confirmPassword,
+                            controller: _confirmController,
+                            hint: 'Re-enter your password',
+                            icon: Icons.lock_reset_outlined,
+                            obscure: _obscureConfirm,
+                            errorText: _confirmError,
+                            suffix: IconButton(
+                              icon: Icon(
+                                _obscureConfirm
+                                    ? Icons.visibility_off
+                                    : Icons.visibility,
+                                color: Colors.grey,
+                              ),
+                              onPressed: () => setState(
+                                  () => _obscureConfirm = !_obscureConfirm),
+                            ),
+                          ),
+
+                          // ================================================
+                          // FARMER VERIFICATION — only shown while the
+                          // toggle above is set to Farmer.
+                          // ================================================
+                          if (_isFarmer) ...[
+                            const Divider(height: 8),
+                            const SizedBox(height: 14),
+                            _laurelNotice(),
+                            const SizedBox(height: 14),
+                            _buildBarangayDropdown(),
+                            _buildCertificatePicker(),
+                          ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
+
+            // ---- Register button, floating above the scrollable form so ----
+            // ---- it's always reachable no matter how long the form gets ----
+            // ---- (e.g. once the farmer fields are showing) — plus the   ----
+            // ---- log-in link, both pinned to the bottom of the screen.  ----
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
+              decoration: BoxDecoration(
+                color: AppTheme.bgLight,
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, -4)),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: canSubmit ? _register : null,
+                      style: AppTheme.primaryButton(),
+                      child: _loading
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : Text(AppLocalizations.of(context)!.registerButton, style: AppTheme.buttonText()),
+                    ),
+                  ),
+                  // Gentle hint when the button is disabled.
+                  if (!_isFormValid && !_loading) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Please complete all fields first.',
+                      style: AppTheme.body(color: Colors.black45, size: 12),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  GestureDetector(
+                    onTap: () => Navigator.pop(context),
+                    child: RichText(
+                      text: TextSpan(
+                        style: AppTheme.body(color: Colors.black87, size: 13.5),
+                        children: [
+                          TextSpan(text: AppLocalizations.of(context)!.alreadyHaveAccount),
+                          TextSpan(
+                            text: AppLocalizations.of(context)!.logIn,
+                            style: AppTheme.body(color: AppTheme.dark, size: 13.5)
+                                .copyWith(fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+              ],
+            ),
+
+            // ---- Back arrow, floating above everything at the top-left ----
+            // ---- corner — not part of the card, so it stays visible    ----
+            // ---- no matter how far the form is scrolled. Only gets its ----
+            // ---- translucent backdrop once the card has actually       ----
+            // ---- scrolled underneath it — at rest it sits on the plain ----
+            // ---- background and doesn't need one.                     ----
+            Positioned(
+              top: 4,
+              left: 4,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _scrolledDown ? Colors.white.withValues(alpha: 0.7) : Colors.transparent,
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: AppTheme.dark),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

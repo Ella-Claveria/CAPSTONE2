@@ -2,12 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/message_service.dart';
 import '../widgets/agritrade_text.dart';
+import '../widgets/coach_mark.dart';
 import 'add_product_screen.dart';
 import 'market_tab.dart';
 import 'chat_list_screen.dart';
 import 'farmer_orders_tab.dart';
 import 'farmer_profile_tab.dart';
 import 'notifications_screen.dart';
+import '../l10n/app_localizations.dart';
+import '../l10n/locale_controller.dart';
 
 class FarmerHomeScreen extends StatefulWidget {
   const FarmerHomeScreen({super.key});
@@ -25,8 +28,8 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
   // 0 = Market, 1 = Messages, 2 = Orders, 3 = Profile
   int _selectedIndex = 0;
 
-  // Session-only for now — see chat notes on full localization.
-  String _language = 'en';
+  final _addProductKey = GlobalKey();
+  final _ordersTabKey = GlobalKey();
 
   @override
   void initState() {
@@ -34,6 +37,30 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     // Register this device for push notifications so new messages can
     // reach the farmer even when the app is backgrounded.
     _messageService.registerFcmToken();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showWalkthrough());
+  }
+
+  // A one-time, subtle tour pointing at the two things a brand-new farmer
+  // most needs to find: posting their first listing, and where incoming
+  // orders will show up.
+  Future<void> _showWalkthrough() async {
+    if (!mounted) return;
+    await showCoachMarksOnce(
+      context: context,
+      prefsKey: 'walkthrough_seen_farmer',
+      steps: [
+        CoachMarkStep(
+          targetKey: _addProductKey,
+          title: 'List your first product',
+          message: 'Tap here anytime to post crops or livestock for buyers to see.',
+        ),
+        CoachMarkStep(
+          targetKey: _ordersTabKey,
+          title: 'Track incoming orders',
+          message: 'Orders from buyers show up here — you can accept, message, and update their status.',
+        ),
+      ],
+    );
   }
 
   void _openAddProduct() {
@@ -52,6 +79,8 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
 
   // ---- Language picker ----
   void _showLanguagePicker(BuildContext context) {
+    final t = AppLocalizations.of(context)!;
+    final currentCode = LocaleController.instance.locale?.languageCode ?? 'en';
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -62,31 +91,31 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 18, 20, 4),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('Select Language',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  child: Text(t.selectLanguage,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
               RadioGroup<String>(
-                groupValue: _language,
+                groupValue: currentCode,
                 onChanged: (value) {
                   if (value == null) return;
-                  setState(() => _language = value);
+                  LocaleController.instance.setLocale(Locale(value));
                   Navigator.pop(sheetContext);
-                  _showLanguageNote(value == 'en' ? 'English' : 'Tagalog');
+                  _showLanguageNote(value == 'en' ? t.english : t.tagalog);
                 },
                 child: Column(
                   children: [
-                    const RadioListTile<String>(
-                      title: Text('English'),
+                    RadioListTile<String>(
+                      title: Text(t.english),
                       value: 'en',
                       activeColor: _dark,
                     ),
-                    const RadioListTile<String>(
-                      title: Text('Tagalog'),
+                    RadioListTile<String>(
+                      title: Text(t.tagalog),
                       value: 'tl',
                       activeColor: _dark,
                     ),
@@ -107,7 +136,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         backgroundColor: _dark,
-        content: Text('Language set to $language. Full app translation coming soon.'),
+        content: Text(AppLocalizations.of(context)!.languageChanged(language)),
       ),
     );
   }
@@ -176,11 +205,15 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
             height: 60,
             child: Row(
               children: [
-                _navItem(0, Icons.storefront_outlined, Icons.storefront, 'Market'),
-                _navItem(1, Icons.mail_outline, Icons.mail, 'Messages'),
+                _navItem(0, Icons.storefront_outlined, Icons.storefront,
+                    AppLocalizations.of(context)!.navMarket),
+                _navItem(1, Icons.mail_outline, Icons.mail,
+                    AppLocalizations.of(context)!.navMessages),
                 _buildAddButton(),
-                _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag, 'Orders'),
-                _navItem(3, Icons.person_outline, Icons.person, 'Profile'),
+                _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag,
+                    AppLocalizations.of(context)!.navOrders, key: _ordersTabKey),
+                _navItem(3, Icons.person_outline, Icons.person,
+                    AppLocalizations.of(context)!.navProfile),
               ],
             ),
           ),
@@ -202,13 +235,14 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     );
   }
 
-  Widget _navItem(int index, IconData icon, IconData activeIcon, String label) {
+  Widget _navItem(int index, IconData icon, IconData activeIcon, String label, {Key? key}) {
     final selected = _selectedIndex == index;
     final color = selected ? _dark : Colors.grey;
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => _selectedIndex = index),
         child: Column(
+          key: key,
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -235,6 +269,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           onTap: _openAddProduct,
           customBorder: const CircleBorder(),
           child: Container(
+            key: _addProductKey,
             width: 46,
             height: 46,
             decoration: const BoxDecoration(color: _dark, shape: BoxShape.circle),

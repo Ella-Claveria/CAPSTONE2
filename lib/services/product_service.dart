@@ -89,6 +89,33 @@ class ProductService {
     }
   }
 
+  /// Pauses a listing without deleting it — hidden from the buyer
+  /// marketplace, but stays in the farmer's own product list so they can
+  /// restore it later (e.g. seasonal items, temporary stock-outs).
+  Future<String?> archiveProduct(String id) async {
+    try {
+      await _products.doc(id).update({
+        'isArchived': true,
+        'archivedAt': FieldValue.serverTimestamp(),
+      });
+      return null;
+    } catch (e) {
+      return 'Could not archive product. Please try again.';
+    }
+  }
+
+  Future<String?> unarchiveProduct(String id) async {
+    try {
+      await _products.doc(id).update({
+        'isArchived': false,
+        'archivedAt': null,
+      });
+      return null;
+    } catch (e) {
+      return 'Could not restore product. Please try again.';
+    }
+  }
+
   Stream<QuerySnapshot<Map<String, dynamic>>> myProductsStream() {
     final user = FirebaseAuth.instance.currentUser;
     return _products.where('farmerId', isEqualTo: user?.uid).snapshots();

@@ -1,0 +1,42 @@
+[
+  {
+    "_id": "rice",
+    "name": "Rice",
+    "baselinePrice": 48,
+    "previousBaselinePrice": 45,
+    "updatedAt": "2026-08-15T04:00:00Z",
+    "updatedBy": "admin@agritrade.ph"
+  },
+  {
+    "_id": "chicken",
+    "name": "Chicken",
+    "baselinePrice": 200,
+    "previousBaselinePrice": 190,
+    "updatedAt": "2026-08-20T04:00:00Z",
+    "updatedBy": "admin@agritrade.ph"
+  },
+  {
+    "_id": "egg",
+    "name": "Egg",
+    "baselinePrice": 7,
+    "previousBaselinePrice": 6.5,
+    "updatedAt": "2026-08-18T04:00:00Z",
+    "updatedBy": "admin@agritrade.ph"
+  },
+  {
+    "_id": "mango",
+    "name": "Mango",
+    "baselinePrice": 120,
+    "previousBaselinePrice": 100,
+    "updatedAt": "2026-08-22T04:00:00Z",
+    "updatedBy": "admin@agritrade.ph"
+  },
+  {
+    "_id": "onion",
+    "name": "Onion",
+    "baselinePrice": 95,
+    "previousBaselinePrice": 85,
+    "updatedAt": "2026-08-25T04:00:00Z",
+    "updatedBy": "admin@agritrade.ph"
+  }
+]

@@ -1,0 +1,90 @@
+[
+  {
+    "_id": "seed_farmer_01",
+    "role": "farmer",
+    "fullName": "Jose Santos",
+    "name": "Jose Santos",
+    "email": "jose.santos.seed@example.com",
+    "barangay": "Balakilong",
+    "municipality": "Laurel",
+    "province": "Batangas",
+    "approvalStatus": "approved",
+    "isVerified": true,
+    "hasVerificationDoc": true,
+    "createdAt": "2026-03-10T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_02",
+    "role": "farmer",
+    "fullName": "Maria Cruz",
+    "name": "Maria Cruz",
+    "email": "maria.cruz.seed@example.com",
+    "barangay": "Gulod",
+    "municipality": "Laurel",
+    "province": "Batangas",
+    "approvalStatus": "approved",
+    "isVerified": true,
+    "hasVerificationDoc": true,
+    "createdAt": "2026-02-15T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_03",
+    "role": "farmer",
+    "fullName": "Ramon Dela Cruz",
+    "name": "Ramon Dela Cruz",
+    "email": "ramon.delacruz.seed@example.com",
+    "barangay": "San Gabriel",
+    "municipality": "Laurel",
+    "province": "Batangas",
+    "approvalStatus": "approved",
+    "isVerified": true,
+    "hasVerificationDoc": true,
+    "createdAt": "2026-01-20T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_04",
+    "role": "farmer",
+    "fullName": "Elena Reyes",
+    "name": "Elena Reyes",
+    "email": "elena.reyes.seed@example.com",
+    "barangay": "Bugaan East",
+    "municipality": "Laurel",
+    "province": "Batangas",
+    "approvalStatus": "approved",
+    "isVerified": true,
+    "hasVerificationDoc": true,
+    "createdAt": "2026-04-02T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_05",
+    "role": "farmer",
+    "fullName": "Pedro Villanueva",
+    "name": "Pedro Villanueva",
+    "email": "pedro.villanueva.seed@example.com",
+    "barangay": "Ticub",
+    "municipality": "Laurel",
+    "province": "Batangas",
+    "approvalStatus": "pending",
+    "isVerified": false,
+    "hasVerificationDoc": true,
+    "createdAt": "2026-09-02T09:00:00Z"
+  },
+  {
+    "_id": "seed_buyer_01",
+    "role": "buyer",
+    "fullName": "Anna Lim",
+    "name": "Anna Lim",
+    "email": "anna.lim.seed@example.com",
+    "approvalStatus": "approved",
+    "createdAt": "2026-04-18T05:00:00Z"
+  },
+  {
+    "_id": "seed_buyer_02",
+    "role": "buyer",
+    "fullName": "Carlo Tan",
+    "name": "Carlo Tan",
+    "email": "carlo.tan.seed@example.com",
+    "approvalStatus": "approved",
+    "createdAt": "2026-05-02T05:00:00Z"
+  }
+]

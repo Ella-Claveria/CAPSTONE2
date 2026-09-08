@@ -1,0 +1,42 @@
+[
+  {
+    "_id": "seed_farmer_01",
+    "userId": "seed_farmer_01",
+    "fullName": "Jose Santos",
+    "document": "",
+    "status": "approved",
+    "submittedAt": "2026-03-10T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_02",
+    "userId": "seed_farmer_02",
+    "fullName": "Maria Cruz",
+    "document": "",
+    "status": "approved",
+    "submittedAt": "2026-02-15T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_03",
+    "userId": "seed_farmer_03",
+    "fullName": "Ramon Dela Cruz",
+    "document": "",
+    "status": "approved",
+    "submittedAt": "2026-01-20T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_04",
+    "userId": "seed_farmer_04",
+    "fullName": "Elena Reyes",
+    "document": "",
+    "status": "approved",
+    "submittedAt": "2026-04-02T02:00:00Z"
+  },
+  {
+    "_id": "seed_farmer_05",
+    "userId": "seed_farmer_05",
+    "fullName": "Pedro Villanueva",
+    "document": "",
+    "status": "pending",
+    "submittedAt": "2026-09-02T09:00:00Z"
+  }
+]

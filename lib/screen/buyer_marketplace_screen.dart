@@ -1,17 +1,23 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/message_service.dart';
 import 'role_selection_screen.dart';
 import '../widgets/agritrade_text.dart';
+import '../widgets/coach_mark.dart';
 import 'buyer_explore_screen.dart';
 import 'chat_list_screen.dart';
 import 'buyer_orders_screen.dart';
 import 'buyer_profile_screen.dart';
+import 'buyer_market_view.dart';
+import 'notifications_screen.dart';
+import '../l10n/app_localizations.dart';
+import '../l10n/locale_controller.dart';
 
 final ValueNotifier<int> globalMarketplaceIndex = ValueNotifier<int>(0);
 
 class BuyerMarketplaceScreen extends StatefulWidget {
   final int initialIndex;
-  
+
   const BuyerMarketplaceScreen({
     super.key,
     this.initialIndex = 0,
@@ -26,12 +32,40 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   static const Color _bg = Color(0xFFF7F9F5);
 
   late int _navIndex;
-  String language = 'en';
+
+  final _notificationsKey = GlobalKey();
+  final _ordersTabKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
     _navIndex = widget.initialIndex; // Properly initializes to index 1 (Messages) when passed from chat
+    // Register this device for push notifications (new messages, order
+    // status updates) so they reach the buyer even when backgrounded.
+    MessageService().registerFcmToken();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showWalkthrough());
+  }
+
+  // A one-time, subtle tour pointing at the two things a brand-new buyer
+  // most needs to find: where updates land, and where their orders show up.
+  Future<void> _showWalkthrough() async {
+    if (!mounted) return;
+    await showCoachMarksOnce(
+      context: context,
+      prefsKey: 'walkthrough_seen_buyer',
+      steps: [
+        CoachMarkStep(
+          targetKey: _notificationsKey,
+          title: 'Stay updated',
+          message: 'New messages from farmers and order updates show up here.',
+        ),
+        CoachMarkStep(
+          targetKey: _ordersTabKey,
+          title: 'Track your orders',
+          message: 'Everything you order shows up here, from pending to delivered.',
+        ),
+      ],
+    );
   }
 
   Future<void> _logout(BuildContext context) async {
@@ -50,6 +84,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
       ),
     );
     if (confirm != true) return;
+    await MessageService().unregisterFcmToken();
     await AuthService().logOut();
     if (!context.mounted) return;
     Navigator.pushAndRemoveUntil(
@@ -64,7 +99,8 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     final pages = <Widget>[
       const BuyerExploreScreen(),
       const ChatListScreen(),
-      const BuyerOrdersScreen(),
+      BuyerOrdersScreen(onBrowseMarketplace: () => setState(() => _navIndex = 0)),
+      const BuyerMapView(),
       BuyerProfileScreen(onLogout: () => _logout(context)),
     ];
 
@@ -98,7 +134,11 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
               icon: const Icon(Icons.language, color: _dark, size: 22),
             ),
             IconButton(
-              onPressed: () {},
+              key: _notificationsKey,
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+              ),
               icon: const Icon(Icons.notifications_none_rounded, color: _dark, size: 22),
             ),
             const SizedBox(width: 8),
@@ -116,6 +156,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   }
 
   Widget _buildBottomNavBar() {
+    final t = AppLocalizations.of(context)!;
     return BottomAppBar(
       color: Colors.white,
       elevation: 10,
@@ -123,23 +164,25 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         height: 60,
         child: Row(
           children: [
-            _navItem(0, Icons.explore_outlined, Icons.explore, 'Explore'),
-            _navItem(1, Icons.mail_outline, Icons.mail, 'Messages'),
-            _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag, 'Orders'),
-            _navItem(3, Icons.person_outline, Icons.person, 'Profile'),
+            _navItem(0, Icons.explore_outlined, Icons.explore, t.navExplore),
+            _navItem(1, Icons.mail_outline, Icons.mail, t.navMessages),
+            _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag, t.navOrders, key: _ordersTabKey),
+            _navItem(3, Icons.map_outlined, Icons.map, t.navMap),
+            _navItem(4, Icons.person_outline, Icons.person, t.navProfile),
           ],
         ),
       ),
     );
   }
 
-  Widget _navItem(int index, IconData icon, IconData activeIcon, String label) {
+  Widget _navItem(int index, IconData icon, IconData activeIcon, String label, {Key? key}) {
     final selected = _navIndex == index;
     final color = selected ? _dark : Colors.grey;
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => _navIndex = index),
         child: Column(
+          key: key,
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -160,6 +203,8 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   }
 
   void _showLanguagePicker(BuildContext context) {
+    final t = AppLocalizations.of(context)!;
+    final currentCode = LocaleController.instance.locale?.languageCode ?? 'en';
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -170,30 +215,31 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 18, 20, 4),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('Select Language', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  child: Text(t.selectLanguage,
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 ),
               ),
               RadioGroup<String>(
-                groupValue: language,
+                groupValue: currentCode,
                 onChanged: (value) {
                   if (value == null) return;
-                  setState(() => language = value);
+                  LocaleController.instance.setLocale(Locale(value));
                   Navigator.pop(sheetContext);
-                  _showLanguageNote(value == 'en' ? 'English' : 'Tagalog');
+                  _showLanguageNote(value == 'en' ? t.english : t.tagalog);
                 },
                 child: Column(
                   children: [
-                    const RadioListTile<String>(
-                      title: Text('English'),
+                    RadioListTile<String>(
+                      title: Text(t.english),
                       value: 'en',
                       activeColor: _dark,
                     ),
-                    const RadioListTile<String>(
-                      title: Text('Tagalog'),
+                    RadioListTile<String>(
+                      title: Text(t.tagalog),
                       value: 'tl',
                       activeColor: _dark,
                     ),
@@ -214,7 +260,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         backgroundColor: _dark,
-        content: Text('Language set to $languageName. Full app translation coming soon.'),
+        content: Text(AppLocalizations.of(context)!.languageChanged(languageName)),
       ),
     );
   }

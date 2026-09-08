@@ -1,12 +1,14 @@
-import 'dart:math' as math;
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/product_service.dart';
 import '../services/cloudinary_service.dart';
+import '../services/price_recommendation_service.dart';
 
 class AddProductScreen extends StatefulWidget {
   final String? productId;
@@ -42,6 +44,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   bool _deliveryAvailable = false;
   bool _pickupOnly = false;
   bool _loading = false;
+  bool _isArchived = false;
 
   // Single photo slot. Holds either a freshly-picked file (+ preview bytes)
   // or an existing URL (when editing).
@@ -52,63 +55,88 @@ class _AddProductScreenState extends State<AddProductScreen> {
   bool get _isEditing => widget.productId != null;
 
   // ==========================================================
-  // REFERENCE PRICE DATA — keyed by lowercase product keyword.
-  // Each entry is a LIST of price points (e.g. one per seller).
-  // Replace/extend this with your actual dataset. Matching is
-  // case-insensitive and checks whether the typed product title
-  // *contains* the keyword (e.g. "Premium Free-Range Chicken"
-  // matches the "chicken" entry).
+  // LIVE MARKET DATA — active listings, completed sales, and the
+  // admin-set baseline price, kept in sync via Firestore streams
+  // and fed into PriceRecommendationService. See _computeRecommendation.
   // ==========================================================
-  static const Map<String, List<double>> _productPriceData = {
-    'chicken': [170, 180, 190, 200, 210, 220],
-    'egg': [6, 6.5, 7, 7.5, 8],
-    'pork': [280, 290, 300, 310, 320],
-    'rice': [45, 48, 50, 52, 55],
-    'corn': [25, 28, 30, 32, 35],
-    'tomato': [40, 50, 55, 60, 70],
-    'onion': [80, 90, 100, 110, 120],
-    'garlic': [150, 170, 190, 210, 220],
-    'potato': [60, 70, 75, 80, 90],
-    'cabbage': [30, 35, 40, 45, 50],
-    'carrot': [60, 65, 70, 80, 90],
-    'banana': [30, 35, 40, 45, 50],
-    'mango': [80, 100, 120, 140, 150],
-    'eggplant': [40, 45, 50, 55, 60],
-  };
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _liveProducts = [];
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _completedOrders = [];
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _marketPrices = [];
+  StreamSubscription? _productsSub;
+  StreamSubscription? _ordersSub;
+  StreamSubscription? _marketPricesSub;
 
-  // Computed stats for a matched product: median (suggested price),
-  // mean ± standard deviation (suggested range, clamped to the
-  // observed min/max), the matched keyword, and how many entries
-  // backed the computation.
-  ({String key, double median, double low, double high, int count})?
-  _matchProduct(String name) {
-    final query = name.trim().toLowerCase();
-    if (query.isEmpty) return null;
+  void _listenToMarketData() {
+    _productsSub = FirebaseFirestore.instance
+        .collection('products')
+        .snapshots()
+        .listen((snap) {
+      if (mounted) setState(() => _liveProducts = snap.docs);
+    });
+    _ordersSub = FirebaseFirestore.instance
+        .collection('orders')
+        .where('status', isEqualTo: 'completed')
+        .snapshots()
+        .listen((snap) {
+      if (mounted) setState(() => _completedOrders = snap.docs);
+    });
+    _marketPricesSub = FirebaseFirestore.instance
+        .collection('market_prices')
+        .snapshots()
+        .listen((snap) {
+      if (mounted) setState(() => _marketPrices = snap.docs);
+    });
+  }
 
-    for (final entry in _productPriceData.entries) {
-      if (!query.contains(entry.key)) continue;
+  double? _numField(Map<String, dynamic> data, String field) {
+    final raw = data[field];
+    if (raw is num) return raw.toDouble();
+    return num.tryParse(raw?.toString() ?? '')?.toDouble();
+  }
 
-      final prices = List<double>.from(entry.value)..sort();
-      final n = prices.length;
-
-      final mean = prices.reduce((a, b) => a + b) / n;
-      final variance =
-          prices.map((p) => (p - mean) * (p - mean)).reduce((a, b) => a + b) /
-          n;
-      final stdDev = math.sqrt(variance);
-
-      final median = n.isOdd
-          ? prices[n ~/ 2]
-          : (prices[n ~/ 2 - 1] + prices[n ~/ 2]) / 2;
-
-      // Range = mean ± 1 standard deviation, never wider than the
-      // actual observed spread.
-      final low = math.max(prices.first, mean - stdDev);
-      final high = math.min(prices.last, mean + stdDev);
-
-      return (key: entry.key, median: median, low: low, high: high, count: n);
+  PriceRecommendation? _computeRecommendation(String typedName) {
+    final listingPrices = <double>[];
+    for (final doc in _liveProducts) {
+      if (widget.productId != null && doc.id == widget.productId) continue;
+      final data = doc.data();
+      if (!PriceRecommendationService.namesLikelyMatch(
+          typedName, (data['name'] ?? '').toString())) {
+        continue;
+      }
+      final price = _numField(data, 'price');
+      if (price != null && price > 0) listingPrices.add(price);
     }
-    return null;
+
+    final transactionPrices = <double>[];
+    for (final doc in _completedOrders) {
+      final data = doc.data();
+      if (!PriceRecommendationService.namesLikelyMatch(
+          typedName, (data['productName'] ?? '').toString())) {
+        continue;
+      }
+      final price = _numField(data, 'unitPrice');
+      if (price != null && price > 0) transactionPrices.add(price);
+    }
+
+    double? baselinePrice;
+    for (final doc in _marketPrices) {
+      final data = doc.data();
+      if (!PriceRecommendationService.namesLikelyMatch(
+          typedName, (data['name'] ?? '').toString())) {
+        continue;
+      }
+      final price = _numField(data, 'baselinePrice');
+      if (price != null && price > 0) {
+        baselinePrice = price;
+        break;
+      }
+    }
+
+    return PriceRecommendationService.recommend(
+      listingPrices: listingPrices,
+      transactionPrices: transactionPrices,
+      baselinePrice: baselinePrice,
+    );
   }
 
   @override
@@ -132,6 +160,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       }
       _deliveryAvailable = data['deliveryAvailable'] == true;
       _pickupOnly = data['pickupOnly'] == true;
+      _isArchived = data['isArchived'] == true;
 
       // Load existing image (new 'imageUrls' list, or old single 'imageUrl').
       final list =
@@ -145,10 +174,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
     // Rebuild the price suggestion as the user types the product title.
     _nameController.addListener(() => setState(() {}));
+    _listenToMarketData();
   }
 
   @override
   void dispose() {
+    _productsSub?.cancel();
+    _ordersSub?.cancel();
+    _marketPricesSub?.cancel();
     _nameController.dispose();
     _priceController.dispose();
     _wholesalePriceController.dispose();
@@ -209,7 +242,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'Add Photo',
-                  style: GoogleFonts.montserrat(
+                  style: GoogleFonts.inter(
                     fontWeight: FontWeight.bold,
                     fontSize: 15,
                     color: Colors.black87,
@@ -225,7 +258,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
               title: Text(
                 'Take Photo',
-                style: GoogleFonts.montserrat(
+                style: GoogleFonts.inter(
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
                 ),
@@ -239,7 +272,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
               title: Text(
                 'Choose from Gallery',
-                style: GoogleFonts.montserrat(
+                style: GoogleFonts.inter(
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
                 ),
@@ -373,25 +406,25 @@ class _AddProductScreenState extends State<AddProductScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
           'Delete Product?',
-          style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
+          style: GoogleFonts.inter(fontWeight: FontWeight.w600),
         ),
         content: Text(
           'This will permanently remove this product.',
-          style: GoogleFonts.montserrat(),
+          style: GoogleFonts.inter(),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: Text(
               'Cancel',
-              style: GoogleFonts.montserrat(color: Colors.black54),
+              style: GoogleFonts.inter(color: Colors.black54),
             ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: Text(
               'Delete',
-              style: GoogleFonts.montserrat(
+              style: GoogleFonts.inter(
                 color: Colors.red,
                 fontWeight: FontWeight.w600,
               ),
@@ -413,6 +446,23 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
+  Future<void> _toggleArchive() async {
+    setState(() => _loading = true);
+    final error = _isArchived
+        ? await _productService.unarchiveProduct(widget.productId!)
+        : await _productService.archiveProduct(widget.productId!);
+    if (!mounted) return;
+    setState(() => _loading = false);
+    if (error == null) {
+      setState(() => _isArchived = !_isArchived);
+      _showMessage(_isArchived
+          ? 'Listing archived — hidden from the marketplace until you restore it.'
+          : 'Listing restored — visible in the marketplace again.');
+    } else {
+      _showMessage(error);
+    }
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -421,7 +471,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         backgroundColor: _darkGreen,
         content: Text(
           message,
-          style: GoogleFonts.montserrat(color: Colors.white),
+          style: GoogleFonts.inter(color: Colors.white),
         ),
       ),
     );
@@ -435,7 +485,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: GoogleFonts.montserrat(color: Colors.black38, fontSize: 13.5),
+      hintStyle: GoogleFonts.inter(color: Colors.black38, fontSize: 13.5),
       prefixIcon: icon != null ? Icon(icon, color: _midGreen) : null,
       prefix: prefix,
       suffixIcon: suffix,
@@ -462,7 +512,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       padding: const EdgeInsets.only(left: 4, bottom: 6, top: 4),
       child: Text(
         text,
-        style: GoogleFonts.montserrat(
+        style: GoogleFonts.inter(
           fontSize: 13.5,
           fontWeight: FontWeight.w600,
           color: Colors.black87,
@@ -488,7 +538,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           children: [
             Text(
               name,
-              style: GoogleFonts.montserrat(
+              style: GoogleFonts.inter(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: Colors.black87,
@@ -496,7 +546,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ),
             Text(
               'Farmer',
-              style: GoogleFonts.montserrat(
+              style: GoogleFonts.inter(
                 fontSize: 12.5,
                 color: Colors.grey[600],
               ),
@@ -539,7 +589,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     Text(
                       'Tap to take or choose a photo\nof your livestock or crops',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         color: _midGreen,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -549,7 +599,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     Text(
                       'High-quality photos sell faster',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         color: Colors.grey[500],
                         fontSize: 9.5,
                       ),
@@ -611,8 +661,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   // ==========================================================
-  // AI-DRIVEN PRICE RECOMMENDATION — matched against a reference
-  // price table by product name (case-insensitive), not category.
+  // AI-DRIVEN PRICE RECOMMENDATION — computed live from active
+  // listings, completed sales, and the admin baseline price, via
+  // PriceRecommendationService. See _computeRecommendation above.
   // ==========================================================
   Widget _priceRecommendation() {
     final typedName = _nameController.text.trim();
@@ -621,17 +672,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
       return _recoShell(
         child: Text(
           'Type a product title to see a price suggestion.',
-          style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12.5),
+          style: GoogleFonts.inter(color: Colors.white70, fontSize: 12.5),
         ),
       );
     }
 
-    final match = _matchProduct(typedName);
+    final match = _computeRecommendation(typedName);
     if (match == null) {
       return _recoShell(
         child: Text(
-          'No reference price yet for "$typedName".',
-          style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12.5),
+          'No market data yet for "$typedName" — no similar active listings, '
+          'past sales, or admin baseline price found.',
+          style: GoogleFonts.inter(color: Colors.white70, fontSize: 12.5),
         ),
       );
     }
@@ -653,7 +705,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   children: [
                     Text(
                       'SUGGESTED PRICE',
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         color: Colors.white70,
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
@@ -663,7 +715,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     const SizedBox(height: 4),
                     Text(
                       '₱${median.toStringAsFixed(2)}/kg',
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -680,7 +732,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   children: [
                     Text(
                       'TYPICAL RANGE',
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         color: Colors.white70,
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
@@ -690,7 +742,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     const SizedBox(height: 4),
                     Text(
                       '₱${low.toStringAsFixed(2)} to ₱${high.toStringAsFixed(2)}',
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         color: Colors.white,
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
@@ -704,7 +756,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           const SizedBox(height: 14),
           Text(
             'Basis of Recommendation',
-            style: GoogleFonts.montserrat(
+            style: GoogleFonts.inter(
               color: Colors.white,
               fontSize: 12.5,
               fontWeight: FontWeight.w600,
@@ -712,23 +764,37 @@ class _AddProductScreenState extends State<AddProductScreen> {
           ),
           const SizedBox(height: 6),
           _basisLine(
-            'Matched "${match.key}" — based on ${match.count} seller price entries.',
+            match.listingCount > 0 || match.transactionCount > 0
+                ? 'Based on ${match.listingCount} active listing(s) and '
+                    '${match.transactionCount} completed sale(s) for similar products.'
+                : 'Based only on the admin-set baseline price — no matching '
+                    'listings or sales yet.',
           ),
+          if (match.hasBaseline)
+            _basisLine(
+              'Anchored to the official baseline price '
+              '(₱${match.baselinePrice!.toStringAsFixed(2)}) set by AgriTrade+ admins.',
+            ),
           _basisLine(
             'Suggested price is the median, so a single unusually high or low listing won\'t skew it.',
           ),
           _basisLine(
             'Range reflects how much sellers actually vary — tighter when they agree, wider when they don\'t.',
           ),
+          if (match.limitedData)
+            _basisLine(
+              'Limited data so far — treat this as a rough starting point, '
+              'not a confident market read.',
+            ),
           const SizedBox(height: 10),
           Text(
             'Suggested wholesale price: ₱${wholesaleSuggestion.toStringAsFixed(2)}/kg (10% volume discount).',
-            style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 11),
+            style: GoogleFonts.inter(color: Colors.white70, fontSize: 11),
           ),
           const SizedBox(height: 10),
           Text(
             'This recommendation serves as a pricing guide only.',
-            style: GoogleFonts.montserrat(
+            style: GoogleFonts.inter(
               color: Colors.white60,
               fontSize: 10.5,
               fontStyle: FontStyle.italic,
@@ -753,7 +819,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
               child: Text(
                 'Apply Suggested Price',
-                style: GoogleFonts.montserrat(
+                style: GoogleFonts.inter(
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -786,7 +852,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               const SizedBox(width: 6),
               Text(
                 'AI-Driven Price Recommendation',
-                style: GoogleFonts.montserrat(
+                style: GoogleFonts.inter(
                   color: Colors.white,
                   fontSize: 13.5,
                   fontWeight: FontWeight.bold,
@@ -814,7 +880,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           Expanded(
             child: Text(
               text,
-              style: GoogleFonts.montserrat(
+              style: GoogleFonts.inter(
                 color: Colors.white70,
                 fontSize: 11,
                 height: 1.35,
@@ -833,7 +899,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       appBar: AppBar(
         title: Text(
           _isEditing ? 'Edit Product' : 'Add Product',
-          style: GoogleFonts.montserrat(
+          style: GoogleFonts.inter(
             fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
@@ -843,12 +909,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
-          if (_isEditing)
+          if (_isEditing) ...[
+            IconButton(
+              icon: Icon(_isArchived ? Icons.unarchive_outlined : Icons.archive_outlined),
+              tooltip: _isArchived ? 'Restore listing' : 'Archive listing',
+              onPressed: _loading ? null : _toggleArchive,
+            ),
             IconButton(
               icon: const Icon(Icons.delete_outline),
               tooltip: 'Delete',
               onPressed: _loading ? null : _delete,
             ),
+          ],
         ],
       ),
       body: SingleChildScrollView(
@@ -857,6 +929,30 @@ class _AddProductScreenState extends State<AddProductScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _profileHeader(),
+            if (_isArchived) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange[200]!),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.archive_outlined, size: 18, color: Colors.orange[800]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This listing is archived and hidden from the marketplace.',
+                        style: GoogleFonts.inter(fontSize: 12, color: Colors.orange[900]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
 
             // ---- Single photo slot ----
@@ -866,7 +962,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _label('Product Title'),
             TextField(
               controller: _nameController,
-              style: GoogleFonts.montserrat(fontSize: 14),
+              style: GoogleFonts.inter(fontSize: 14),
               decoration: _inputDecoration('e.g., Premium Free-Range Chicken'),
             ),
             const SizedBox(height: 8),
@@ -883,7 +979,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       DropdownButtonFormField<String>(
                         initialValue: _category,
                         isExpanded: true,
-                        style: GoogleFonts.montserrat(
+                        style: GoogleFonts.inter(
                           color: Colors.black87,
                           fontSize: 14,
                         ),
@@ -892,7 +988,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         decoration: _inputDecoration('Select...'),
                         hint: Text(
                           'Select...',
-                          style: GoogleFonts.montserrat(
+                          style: GoogleFonts.inter(
                             color: Colors.black38,
                             fontSize: 13.5,
                           ),
@@ -903,7 +999,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                 value: c,
                                 child: Text(
                                   c,
-                                  style: GoogleFonts.montserrat(fontSize: 14),
+                                  style: GoogleFonts.inter(fontSize: 14),
                                 ),
                               ),
                             )
@@ -922,7 +1018,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       TextField(
                         controller: _quantityController,
                         keyboardType: TextInputType.number,
-                        style: GoogleFonts.montserrat(fontSize: 14),
+                        style: GoogleFonts.inter(fontSize: 14),
                         decoration: _inputDecoration('e.g., 50 kg'),
                       ),
                     ],
@@ -941,7 +1037,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _priceController,
               keyboardType: TextInputType.number,
-              style: GoogleFonts.montserrat(
+              style: GoogleFonts.inter(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
@@ -951,7 +1047,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
                     '₱',
-                    style: GoogleFonts.montserrat(
+                    style: GoogleFonts.inter(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: _darkGreen,
@@ -962,7 +1058,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 14),
                   child: Text(
                     'Php / kg',
-                    style: GoogleFonts.montserrat(
+                    style: GoogleFonts.inter(
                       fontSize: 13,
                       color: Colors.grey[600],
                     ),
@@ -976,7 +1072,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _wholesalePriceController,
               keyboardType: TextInputType.number,
-              style: GoogleFonts.montserrat(
+              style: GoogleFonts.inter(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
@@ -986,7 +1082,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
                     '₱',
-                    style: GoogleFonts.montserrat(
+                    style: GoogleFonts.inter(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: _darkGreen,
@@ -997,7 +1093,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 14),
                   child: Text(
                     'Php / kg',
-                    style: GoogleFonts.montserrat(
+                    style: GoogleFonts.inter(
                       fontSize: 13,
                       color: Colors.grey[600],
                     ),
@@ -1010,7 +1106,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _wholesaleMinimumController,
               keyboardType: TextInputType.number,
-              style: GoogleFonts.montserrat(fontSize: 14),
+              style: GoogleFonts.inter(fontSize: 14),
               decoration: _inputDecoration('e.g., 10 kg'),
             ),
             const SizedBox(height: 12),
@@ -1020,7 +1116,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _descriptionController,
               maxLines: 3,
-              style: GoogleFonts.montserrat(fontSize: 14),
+              style: GoogleFonts.inter(fontSize: 14),
               decoration: _inputDecoration(
                 'Tell buyers about how it was raised or grown...',
               ),
@@ -1032,7 +1128,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               contentPadding: EdgeInsets.zero,
               title: Text(
                 'Delivery Available',
-                style: GoogleFonts.montserrat(
+                style: GoogleFonts.inter(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -1045,7 +1141,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               contentPadding: EdgeInsets.zero,
               title: Text(
                 'Pick-up Only',
-                style: GoogleFonts.montserrat(
+                style: GoogleFonts.inter(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -1080,7 +1176,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     )
                   : Text(
                       _isEditing ? 'Update' : 'Post',
-                      style: GoogleFonts.montserrat(
+                      style: GoogleFonts.inter(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),

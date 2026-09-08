@@ -4,7 +4,9 @@ import '../services/order_service.dart';
 import 'add_review_screen.dart';
 
 class BuyerOrdersScreen extends StatefulWidget {
-  const BuyerOrdersScreen({super.key});
+  final VoidCallback? onBrowseMarketplace;
+
+  const BuyerOrdersScreen({super.key, this.onBrowseMarketplace});
 
   @override
   State<BuyerOrdersScreen> createState() => _BuyerOrdersScreenState();
@@ -139,6 +141,20 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
           ),
           const SizedBox(height: 6),
           Text('Your submitted orders will appear here.', style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+          if (widget.onBrowseMarketplace != null) ...[
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: widget.onBrowseMarketplace,
+              icon: const Icon(Icons.storefront_outlined, size: 18),
+              label: const Text('Browse Marketplace'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _dark,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              ),
+            ),
+          ],
         ],
       ),
     );

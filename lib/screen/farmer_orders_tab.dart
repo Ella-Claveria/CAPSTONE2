@@ -100,6 +100,75 @@ class _OrdersTabState extends State<OrdersTab> {
     );
   }
 
+  // Projects this calendar month's total from completed orders only —
+  // distinct from market_tab.dart's weekly/monthly revenue chart, this is
+  // a running total for the current month specifically, right where the
+  // farmer is already looking at their orders.
+  Widget _monthlySalesSummary() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _orderService.farmerOrdersStream(),
+      builder: (context, snapshot) {
+        final now = DateTime.now();
+        num monthTotal = 0;
+        var completedCount = 0;
+        for (final doc in snapshot.data?.docs ?? const []) {
+          final data = doc.data();
+          if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
+          final createdAt = data['createdAt'];
+          final date = createdAt is Timestamp ? createdAt.toDate() : null;
+          if (date == null || date.year != now.year || date.month != now.month) continue;
+          final total = data['total'];
+          monthTotal += total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0;
+          completedCount++;
+        }
+
+        final monthLabel = const [
+          'January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December',
+        ][now.month - 1];
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [_dark, Color(0xFF2E7D32)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('$monthLabel Sales',
+                          style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
+                      const SizedBox(height: 4),
+                      Text(_peso(monthTotal),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$completedCount completed order${completedCount == 1 ? '' : 's'} this month',
+                        style: const TextStyle(color: Colors.white70, fontSize: 11.5),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.trending_up_rounded, color: Colors.white70, size: 32),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -116,6 +185,8 @@ class _OrdersTabState extends State<OrdersTab> {
             ),
           ),
         ),
+        _monthlySalesSummary(),
+        const SizedBox(height: 12),
         StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _orderService.farmerOrdersStream(),
           builder: (context, snapshot) {

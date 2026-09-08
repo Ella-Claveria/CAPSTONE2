@@ -3,7 +3,9 @@ import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
   // ---------- COLOURS ----------
-  static const Color dark = Color(0xFF1B5E20); // main dark green
+  // Matches the "Agri" half of the AgriTradeText wordmark, so every button
+  // in the app reads as the same dark green as the logo text.
+  static const Color dark = Color.fromARGB(255, 14, 50, 16); // main dark green
   static const Color mid = Color(0xFF2E7D32); // brand green
   static const Color accent = Color(0xFFDCEDC8); // pale green
   static const Color bgLight = Color(0xFFF1F8E9); // splash background
@@ -16,12 +18,12 @@ class AppTheme {
   //
   //     theme: AppTheme.themeData(),
   //
-  // That one line makes Montserrat the default everywhere.
+  // That one line makes Inter the default everywhere.
   // ==========================================================
   static ThemeData themeData() {
     // Takes Flutter's standard set of text sizes (headings, body,
-    // captions...) and rebuilds all of them in Montserrat.
-    final montserratText = GoogleFonts.montserratTextTheme();
+    // captions...) and rebuilds all of them in Inter.
+    final interText = GoogleFonts.interTextTheme();
 
     return ThemeData(
       useMaterial3: true,
@@ -29,14 +31,14 @@ class AppTheme {
       scaffoldBackgroundColor: bgLight,
 
       // <-- THIS is the line that changes the whole app's font.
-      textTheme: montserratText,
-      primaryTextTheme: montserratText,
+      textTheme: interText,
+      primaryTextTheme: interText,
 
       appBarTheme: AppBarTheme(
         backgroundColor: mid,
         foregroundColor: Colors.white,
         elevation: 0,
-        titleTextStyle: GoogleFonts.montserrat(
+        titleTextStyle: GoogleFonts.inter(
           fontSize: 18,
           fontWeight: FontWeight.bold,
           color: Colors.white,
@@ -52,7 +54,7 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(30),
           ),
-          textStyle: GoogleFonts.montserrat(
+          textStyle: GoogleFonts.inter(
             fontSize: 16,
             fontWeight: FontWeight.bold,
           ),
@@ -62,7 +64,7 @@ class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: dark,
-          textStyle: GoogleFonts.montserrat(fontSize: 13.5),
+          textStyle: GoogleFonts.inter(fontSize: 13.5),
         ),
       ),
 
@@ -70,8 +72,8 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: fieldFill,
-        hintStyle: GoogleFonts.montserrat(fontSize: 13.5, color: Colors.grey),
-        errorStyle: GoogleFonts.montserrat(fontSize: 11.5),
+        hintStyle: GoogleFonts.inter(fontSize: 13.5, color: Colors.grey),
+        errorStyle: GoogleFonts.inter(fontSize: 11.5),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide.none,
@@ -87,7 +89,7 @@ class AppTheme {
       ),
 
       snackBarTheme: SnackBarThemeData(
-        contentTextStyle: GoogleFonts.montserrat(fontSize: 13.5),
+        contentTextStyle: GoogleFonts.inter(fontSize: 13.5),
       ),
     );
   }
@@ -100,25 +102,25 @@ class AppTheme {
   // for when you want a specific size or weight quickly.
   // ==========================================================
 
-  static TextStyle heading(double size) => GoogleFonts.montserrat(
+  static TextStyle heading(double size) => GoogleFonts.inter(
         fontSize: size,
         fontWeight: FontWeight.bold,
         color: Colors.black87,
       );
 
-  static TextStyle label() => GoogleFonts.montserrat(
+  static TextStyle label() => GoogleFonts.inter(
         fontSize: 14,
         fontWeight: FontWeight.w600,
         color: Colors.black87,
       );
 
   static TextStyle body({Color? color, double size = 13.5}) =>
-      GoogleFonts.montserrat(
+      GoogleFonts.inter(
         fontSize: size,
         color: color ?? Colors.grey[700],
       );
 
-  static TextStyle buttonText() => GoogleFonts.montserrat(
+  static TextStyle buttonText() => GoogleFonts.inter(
         fontSize: 16,
         fontWeight: FontWeight.bold,
       );
@@ -160,23 +162,23 @@ class AppTheme {
       fillColor: fieldFill,
       errorText: errorText,
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(30),
         borderSide: BorderSide.none,
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(30),
         borderSide: BorderSide.none,
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(30),
         borderSide: const BorderSide(color: mid, width: 1.4),
       ),
       errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(30),
         borderSide: const BorderSide(color: Colors.redAccent, width: 1.2),
       ),
       focusedErrorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(30),
         borderSide: const BorderSide(color: Colors.redAccent, width: 1.4),
       ),
     );

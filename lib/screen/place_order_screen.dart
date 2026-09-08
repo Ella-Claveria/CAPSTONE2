@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../services/order_service.dart';
 
@@ -14,6 +15,7 @@ class PlaceOrderScreen extends StatefulWidget {
   final String pricingType;
   final int minimumQuantity;
   final int maximumQuantity;
+  final int? initialQuantity;
 
   const PlaceOrderScreen({
     super.key,
@@ -28,6 +30,7 @@ class PlaceOrderScreen extends StatefulWidget {
     this.pricingType = 'retail',
     this.minimumQuantity = 1,
     this.maximumQuantity = 0,
+    this.initialQuantity,
   });
 
   @override
@@ -52,7 +55,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   void initState() {
     super.initState();
     _quantityController = TextEditingController(
-      text: '${widget.minimumQuantity}',
+      text: '${widget.initialQuantity ?? widget.minimumQuantity}',
     );
     _deliveryMethod = widget.deliveryAvailable
         ? 'delivery'
@@ -97,9 +100,45 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       return;
     }
 
-    setState(() => _submitting = true);
-
     final qty = num.tryParse(_quantityController.text.trim()) ?? 1;
+
+    // Proactive stock check so the buyer gets a friendly message instead of
+    // filling out the whole form only to have the server-side transaction
+    // in OrderService reject it. That transaction remains the source of
+    // truth — this is just a faster, friendlier first check.
+    try {
+      final productSnap = await FirebaseFirestore.instance
+          .collection('products')
+          .doc(widget.productId)
+          .get();
+      final data = productSnap.data();
+      if (!productSnap.exists || data == null || data['isArchived'] == true) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('This listing is no longer available.')),
+        );
+        return;
+      }
+      final available = (data['quantity'] as num?)?.toInt() ?? 0;
+      if (qty > available) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              available <= 0
+                  ? 'This item is out of stock.'
+                  : 'Only $available available right now. Lower your quantity.',
+            ),
+          ),
+        );
+        return;
+      }
+    } catch (_) {
+      // If the check itself fails (e.g. offline), fall through — the
+      // Firestore transaction in OrderService still enforces this.
+    }
+
+    setState(() => _submitting = true);
     final unitPrice = _extractUnitPrice(widget.productPrice);
     final unit = _extractUnitLabel(widget.productPrice);
 

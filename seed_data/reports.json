@@ -1,0 +1,43 @@
+[
+  {
+    "_id": "seed_report_01",
+    "issueType": "Price Gouging",
+    "description": "Price seems much higher than similar listings nearby.",
+    "reporterId": "seed_buyer_01",
+    "reporterName": "Anna Lim",
+    "reportedUserId": "seed_farmer_04",
+    "reportedUserName": "Elena Reyes",
+    "productId": "seed_product_08",
+    "productName": "Backyard Pork (Whole)",
+    "sellerName": "Elena Reyes",
+    "status": "pending",
+    "createdAt": "2026-09-02T08:00:00Z"
+  },
+  {
+    "_id": "seed_report_02",
+    "issueType": "Chat Report",
+    "description": "Seller was slow to respond to order questions.",
+    "reporterId": "seed_buyer_02",
+    "reporterName": "Carlo Tan",
+    "reportedUserId": "seed_farmer_02",
+    "reportedUserName": "Maria Cruz",
+    "conversationId": "seed_buyer_02_seed_farmer_02",
+    "status": "resolved",
+    "action": "warned",
+    "createdAt": "2026-08-10T08:00:00Z"
+  },
+  {
+    "_id": "seed_report_03",
+    "issueType": "Quality Issues",
+    "description": "Produce arrived wilted and past freshness.",
+    "reporterId": "seed_buyer_01",
+    "reporterName": "Anna Lim",
+    "reportedUserId": "seed_farmer_02",
+    "reportedUserName": "Maria Cruz",
+    "productId": "seed_product_04",
+    "productName": "Heirloom Tomatoes",
+    "sellerName": "Maria Cruz",
+    "status": "pending",
+    "createdAt": "2026-09-03T08:00:00Z"
+  }
+]

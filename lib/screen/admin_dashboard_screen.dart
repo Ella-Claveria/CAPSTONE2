@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
 import 'verification_queue_view.dart';
 import 'moderation_queue_view.dart';
 import '../widgets/agritrade_text.dart';
+import '../data/laurel_barangays.dart';
+import '../services/market_price_helpers.dart';
+import '../widgets/change_password_dialog.dart';
 
 // ============================================================
 // THEME — a small self-contained palette system (dark + light)
@@ -654,6 +661,7 @@ class _SidebarAvatarMenu extends StatelessWidget {
       onSelected: (value) {
         if (value == 'logout') onLogout();
         if (value == 'theme') scope.onToggleTheme();
+        if (value == 'password') showChangePasswordDialog(context);
       },
       itemBuilder: (context) => [
         PopupMenuItem<String>(
@@ -663,12 +671,12 @@ class _SidebarAvatarMenu extends StatelessWidget {
         ),
         const PopupMenuDivider(),
         PopupMenuItem<String>(
-          value: 'settings',
+          value: 'password',
           child: Row(
             children: [
-              Icon(Icons.settings_outlined, size: 18, color: c.iconInactive),
+              Icon(Icons.lock_outline, size: 18, color: c.iconInactive),
               const SizedBox(width: 10),
-              Text('Settings', style: TextStyle(color: c.textPrimary)),
+              Text('Change Password', style: TextStyle(color: c.textPrimary)),
             ],
           ),
         ),
@@ -868,15 +876,14 @@ class _EmptyState extends StatelessWidget {
 
 // ============================================================
 // ANALYTICS DASHBOARD (main admin landing view)
-// Currently wired to EMPTY data sources — no mock/dummy rows.
-// The rendering logic (tables, cards, empty states) is fully in
-// place; wire each TODO to your Firestore collection to go live.
+// Wired to live Firestore collections: users, verificationDocs,
+// reports, orders, and market_prices.
 // ============================================================
 
 class _VerificationRow {
   final String farmerId;
   final String fullName;
-  final String category;
+  final String category; // shows the applicant's barangay
   final String dateSubmitted;
   final String status; // Pending, Approved, Rejected
   const _VerificationRow(this.farmerId, this.fullName, this.category, this.dateSubmitted, this.status);
@@ -895,21 +902,92 @@ class _AnalyticsDashboardView extends StatelessWidget {
   final ValueChanged<int> onNavigate;
   const _AnalyticsDashboardView({required this.onNavigate});
 
-  // TODO: replace these with live Firestore streams:
-  //   users                 -> total user count
-  //   farmer_verifications  -> pending count + recent rows (where status == 'pending')
-  //   moderation_reports    -> flagged count
-  //   transactions          -> platform transaction total
-  //   market_prices         -> live commodity / CMA price list
-  // Left empty intentionally — no dummy data, logic below already
-  // handles both the populated and empty-state rendering paths.
-  static const List<_VerificationRow> _verifications = [];
-  static const List<_CommodityPrice> _prices = [];
+  static String _statusLabel(dynamic raw) {
+    final status = (raw ?? 'pending').toString();
+    if (status.isEmpty) return 'Pending';
+    return status[0].toUpperCase() + status.substring(1);
+  }
 
-  static const int _totalUsers = 0;
-  static const int _pendingVerifications = 0;
-  static const int _flaggedReports = 0;
-  static const String _platformTransactions = '₱0';
+  List<_VerificationRow> _recentVerifications(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> verifDocs,
+    Map<String, String> barangayByUid,
+  ) {
+    final sorted = [...verifDocs]..sort((a, b) {
+        final at = a.data()['submittedAt'] as Timestamp?;
+        final bt = b.data()['submittedAt'] as Timestamp?;
+        return (bt?.millisecondsSinceEpoch ?? 0).compareTo(at?.millisecondsSinceEpoch ?? 0);
+      });
+
+    return sorted.take(5).map((doc) {
+      final data = doc.data();
+      final userId = (data['userId'] ?? doc.id).toString();
+      final fullName = (data['fullName'] ?? 'Unknown Farmer').toString();
+      final barangay = barangayByUid[userId] ?? '—';
+      final submittedAt = data['submittedAt'] as Timestamp?;
+      final dateSubmitted = submittedAt != null
+          ? DateFormat('MMM d, y').format(submittedAt.toDate())
+          : '—';
+      return _VerificationRow(
+        userId.length > 8 ? userId.substring(0, 8) : userId,
+        fullName,
+        barangay,
+        dateSubmitted,
+        _statusLabel(data['status']),
+      );
+    }).toList();
+  }
+
+  num _platformTransactionTotal(List<QueryDocumentSnapshot<Map<String, dynamic>>> orders) {
+    num total = 0;
+    for (final doc in orders) {
+      final data = doc.data();
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
+      final raw = data['total'];
+      total += raw is num ? raw : num.tryParse(raw?.toString() ?? '') ?? 0;
+    }
+    return total;
+  }
+
+  ({String name, num revenue, num quantity})? _topSellingProduct(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
+  ) {
+    final revenueByProduct = <String, num>{};
+    final qtyByProduct = <String, num>{};
+    for (final doc in orders) {
+      final data = doc.data();
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
+      final name = (data['productName'] ?? '').toString();
+      if (name.isEmpty) continue;
+      final total = data['total'];
+      final qty = data['quantity'];
+      revenueByProduct[name] = (revenueByProduct[name] ?? 0) +
+          (total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0);
+      qtyByProduct[name] = (qtyByProduct[name] ?? 0) +
+          (qty is num ? qty : num.tryParse(qty?.toString() ?? '') ?? 0);
+    }
+    if (revenueByProduct.isEmpty) return null;
+
+    final top = revenueByProduct.entries.reduce((a, b) => a.value >= b.value ? a : b);
+    return (name: top.key, revenue: top.value, quantity: qtyByProduct[top.key] ?? 0);
+  }
+
+  List<_CommodityPrice> _commodityPrices(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    return docs.map((doc) {
+      final data = doc.data();
+      final name = (data['name'] ?? doc.id).toString();
+      final current = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
+      final previous = (data['previousBaselinePrice'] as num?)?.toDouble();
+      final hasPrevious = previous != null && previous > 0;
+      final changePct = hasPrevious ? ((current - previous) / previous) * 100 : 0.0;
+      return _CommodityPrice(
+        name,
+        formatPeso(current),
+        hasPrevious ? '${changePct.abs().toStringAsFixed(1)}%' : 'New',
+        changePct >= 0,
+        timeAgo(data['updatedAt'] as Timestamp?),
+      );
+    }).toList();
+  }
 
   Color _statusColor(AdminPalette c, String s) {
     switch (s) {
@@ -937,6 +1015,79 @@ class _AnalyticsDashboardView extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = _AdminThemeScope.of(context).palette;
 
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('users').snapshots(),
+      builder: (context, usersSnap) {
+        final userDocs = usersSnap.data?.docs ?? [];
+        final totalUsers = userDocs.length;
+        final barangayByUid = <String, String>{
+          for (final doc in userDocs)
+            doc.id: (doc.data()['barangay'] ?? '—').toString(),
+        };
+
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance.collection('verificationDocs').snapshots(),
+          builder: (context, verifSnap) {
+            final verifDocs = verifSnap.data?.docs ?? [];
+            final pendingVerifications = verifDocs.where((doc) {
+              final status = doc.data()['status'];
+              return status == null || status == 'pending';
+            }).length;
+            final recentVerifications = _recentVerifications(verifDocs, barangayByUid);
+
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance
+                  .collection('reports')
+                  .where('status', isEqualTo: 'pending')
+                  .snapshots(),
+              builder: (context, reportsSnap) {
+                final flaggedReports = reportsSnap.data?.docs.length ?? 0;
+
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance.collection('orders').snapshots(),
+                  builder: (context, ordersSnap) {
+                    final orders = ordersSnap.data?.docs ?? [];
+                    final platformTotal = _platformTransactionTotal(orders);
+                    final topProduct = _topSellingProduct(orders);
+
+                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance.collection('market_prices').snapshots(),
+                      builder: (context, pricesSnap) {
+                        final prices = _commodityPrices(pricesSnap.data?.docs ?? []);
+                        return _buildBody(
+                          context,
+                          c,
+                          totalUsers: totalUsers,
+                          pendingVerifications: pendingVerifications,
+                          flaggedReports: flaggedReports,
+                          platformTotal: platformTotal,
+                          verifications: recentVerifications,
+                          prices: prices,
+                          topProduct: topProduct,
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(
+    BuildContext context,
+    AdminPalette c, {
+    required int totalUsers,
+    required int pendingVerifications,
+    required int flaggedReports,
+    required num platformTotal,
+    required List<_VerificationRow> verifications,
+    required List<_CommodityPrice> prices,
+    required ({String name, num revenue, num quantity})? topProduct,
+  }) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -947,39 +1098,39 @@ class _AnalyticsDashboardView extends StatelessWidget {
             final cards = [
               _StatCard(
                 label: 'Total Users',
-                value: '$_totalUsers',
-                delta: 'No data yet',
+                value: '$totalUsers',
+                delta: 'Live',
                 icon: Icons.groups_2_outlined,
                 iconColor: (c) => c.blue,
                 iconBg: (c) => c.blueBg,
-                isEmpty: _totalUsers == 0,
+                isEmpty: totalUsers == 0,
               ),
               _StatCard(
                 label: 'Pending Verifications',
-                value: '$_pendingVerifications',
-                delta: 'No data yet',
+                value: '$pendingVerifications',
+                delta: 'Live',
                 icon: Icons.fact_check_outlined,
                 iconColor: (c) => c.amber,
                 iconBg: (c) => c.amberBg,
-                isEmpty: _pendingVerifications == 0,
+                isEmpty: pendingVerifications == 0,
               ),
               _StatCard(
                 label: 'Flagged Reports',
-                value: '$_flaggedReports',
-                delta: 'No data yet',
+                value: '$flaggedReports',
+                delta: 'Live',
                 icon: Icons.flag_outlined,
                 iconColor: (c) => c.red,
                 iconBg: (c) => c.redBg,
-                isEmpty: _flaggedReports == 0,
+                isEmpty: flaggedReports == 0,
               ),
               _StatCard(
                 label: 'Platform Transactions',
-                value: _platformTransactions,
-                delta: 'No data yet',
+                value: formatPeso(platformTotal),
+                delta: 'Live',
                 icon: Icons.receipt_long_outlined,
                 iconColor: (c) => c.green,
                 iconBg: (c) => c.greenBg,
-                isEmpty: true,
+                isEmpty: platformTotal == 0,
               ),
             ];
             final isNarrow = constraints.maxWidth < 900;
@@ -1060,7 +1211,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 12),
-                if (_verifications.isEmpty)
+                if (verifications.isEmpty)
                   const _EmptyState(
                     icon: Icons.fact_check_outlined,
                     title: 'No verification requests yet',
@@ -1070,8 +1221,8 @@ class _AnalyticsDashboardView extends StatelessWidget {
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: DataTable(
-                      headingRowColor: MaterialStateProperty.all(c.surfaceAlt),
-                      dataRowColor: MaterialStateProperty.all(Colors.transparent),
+                      headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
+                      dataRowColor: WidgetStateProperty.all(Colors.transparent),
                       columnSpacing: 32,
                       horizontalMargin: 12,
                       headingTextStyle:
@@ -1080,12 +1231,12 @@ class _AnalyticsDashboardView extends StatelessWidget {
                       columns: const [
                         DataColumn(label: Text('Farmer ID')),
                         DataColumn(label: Text('Full Name')),
-                        DataColumn(label: Text('Category')),
+                        DataColumn(label: Text('Barangay')),
                         DataColumn(label: Text('Date Submitted')),
                         DataColumn(label: Text('Status')),
                         DataColumn(label: Text('Actions')),
                       ],
-                      rows: _verifications
+                      rows: verifications
                           .map((v) => DataRow(cells: [
                                 DataCell(Text(v.farmerId)),
                                 DataCell(Text(v.fullName)),
@@ -1102,6 +1253,62 @@ class _AnalyticsDashboardView extends StatelessWidget {
                               ]))
                           .toList(),
                     ),
+                  ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // ---- BEST-SELLING PRODUCT (PLATFORM-WIDE) ----
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: c.border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.emoji_events_outlined, size: 18, color: c.amber),
+                    const SizedBox(width: 8),
+                    Text('Best-Selling Product',
+                        style: TextStyle(color: c.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text('Platform-wide, by completed-order revenue',
+                    style: TextStyle(color: c.textSecondary, fontSize: 13)),
+                const SizedBox(height: 14),
+                if (topProduct == null)
+                  const _EmptyState(
+                    icon: Icons.emoji_events_outlined,
+                    title: 'No completed sales yet',
+                    subtitle: 'The top-selling product will appear here once orders complete.',
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(topProduct.name,
+                                style: TextStyle(
+                                    color: c.textPrimary, fontSize: 20, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text('${topProduct.quantity.toStringAsFixed(0)} kg sold across the platform',
+                                style: TextStyle(color: c.textSecondary, fontSize: 12.5)),
+                          ],
+                        ),
+                      ),
+                      Text(formatPeso(topProduct.revenue),
+                          style: TextStyle(color: c.green, fontSize: 20, fontWeight: FontWeight.bold)),
+                    ],
                   ),
               ],
             ),
@@ -1142,7 +1349,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 16),
-                if (_prices.isEmpty)
+                if (prices.isEmpty)
                   const _EmptyState(
                     icon: Icons.price_change_outlined,
                     title: 'No commodity price data yet',
@@ -1153,9 +1360,9 @@ class _AnalyticsDashboardView extends StatelessWidget {
                     height: 140,
                     child: ListView.builder(
                       scrollDirection: Axis.horizontal,
-                      itemCount: _prices.length,
+                      itemCount: prices.length,
                       itemBuilder: (context, index) {
-                        final p = _prices[index];
+                        final p = prices[index];
                         return Container(
                           width: 170,
                           padding: const EdgeInsets.all(16),
@@ -1212,46 +1419,300 @@ class _AnalyticsDashboardView extends StatelessWidget {
 }
 
 // ============================================================
-// DEMAND HEATMAP (empty state, theme-aware shell)
+// DEMAND HEATMAP
 // ============================================================
 
-class _DemandHeatmapView extends StatelessWidget {
+class _BarangayDemand {
+  final String barangay;
+  final double lat;
+  final double lng;
+  final int orderCount;
+  final int farmerCount;
+  const _BarangayDemand(this.barangay, this.lat, this.lng, this.orderCount, this.farmerCount);
+}
+
+List<_BarangayDemand> _computeBarangayDemand(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> users,
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> completedOrders,
+) {
+  // Approved farmers only — their barangay is the geospatial anchor,
+  // since neither farmers nor orders carry real lat/lng today.
+  final barangayByFarmerUid = <String, String>{};
+  for (final doc in users) {
+    final data = doc.data();
+    if ((data['role'] ?? '') != 'farmer') continue;
+    if ((data['approvalStatus'] ?? '') != 'approved') continue;
+    final barangay = (data['barangay'] ?? '').toString();
+    if (barangay.isEmpty) continue;
+    barangayByFarmerUid[doc.id] = barangay;
+  }
+
+  final orderCountByBarangay = <String, int>{};
+  final farmersByBarangay = <String, Set<String>>{};
+  for (final doc in completedOrders) {
+    final sellerId = (doc.data()['sellerId'] ?? '').toString();
+    final barangay = barangayByFarmerUid[sellerId];
+    if (barangay == null) continue;
+    orderCountByBarangay[barangay] = (orderCountByBarangay[barangay] ?? 0) + 1;
+    farmersByBarangay.putIfAbsent(barangay, () => {}).add(sellerId);
+  }
+
+  return kLaurelBarangayLocations
+      .map((loc) => _BarangayDemand(
+            loc.name,
+            loc.lat,
+            loc.lng,
+            orderCountByBarangay[loc.name] ?? 0,
+            farmersByBarangay[loc.name]?.length ?? 0,
+          ))
+      .toList();
+}
+
+List<MapEntry<String, int>> _topSearchQueries(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> searchDocs,
+) {
+  final counts = <String, int>{};
+  for (final doc in searchDocs) {
+    final query = (doc.data()['query'] ?? '').toString().trim().toLowerCase();
+    if (query.isEmpty) continue;
+    counts[query] = (counts[query] ?? 0) + 1;
+  }
+  final entries = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  return entries.take(8).toList();
+}
+
+class _DemandHeatmapView extends StatefulWidget {
   const _DemandHeatmapView();
+
+  @override
+  State<_DemandHeatmapView> createState() => _DemandHeatmapViewState();
+}
+
+class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
+  static const _center = LatLng(kLaurelCenterLat, kLaurelCenterLng);
+
+  Set<Circle> _buildCircles(List<_BarangayDemand> demand) {
+    final maxCount = demand.fold<int>(0, (a, d) => d.orderCount > a ? d.orderCount : a);
+    return demand.map((d) {
+      final intensity = maxCount == 0 ? 0.0 : d.orderCount / maxCount;
+      final color = d.orderCount == 0
+          ? Colors.grey
+          : Color.lerp(Colors.amber, Colors.red, intensity) ?? Colors.amber;
+      final radius = 220.0 + intensity * 900.0;
+      return Circle(
+        circleId: CircleId(d.barangay),
+        center: LatLng(d.lat, d.lng),
+        radius: radius,
+        fillColor: color.withValues(alpha: d.orderCount == 0 ? 0.08 : 0.35),
+        strokeColor: color,
+        strokeWidth: d.orderCount == 0 ? 1 : 2,
+        consumeTapEvents: true,
+        onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${d.barangay}: ${d.orderCount} completed order(s) across ${d.farmerCount} farmer(s).',
+            ),
+          ),
+        ),
+      );
+    }).toSet();
+  }
+
+  String _buildCsv(List<_BarangayDemand> demand, List<MapEntry<String, int>> topSearches) {
+    final buffer = StringBuffer();
+    buffer.writeln('AgriTrade+ Demand Report — ${DateFormat('MMM d, y – h:mm a').format(DateTime.now())}');
+    buffer.writeln();
+    buffer.writeln('Barangay,Completed Orders,Approved Farmers');
+    for (final d in demand) {
+      buffer.writeln('${d.barangay},${d.orderCount},${d.farmerCount}');
+    }
+    buffer.writeln();
+    buffer.writeln('Top Buyer Searches,Count');
+    for (final e in topSearches) {
+      buffer.writeln('${e.key},${e.value}');
+    }
+    return buffer.toString();
+  }
+
+  Future<void> _exportReport(
+    BuildContext context,
+    List<_BarangayDemand> demand,
+    List<MapEntry<String, int>> topSearches,
+  ) async {
+    await Clipboard.setData(ClipboardData(text: _buildCsv(demand, topSearches)));
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Report copied to clipboard — paste into a spreadsheet.')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = _AdminThemeScope.of(context).palette;
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('users').snapshots(),
+      builder: (context, usersSnap) {
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('orders')
+              .where('status', isEqualTo: 'completed')
+              .snapshots(),
+          builder: (context, ordersSnap) {
+            final demand = _computeBarangayDemand(
+              usersSnap.data?.docs ?? [],
+              ordersSnap.data?.docs ?? [],
+            );
+            final rankedDemand = [...demand]..sort((a, b) => b.orderCount.compareTo(a.orderCount));
+
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance.collection('searchEvents').snapshots(),
+              builder: (context, searchSnap) {
+                final topSearches = _topSearchQueries(searchSnap.data?.docs ?? []);
+
+                return Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Market Demand Forecast',
+                              style: TextStyle(
+                                  fontSize: 24, fontWeight: FontWeight.bold, color: c.textPrimary)),
+                          _QuickActionButton(
+                            icon: Icons.download,
+                            label: 'Export Report',
+                            filled: true,
+                            onPressed: () => _exportReport(context, demand, topSearches),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Barangay circles are sized by completed orders per approved farmer\'s barangay. '
+                        'Marker positions are illustrative, not surveyed coordinates.',
+                        style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                      ),
+                      const SizedBox(height: 16),
+                      Expanded(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(16),
+                                child: GoogleMap(
+                                  initialCameraPosition: const CameraPosition(target: _center, zoom: 12.5),
+                                  circles: _buildCircles(demand),
+                                  myLocationButtonEnabled: false,
+                                  zoomControlsEnabled: true,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              flex: 2,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: _DemandSidePanel(
+                                      title: 'Highest Demand Barangays',
+                                      icon: Icons.local_fire_department_outlined,
+                                      emptyText: 'No completed orders yet.',
+                                      rows: rankedDemand
+                                          .where((d) => d.orderCount > 0)
+                                          .take(6)
+                                          .map((d) => '${d.barangay} — ${d.orderCount} order(s)')
+                                          .toList(),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Expanded(
+                                    child: _DemandSidePanel(
+                                      title: 'Top Buyer Searches',
+                                      icon: Icons.search,
+                                      emptyText: 'No search activity logged yet.',
+                                      rows: topSearches
+                                          .map((e) => '${e.key} — ${e.value} search(es)')
+                                          .toList(),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _DemandSidePanel extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final String emptyText;
+  final List<String> rows;
+
+  const _DemandSidePanel({
+    required this.title,
+    required this.icon,
+    required this.emptyText,
+    required this.rows,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _AdminThemeScope.of(context).palette;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: c.border),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Market Demand Forecast',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: c.textPrimary)),
-              _QuickActionButton(icon: Icons.download, label: 'Export Map Data', filled: true, onPressed: () {}),
+              Icon(icon, size: 18, color: c.textSecondary),
+              const SizedBox(width: 8),
+              Text(title,
+                  style: TextStyle(color: c.textPrimary, fontSize: 14, fontWeight: FontWeight.bold)),
             ],
           ),
-          const SizedBox(height: 20),
-          Expanded(
-            // TODO: mount the Google Maps / heatmap layer widget here, backed
-            // by aggregated geospatial search & order data from Firestore.
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: c.border),
+          const SizedBox(height: 12),
+          if (rows.isEmpty)
+            Expanded(
+              child: Center(
+                child: Text(emptyText,
+                    style: TextStyle(color: c.textMuted, fontSize: 12), textAlign: TextAlign.center),
               ),
-              child: const _EmptyState(
-                icon: Icons.map_outlined,
-                title: 'No demand data yet',
-                subtitle: 'The heatmap will populate as buyers search and purchase products.',
+            )
+          else
+            Expanded(
+              child: ListView.separated(
+                itemCount: rows.length,
+                separatorBuilder: (_, _) => Divider(height: 1, color: c.border),
+                itemBuilder: (context, index) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(rows[index], style: TextStyle(color: c.textPrimary, fontSize: 12.5)),
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -1259,11 +1720,54 @@ class _DemandHeatmapView extends StatelessWidget {
 }
 
 // ============================================================
-// PRICE MANAGEMENT (empty state, theme-aware shell)
+// PRICE MANAGEMENT — bound to the `market_prices` collection.
+// "Live Market Average" is computed on the fly from current
+// `products` listings; "Baseline Price" is what the admin sets
+// here and is meant to feed the price-recommendation system.
 // ============================================================
 
 class _PriceManagementView extends StatelessWidget {
   const _PriceManagementView();
+
+  Future<void> _openBaselineDialog(
+    BuildContext context, {
+    String? commodityId,
+    String? name,
+    double? price,
+  }) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _BaselinePriceDialog(
+        commodityId: commodityId,
+        initialName: name,
+        initialPrice: price,
+      ),
+    );
+    if (saved == true && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Baseline price saved.')),
+      );
+    }
+  }
+
+  Future<void> _deleteBaseline(BuildContext context, String commodityId, String name) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove baseline price?'),
+        content: Text('This removes the official baseline for "$name". This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await FirebaseFirestore.instance.collection('market_prices').doc(commodityId).delete();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1280,32 +1784,265 @@ class _PriceManagementView extends StatelessWidget {
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: c.textPrimary)),
               Row(
                 children: [
-                  _QuickActionButton(icon: Icons.refresh, label: 'Refresh All', onPressed: () {}),
+                  _QuickActionButton(
+                    icon: Icons.refresh,
+                    label: 'Refresh All',
+                    onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Prices sync live — nothing to refresh.')),
+                    ),
+                  ),
                   const SizedBox(width: 8),
-                  _QuickActionButton(icon: Icons.save, label: 'Commit Changes', filled: true, onPressed: () {}),
+                  _QuickActionButton(
+                    icon: Icons.add,
+                    label: 'Add Commodity',
+                    filled: true,
+                    onPressed: () => _openBaselineDialog(context),
+                  ),
                 ],
               )
             ],
           ),
           const SizedBox(height: 20),
           Expanded(
-            // TODO: bind to the `market_prices` / `commodity_baseline` collection.
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: c.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: c.border),
-              ),
-              child: const _EmptyState(
-                icon: Icons.price_change_outlined,
-                title: 'No baseline prices set yet',
-                subtitle: 'Set official commodity prices to power AI price recommendations.',
-              ),
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: FirebaseFirestore.instance.collection('market_prices').orderBy('name').snapshots(),
+              builder: (context, pricesSnap) {
+                final priceDocs = pricesSnap.data?.docs ?? [];
+
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: FirebaseFirestore.instance.collection('products').snapshots(),
+                  builder: (context, productsSnap) {
+                    final products = productsSnap.data?.docs ?? [];
+
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: c.border),
+                      ),
+                      child: priceDocs.isEmpty
+                          ? const _EmptyState(
+                              icon: Icons.price_change_outlined,
+                              title: 'No baseline prices set yet',
+                              subtitle: 'Set official commodity prices to power AI price recommendations.',
+                            )
+                          : SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
+                                dataRowColor: WidgetStateProperty.all(Colors.transparent),
+                                columnSpacing: 32,
+                                horizontalMargin: 12,
+                                headingTextStyle: TextStyle(
+                                    color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                                dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
+                                columns: const [
+                                  DataColumn(label: Text('Commodity')),
+                                  DataColumn(label: Text('Live Market Average')),
+                                  DataColumn(label: Text('Baseline Price')),
+                                  DataColumn(label: Text('Last Updated')),
+                                  DataColumn(label: Text('Actions')),
+                                ],
+                                rows: priceDocs.map((doc) {
+                                  final data = doc.data();
+                                  final name = (data['name'] ?? doc.id).toString();
+                                  final baseline = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
+                                  final liveAverage = computeLiveAverage(products, name);
+
+                                  return DataRow(cells: [
+                                    DataCell(Text(name)),
+                                    DataCell(Text(
+                                      liveAverage != null ? formatPeso(liveAverage) : 'No listings yet',
+                                      style: TextStyle(color: c.textSecondary),
+                                    )),
+                                    DataCell(Text(formatPeso(baseline),
+                                        style: const TextStyle(fontWeight: FontWeight.w600))),
+                                    DataCell(Text(timeAgo(data['updatedAt'] as Timestamp?))),
+                                    DataCell(Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          tooltip: 'Update baseline',
+                                          icon: Icon(Icons.edit_outlined, size: 18, color: c.textSecondary),
+                                          onPressed: () => _openBaselineDialog(
+                                            context,
+                                            commodityId: doc.id,
+                                            name: name,
+                                            price: baseline,
+                                          ),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Remove baseline',
+                                          icon: Icon(Icons.delete_outline, size: 18, color: c.red),
+                                          onPressed: () => _deleteBaseline(context, doc.id, name),
+                                        ),
+                                      ],
+                                    )),
+                                  ]);
+                                }).toList(),
+                              ),
+                            ),
+                    );
+                  },
+                );
+              },
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _BaselinePriceDialog extends StatefulWidget {
+  final String? commodityId;
+  final String? initialName;
+  final double? initialPrice;
+
+  const _BaselinePriceDialog({this.commodityId, this.initialName, this.initialPrice});
+
+  @override
+  State<_BaselinePriceDialog> createState() => _BaselinePriceDialogState();
+}
+
+class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
+  late final TextEditingController _nameController =
+      TextEditingController(text: widget.initialName ?? '');
+  late final TextEditingController _priceController =
+      TextEditingController(text: widget.initialPrice != null ? widget.initialPrice!.toStringAsFixed(2) : '');
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _products = [];
+  bool _loadingProducts = true;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProducts();
+  }
+
+  Future<void> _loadProducts() async {
+    try {
+      final snap = await FirebaseFirestore.instance.collection('products').get();
+      if (mounted) setState(() { _products = snap.docs; _loadingProducts = false; });
+    } catch (_) {
+      if (mounted) setState(() => _loadingProducts = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    final price = double.tryParse(_priceController.text.trim());
+
+    if (name.isEmpty) {
+      setState(() => _error = 'Enter a commodity name.');
+      return;
+    }
+    if (price == null || price <= 0) {
+      setState(() => _error = 'Enter a valid price.');
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      final docId = widget.commodityId ??
+          name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+      final docRef = FirebaseFirestore.instance.collection('market_prices').doc(docId);
+      final existing = await docRef.get();
+
+      await docRef.set({
+        'name': name,
+        'baselinePrice': price,
+        'previousBaselinePrice': existing.data()?['baselinePrice'],
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedBy': FirebaseAuth.instance.currentUser?.email ??
+            FirebaseAuth.instance.currentUser?.uid ??
+            'admin',
+      }, SetOptions(merge: true));
+
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _error = 'Could not save: $e';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final liveAverage = _loadingProducts
+        ? null
+        : computeLiveAverage(_products, _nameController.text);
+
+    return AlertDialog(
+      title: Text(widget.commodityId == null ? 'Set Baseline Price' : 'Update Baseline Price'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _nameController,
+              enabled: widget.commodityId == null,
+              decoration: const InputDecoration(labelText: 'Commodity name', hintText: 'e.g. Rice'),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _priceController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Baseline price (₱)'),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 10),
+            // "Test price calculation": shows what the live listings say,
+            // right next to the baseline the admin is about to commit.
+            Text(
+              _loadingProducts
+                  ? 'Checking live listings…'
+                  : liveAverage != null
+                      ? 'Live market average right now: ${formatPeso(liveAverage)}'
+                      : 'No live listings match this name yet.',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Text('Save'),
+        ),
+      ],
     );
   }
 }

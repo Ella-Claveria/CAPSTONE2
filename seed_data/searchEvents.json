@@ -1,0 +1,12 @@
+[
+  { "_id": "seed_search_01", "userId": "seed_buyer_01", "query": "chicken", "category": "All Postings", "createdAt": "2026-09-04T07:00:00Z" },
+  { "_id": "seed_search_02", "userId": "seed_buyer_02", "query": "rice", "category": "All Postings", "createdAt": "2026-09-04T08:00:00Z" },
+  { "_id": "seed_search_03", "userId": "seed_buyer_01", "query": "tomato", "category": "Vegetables", "createdAt": "2026-09-03T07:00:00Z" },
+  { "_id": "seed_search_04", "userId": "seed_buyer_02", "query": "mango", "category": "Fruits", "createdAt": "2026-09-02T07:00:00Z" },
+  { "_id": "seed_search_05", "userId": "seed_buyer_01", "query": "egg", "category": "Livestock", "createdAt": "2026-09-01T07:00:00Z" },
+  { "_id": "seed_search_06", "userId": "seed_buyer_02", "query": "chicken", "category": "All Postings", "createdAt": "2026-08-30T07:00:00Z" },
+  { "_id": "seed_search_07", "userId": "seed_buyer_01", "query": "pork", "category": "Livestock", "createdAt": "2026-08-28T07:00:00Z" },
+  { "_id": "seed_search_08", "userId": "seed_buyer_02", "query": "banana", "category": "Fruits", "createdAt": "2026-08-27T07:00:00Z" },
+  { "_id": "seed_search_09", "userId": "seed_buyer_01", "query": "onion", "category": "Vegetables", "createdAt": "2026-08-26T07:00:00Z" },
+  { "_id": "seed_search_10", "userId": "seed_buyer_02", "query": "chicken", "category": "All Postings", "createdAt": "2026-08-24T07:00:00Z" }
+]

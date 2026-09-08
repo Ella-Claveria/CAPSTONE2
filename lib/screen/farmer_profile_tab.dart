@@ -7,6 +7,7 @@ import '../services/message_service.dart';
 import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
 import 'farmer_edit_profile_screen.dart';
+import '../widgets/change_password_dialog.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 class ProfileTab extends StatefulWidget {
@@ -78,6 +79,9 @@ class _ProfileTabState extends State<ProfileTab> {
           case 'settings':
             _showComingSoon(context, 'Account Settings');
             break;
+          case 'password':
+            showChangePasswordDialog(context);
+            break;
           case 'help':
             _showComingSoon(context, 'Help & Support');
             break;
@@ -94,6 +98,17 @@ class _ProfileTabState extends State<ProfileTab> {
             leading: Icon(Icons.settings_outlined, color: _dark),
             title: Text(
               'Account Settings',
+              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'password',
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.lock_outline, color: _dark),
+            title: Text(
+              'Change Password',
               style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
             ),
           ),
@@ -298,6 +313,8 @@ class _ProfileTabState extends State<ProfileTab> {
     final name = data['name']?.toString() ?? 'Unnamed product';
     final price = (data['price'] as num?)?.toDouble();
     final quantity = data['quantity'];
+    final isArchived = data['isArchived'] == true;
+    final isOutOfStock = !isArchived && ((quantity as num?)?.toInt() ?? 0) <= 0;
 
     final imageUrls =
         (data['imageUrls'] as List?)?.map((e) => e.toString()).toList() ?? [];
@@ -332,9 +349,34 @@ class _ProfileTabState extends State<ProfileTab> {
                     ),
                   ),
           ),
-          title: Text(
-            name,
-            style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  name,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (isArchived || isOutOfStock) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: isArchived ? Colors.grey[300] : Colors.orange[100],
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    isArchived ? 'ARCHIVED' : 'OUT OF STOCK',
+                    style: TextStyle(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.bold,
+                      color: isArchived ? Colors.grey[700] : Colors.orange[800],
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
           subtitle: subtitle.isNotEmpty
               ? Text(

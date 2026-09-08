@@ -63,6 +63,7 @@ service cloud.firestore {
         && (
           resource.data.buyerId == request.auth.uid
           || resource.data.sellerId == request.auth.uid
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
         );
 
       // Buyer can edit details while pending.
@@ -114,6 +115,45 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.buyerId == request.auth.uid
         && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.status == 'completed';
 
+      allow update, delete: if false;
+    }
+
+    // ---- Moderation reports (flagged listings / users) ----
+    match /reports/{reportId} {
+      allow read: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+
+      allow create: if request.auth != null &&
+        request.resource.data.reporterId == request.auth.uid &&
+        request.resource.data.status == 'pending';
+
+      allow update, delete: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ---- Admin-managed baseline commodity prices ----
+    match /market_prices/{commodityId} {
+      allow read: if true;
+      allow write: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ---- In-app notification history, written by Cloud Functions
+    // (Admin SDK bypasses these rules) — clients may only read their own
+    // and mark their own as read, never create or delete. ----
+    match /notifications/{uid}/items/{itemId} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid;
+      allow create, delete: if false;
+    }
+
+    // ---- Buyer search activity (feeds the admin demand heatmap and the
+    // buyer-facing "Trending Searches" row — query text isn't sensitive,
+    // so any signed-in user can read it, not just admins) ----
+    match /searchEvents/{eventId} {
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth != null;
       allow update, delete: if false;
     }
   }

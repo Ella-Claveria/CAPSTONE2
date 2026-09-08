@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/cloudinary_service.dart';
 import '../services/message_service.dart';
+import '../widgets/pricing_calculator_sheet.dart';
 import 'buyer_marketplace_screen.dart';
 import 'place_order_screen.dart';
 
@@ -390,8 +391,9 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
     num price,
     String pricingType,
     int minimumQuantity,
-    int maximumQuantity,
-  ) async {
+    int maximumQuantity, {
+    int? initialQuantity,
+  }) async {
     await Navigator.push(
       context,
       MaterialPageRoute(
@@ -407,7 +409,30 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
           pricingType: pricingType,
           minimumQuantity: minimumQuantity,
           maximumQuantity: maximumQuantity,
+          initialQuantity: initialQuantity,
         ),
+      ),
+    );
+  }
+
+  void _openPricingCalculator(
+    num price,
+    String pricingType,
+    int minimumQuantity,
+    int maximumQuantity,
+  ) {
+    showPricingCalculatorSheet(
+      context,
+      pricingType: pricingType,
+      unitPrice: price,
+      minimumQuantity: minimumQuantity,
+      maximumQuantity: maximumQuantity,
+      onProceed: (quantity) => _choosePrice(
+        price,
+        pricingType,
+        minimumQuantity,
+        maximumQuantity,
+        initialQuantity: quantity,
       ),
     );
   }
@@ -448,7 +473,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
               )
             else
               OutlinedButton(
-                onPressed: () => _choosePrice(
+                onPressed: () => _openPricingCalculator(
                   retailPrice,
                   'retail',
                   1,
@@ -466,7 +491,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
                 )
               else
                 OutlinedButton(
-                  onPressed: () => _choosePrice(
+                  onPressed: () => _openPricingCalculator(
                     wholesalePrice,
                     'wholesale',
                     minimumQuantity,

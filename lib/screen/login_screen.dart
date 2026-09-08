@@ -1,235 +1,144 @@
 import 'package:flutter/material.dart';
-import '../services/auth_service.dart';
+import '../theme/app_theme.dart';
 import 'register_screen.dart';
-import 'farmer_home_screen.dart';
-import 'buyer_marketplace_screen.dart';
 import '../widgets/agritrade_text.dart';
-import 'admin_dashboard_screen.dart';
-import '../widgets/role_mismatch_dialog.dart';
+import '../widgets/login_form_fields.dart';
+import 'page_transitions.dart';
+import '../l10n/app_localizations.dart';
 
 
 class LoginScreen extends StatefulWidget {
-  final String role;
-  const LoginScreen({super.key, required this.role});
+  // Null means "role-agnostic" login: whoever this account belongs to
+  // (farmer or buyer), log them in and route them to the right home screen.
+  // Only the "remembered last login" shortcut from AppRouter still passes a
+  // specific role, for the slightly tighter role-mismatch check.
+  final String? role;
+
+  // Set when arriving from a saved-account tile on the entry screen — the
+  // email is ready to go, they just need to type that account's password.
+  final String? initialEmail;
+
+  const LoginScreen({super.key, this.role, this.initialEmail});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _authService = AuthService();
-  bool _loading = false;
-  bool _obscurePassword = true;
-
   bool get _isFarmer => widget.role == 'farmer';
   bool get _isAdmin => widget.role == 'admin';
 
   // Human-readable label for the role subtitle under the AgriTrade+ logo.
   String get _roleLabel {
-    if (_isAdmin) return 'Admin Login';
-    if (_isFarmer) return 'Farmer Login';
-    return 'Buyer Login';
-  }
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _login() async {
-    final email = _emailController.text.trim();
-    final password = _passwordController.text;
-    if (email.isEmpty || password.isEmpty) {
-      _showMessage('Please enter your email and password.');
-      return;
-    }
-    setState(() => _loading = true);
-    final error = await _authService.logIn(
-      email: email,
-      password: password,
-      expectedRole: widget.role,
-    );
-    if (!mounted) return;
-
-     if (error != null && error.startsWith('ROLE_MISMATCH:')) {
-      final registeredRole = error.substring('ROLE_MISMATCH:'.length);
-      showRoleMismatchDialog(context, registeredRole);
-      return;
-    }
-
-    setState(() => _loading = false);
-    if (error == null) {
-      // pushAndRemoveUntil clears splash/role-selection/login from the stack,
-      // so the back button on Home has nothing left to pop to.
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(
-          builder: (_) {
-            if (_isAdmin) return AdminDashboardScreen();
-            if (_isFarmer) return FarmerHomeScreen();
-            return const BuyerMarketplaceScreen();
-          },
-        ),
-        (route) => false,
-      );
-    } else {
-      _showMessage(error);
-    }
-  }
-
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    final t = AppLocalizations.of(context)!;
+    if (_isAdmin) return t.adminLoginTitle;
+    if (_isFarmer) return t.farmerLoginTitle;
+    return t.buyerLoginTitle;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        // ===== Background image (with green fallback) =====
-        decoration: const BoxDecoration(
-          color: Color(0xFF1B5E20),
-          image: DecorationImage(
-            image: AssetImage('assets/background_login.png'),
-            fit: BoxFit.cover,
-            onError: null,
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Container(
-                // ===== Frosted white card =====
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.90),
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 20, offset: const Offset(0, 8)),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Back button inside the card
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        icon: const Icon(Icons.arrow_back, color: Color(0xFF1B5E20)),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Center(
-                      child: Image.asset(
-                        'assets/logo.png',
-                        width: 80,
-                        height: 80,
-                        errorBuilder: (context, error, stackTrace) {
-                          return Container(
-                            width: 80,
-                            height: 80,
-                            decoration: const BoxDecoration(color: Color(0xFF2E7D32), shape: BoxShape.circle),
-                            child: const Icon(Icons.agriculture, size: 42, color: Colors.white),
-                          );
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    const Center(child: Text('Welcome to', style: TextStyle(fontSize: 20, color: Colors.black87))),
-                    const Center(child: AgriTradeText(fontSize: 30)),
-                    const SizedBox(height: 4),
-                    Center(
-                      child: Text(_roleLabel,
-                          style: const TextStyle(fontSize: 14, color: Colors.black54, fontWeight: FontWeight.w500)),
-                    ),
-                    const SizedBox(height: 24),
-                    const Text('Email Address', style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: InputDecoration(
-                        hintText: 'you@example.com',
-                        filled: true,
-                        fillColor: const Color(0xFFF2F2F2),
-                        suffixIcon: const Icon(Icons.email_outlined),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Password', style: TextStyle(fontWeight: FontWeight.bold)),
-                        Text('Forgot Password?', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      decoration: InputDecoration(
-                        hintText: 'Password',
-                        filled: true,
-                        fillColor: const Color(0xFFF2F2F2),
-                        suffixIcon: IconButton(
-                          icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: Colors.grey[600]),
-                          onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                        ),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _loading ? null : _login,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF1B5E20),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                        ),
-                        child: _loading
-                            ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                            : const Text('Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    // The "Sign up" link makes no sense for admin accounts —
-                    // DA officers are created manually via Firebase Console,
-                    // not via self-registration. So we hide it for admin.
-                    if (!_isAdmin)
+      backgroundColor: AppTheme.bgLight,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // ---- Centered, scrollable form card — everything (fields, ----
+            // ---- the Login button, and the sign-up link) lives inside ----
+            // ---- one card; only the back arrow (below) floats outside ----
+            // ---- it, so it stays put no matter how far this scrolls.  ----
+            Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 16, offset: const Offset(0, 6)),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       Center(
-                        child: TextButton(
-                          onPressed: () {
-                            Navigator.push(context,
-                                MaterialPageRoute(builder: (_) => RegisterScreen(role: widget.role)));
+                        child: Image.asset(
+                          'assets/logo.png',
+                          width: 80,
+                          height: 80,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              width: 80,
+                              height: 80,
+                              decoration: const BoxDecoration(color: Color(0xFF2E7D32), shape: BoxShape.circle),
+                              child: const Icon(Icons.agriculture, size: 42, color: Colors.white),
+                            );
                           },
-                          child: RichText(
-                            text: const TextSpan(
-                              style: TextStyle(color: Colors.black87),
-                              children: [
-                                TextSpan(text: "Don't have an account? "),
-                                TextSpan(text: 'Sign up', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1B5E20))),
-                              ],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Center(
+                        child: Text(AppLocalizations.of(context)!.welcomeTo,
+                            style: const TextStyle(fontSize: 20, color: Colors.black87)),
+                      ),
+                      const Center(child: AgriTradeText(fontSize: 30)),
+                      if (widget.role != null) ...[
+                        const SizedBox(height: 4),
+                        Center(
+                          child: Text(_roleLabel,
+                              style: const TextStyle(fontSize: 14, color: Colors.black54, fontWeight: FontWeight.w500)),
+                        ),
+                      ],
+                      const SizedBox(height: 24),
+                      LoginFormFields(role: widget.role, initialEmail: widget.initialEmail),
+                      // Makes no sense for admin accounts (created manually
+                      // via the Firebase Console), so hidden for that door.
+                      if (!_isAdmin) ...[
+                        const SizedBox(height: 14),
+                        Center(
+                          child: TextButton(
+                            onPressed: () {
+                              final role = widget.role;
+                              Navigator.push(
+                                context,
+                                slideRoute(role != null ? RegisterScreen(initialRole: role) : const RegisterScreen()),
+                              );
+                            },
+                            child: RichText(
+                              text: TextSpan(
+                                style: const TextStyle(color: Colors.black87),
+                                children: [
+                                  TextSpan(text: AppLocalizations.of(context)!.noAccountSignUp),
+                                  TextSpan(
+                                      text: AppLocalizations.of(context)!.createOne,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.dark)),
+                                ],
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
+
+            // ---- Back arrow, floating above everything at the top-left ----
+            // ---- corner — not part of the card, so it never scrolls.   ----
+            // ---- This form is short enough to never need scrolling, so ----
+            // ---- unlike Register it never needs a backdrop behind it.  ----
+            Positioned(
+              top: 4,
+              left: 4,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back, color: AppTheme.dark),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ],
         ),
       ),
     );

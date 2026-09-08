@@ -1,6 +1,19 @@
-import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'dart:async';
+import 'dart:math' as math;
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
+
+import '../data/laurel_barangays.dart';
+import '../services/location_permission_prompt.dart';
+
+/// Uses OpenStreetMap via flutter_map — no Google Maps API key or billing
+/// account needed, unlike the admin Demand Heatmap. Good enough for showing
+/// barangay-level farmer density; swap to Google Maps later if you want
+/// satellite imagery or Google's POI data.
 class BuyerMapView extends StatefulWidget {
   const BuyerMapView({super.key});
 
@@ -9,57 +22,172 @@ class BuyerMapView extends StatefulWidget {
 }
 
 class _BuyerMapViewState extends State<BuyerMapView> {
-  late GoogleMapController mapController;
-  
-  // Center of Laurel, Batangas
-  final LatLng _laurelCenter = const LatLng(14.0445, 120.9320);
+  static const _laurelCenter = LatLng(kLaurelCenterLat, kLaurelCenterLng);
 
-  // Using Circles instead of Markers to protect farmer privacy
-  final Set<Circle> _farmZones = {};
+  Position? _myPosition;
+  String? _locationNotice;
+
+  StreamSubscription? _usersSub;
+  StreamSubscription? _productsSub;
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _farmerDocs = [];
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _productDocs = [];
 
   @override
   void initState() {
     super.initState();
-    _loadPrivacySafeZones();
-  }
-
-  void _loadPrivacySafeZones() {
-    setState(() {
-      _farmZones.addAll([
-        Circle(
-          circleId: const CircleId('zone_1'),
-          // Offset coordinates slightly from the actual farm
-          center: const LatLng(14.0500, 120.9350), 
-          radius: 600, // 600-meter approximate radius
-          fillColor: Colors.green.withOpacity(0.2),
-          strokeColor: Colors.green[800]!,
-          strokeWidth: 2,
-          consumeTapEvents: true, // Allows the circle to be tapped
-          onTap: () => _showFarmDetails(
-            farmName: 'San Juan Estates (Vicinity)', 
-            distance: '~2.4 km away', 
-            topProducts: 'Brahmam Cattle, Robusta Beans',
-          ),
-        ),
-        Circle(
-          circleId: const CircleId('zone_2'),
-          center: const LatLng(14.0350, 120.9200),
-          radius: 800, // 800-meter approximate radius
-          fillColor: Colors.green.withOpacity(0.2),
-          strokeColor: Colors.green[800]!,
-          strokeWidth: 2,
-          consumeTapEvents: true,
-          onTap: () => _showFarmDetails(
-            farmName: 'Mang Jose Harvest (Vicinity)', 
-            distance: '~4.1 km away', 
-            topProducts: 'Heirloom Tomatoes, Corn',
-          ),
-        ),
-      ]);
+    _determinePosition();
+    _usersSub = FirebaseFirestore.instance.collection('users').snapshots().listen((snap) {
+      if (mounted) setState(() => _farmerDocs = snap.docs);
+    });
+    _productsSub = FirebaseFirestore.instance.collection('products').snapshots().listen((snap) {
+      if (mounted) setState(() => _productDocs = snap.docs);
     });
   }
 
-  void _showFarmDetails({required String farmName, required String distance, required String topProducts}) {
+  @override
+  void dispose() {
+    _usersSub?.cancel();
+    _productsSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _determinePosition() async {
+    try {
+      // Explain why before the OS prompt appears, instead of surprising
+      // them with a permission dialog the moment they open the map.
+      if (!mounted) return;
+      final granted = await maybeRequestLocationPermission(
+        context,
+        title: 'See farms near you',
+        message: "AgriTrade+ uses your location to show how far nearby "
+            "farms are and sort them by distance. You can skip this and "
+            "still browse everything.",
+      );
+      if (!granted) {
+        if (!mounted) return;
+        setState(() => _locationNotice =
+            'Location skipped — showing farms without distances.');
+        return;
+      }
+
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        setState(() => _locationNotice = 'Turn on location services to see distances.');
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+      );
+      if (!mounted) return;
+      setState(() {
+        _myPosition = position;
+        _locationNotice = null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _locationNotice = 'Could not get your location right now.');
+    }
+  }
+
+  /// Straight-line distance from the buyer's device to a barangay's
+  /// (illustrative) center, in kilometers. Null until location is known.
+  double? _distanceKmTo(double lat, double lng) {
+    final pos = _myPosition;
+    if (pos == null) return null;
+    return Geolocator.distanceBetween(pos.latitude, pos.longitude, lat, lng) / 1000;
+  }
+
+  Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> _farmersByBarangay() {
+    final map = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+    for (final doc in _farmerDocs) {
+      final data = doc.data();
+      if ((data['role'] ?? '') != 'farmer') continue;
+      if ((data['approvalStatus'] ?? '') != 'approved') continue;
+      final barangay = (data['barangay'] ?? '').toString();
+      if (barangay.isEmpty) continue;
+      map.putIfAbsent(barangay, () => []).add(doc);
+    }
+    return map;
+  }
+
+  Map<String, int> _topCategoriesFor(Set<String> farmerIds) {
+    final counts = <String, int>{};
+    for (final doc in _productDocs) {
+      final data = doc.data();
+      if (data['isArchived'] == true) continue;
+      final farmerId = (data['farmerId'] ?? '').toString();
+      if (!farmerIds.contains(farmerId)) continue;
+      final category = (data['category'] ?? 'General').toString();
+      counts[category] = (counts[category] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  List<Marker> _buildMarkers(
+    Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> farmersByBarangay,
+  ) {
+    final markers = <Marker>[];
+    for (final loc in kLaurelBarangayLocations) {
+      final farmers = farmersByBarangay[loc.name];
+      if (farmers == null || farmers.isEmpty) continue;
+
+      final size = 40.0 + math.min(farmers.length, 5) * 8.0;
+      markers.add(
+        Marker(
+          point: LatLng(loc.lat, loc.lng),
+          width: size,
+          height: size,
+          child: GestureDetector(
+            onTap: () => _showFarmDetails(loc, farmers),
+            // Offset from any single farm's exact address to protect
+            // farmer privacy — this marks the barangay, not a home.
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.green.withValues(alpha: 0.35),
+                border: Border.all(color: Colors.green[800]!, width: 2),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_myPosition != null) {
+      markers.add(
+        Marker(
+          point: LatLng(_myPosition!.latitude, _myPosition!.longitude),
+          width: 22,
+          height: 22,
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.blue,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return markers;
+  }
+
+  void _showFarmDetails(
+    LaurelBarangayLocation loc,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> farmers,
+  ) {
+    final distanceKm = _distanceKmTo(loc.lat, loc.lng);
+    final categories = _topCategoriesFor(farmers.map((d) => d.id).toSet());
+    final topProducts = (categories.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value)))
+        .take(3)
+        .map((e) => e.key)
+        .join(', ');
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -77,7 +205,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                 children: [
                   Expanded(
                     child: Text(
-                      farmName,
+                      'Brgy. ${loc.name}',
                       style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -90,7 +218,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      'VERIFIED',
+                      '${farmers.length} VERIFIED FARMER(S)',
                       style: TextStyle(color: Colors.green[800], fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                   ),
@@ -101,7 +229,12 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                 children: [
                   Icon(Icons.location_on_outlined, size: 16, color: Colors.grey[600]),
                   const SizedBox(width: 4),
-                  Text('Laurel, Batangas • $distance', style: TextStyle(color: Colors.grey[600])),
+                  Text(
+                    distanceKm != null
+                        ? 'Laurel, Batangas • ~${distanceKm.toStringAsFixed(1)} km away'
+                        : 'Laurel, Batangas • distance unavailable',
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
                 ],
               ),
               const SizedBox(height: 16),
@@ -126,23 +259,23 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                 ),
               ),
               const SizedBox(height: 16),
-              const Text('Top Products in this Zone', style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Active Categories in this Barangay', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
-              Text(topProducts, style: TextStyle(color: Colors.grey[800])),
+              Text(
+                topProducts.isEmpty ? 'No active listings yet.' : topProducts,
+                style: TextStyle(color: Colors.grey[800]),
+              ),
               const SizedBox(height: 24),
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    // Navigate to Farm Profile
-                  },
+                  onPressed: () => Navigator.pop(context),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green[800],
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  child: const Text('View Farm Profile'),
+                  child: const Text('Close'),
                 ),
               ),
             ],
@@ -154,16 +287,28 @@ class _BuyerMapViewState extends State<BuyerMapView> {
 
   @override
   Widget build(BuildContext context) {
+    final farmersByBarangay = _farmersByBarangay();
+    final farmMarkerCount = farmersByBarangay.values.where((f) => f.isNotEmpty).length;
+    final markers = _buildMarkers(farmersByBarangay);
+
     return Scaffold(
       body: Stack(
         children: [
-          GoogleMap(
-            onMapCreated: (controller) => mapController = controller,
-            initialCameraPosition: CameraPosition(target: _laurelCenter, zoom: 13.5),
-            circles: _farmZones, // Using circles instead of markers
-            myLocationEnabled: true,
-            zoomControlsEnabled: false,
-            mapToolbarEnabled: false, // Disables external routing to Google Maps app prematurely
+          FlutterMap(
+            options: const MapOptions(
+              initialCenter: _laurelCenter,
+              initialZoom: 13.0,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.agritrade',
+              ),
+              MarkerLayer(markers: markers),
+              const SimpleAttributionWidget(
+                source: Text('OpenStreetMap contributors'),
+              ),
+            ],
           ),
           Positioned(
             top: 50,
@@ -177,17 +322,54 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                   BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, 4)),
                 ],
               ),
-              child: const TextField(
-                decoration: InputDecoration(
-                  hintText: 'Search nearby zones...',
-                  prefixIcon: Icon(Icons.search, color: Colors.grey),
-                  suffixIcon: Icon(Icons.tune, color: Colors.grey),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 16),
-                ),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Icon(Icons.map_outlined, color: Colors.grey),
+                  ),
+                  Expanded(
+                    child: Text(
+                      farmMarkerCount == 0
+                          ? 'No verified farmers mapped yet'
+                          : '$farmMarkerCount barangay(s) with active farmers',
+                      style: TextStyle(color: Colors.grey[700], fontSize: 13),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
+          if (_locationNotice != null)
+            Positioned(
+              bottom: 24,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 2)),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, color: Colors.orange, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(_locationNotice!, style: const TextStyle(fontSize: 12.5)),
+                    ),
+                    TextButton(
+                      onPressed: _determinePosition,
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );

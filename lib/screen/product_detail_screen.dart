@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/cart_service.dart';
 import '../services/message_service.dart';
 import 'message_order_screen.dart';
+import 'buyer_market_view.dart';
 
 class ProductDetailScreen extends StatefulWidget {
   final String productId;
@@ -392,7 +393,33 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     const SizedBox(height: 16),
                     const Divider(),
                     const SizedBox(height: 16),
-                    infoRow(Icons.inventory_2, '$available kilos available'),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: infoRow(
+                            Icons.inventory_2,
+                            available > 0 ? '$available kilos available' : 'Out of stock',
+                          ),
+                        ),
+                        if (available <= 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: Colors.red[50],
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.red[200]!),
+                            ),
+                            child: Text(
+                              'OUT OF STOCK',
+                              style: TextStyle(
+                                color: Colors.red[700],
+                                fontWeight: FontWeight.bold,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                     if (delivery || pickup) ...[
                       const SizedBox(height: 8),
                       Wrap(
@@ -632,26 +659,31 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             children: [
               Expanded(
                 child: _actionButton(
-                  Icons.message,
-                  'Message to Order',
-                  () async {
-                    if (farmerId == null || farmerId.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Unable to message this farmer. Try again later.',
-                          ),
-                        ),
-                      );
-                      return;
-                    }
-                    await _messageFarmer(farmerId, farmerName, name);
-                  },
+                  available > 0 ? Icons.message : Icons.block,
+                  available > 0 ? 'Message to Order' : 'Out of Stock',
+                  available <= 0
+                      ? null
+                      : () async {
+                          if (farmerId == null || farmerId.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Unable to message this farmer. Try again later.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          await _messageFarmer(farmerId, farmerName, name);
+                        },
                 ),
               ),
               const SizedBox(width: 14),
               InkWell(
-                onTap: () {},
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const BuyerMapView()),
+                ),
                 borderRadius: BorderRadius.circular(18),
                 child: Container(
                   width: 52,
@@ -732,12 +764,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     );
   }
 
-  Widget _actionButton(IconData icon, String label, VoidCallback onTap) {
+  Widget _actionButton(IconData icon, String label, VoidCallback? onTap) {
+    final disabled = onTap == null;
     return ElevatedButton(
       onPressed: onTap,
       style: ElevatedButton.styleFrom(
-        backgroundColor: _accent,
-        foregroundColor: _dark,
+        backgroundColor: disabled ? Colors.grey[300] : _accent,
+        foregroundColor: disabled ? Colors.grey[600] : _dark,
+        disabledBackgroundColor: Colors.grey[300],
+        disabledForegroundColor: Colors.grey[600],
         elevation: 0,
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -745,11 +780,14 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: _dark, size: 18),
+          Icon(icon, color: disabled ? Colors.grey[600] : _dark, size: 18),
           const SizedBox(width: 8),
           Text(
             label,
-            style: const TextStyle(color: _dark, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: disabled ? Colors.grey[600] : _dark,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ],
       ),

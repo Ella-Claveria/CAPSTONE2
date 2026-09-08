@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/farmer_revenue_service.dart';
 import '../services/order_service.dart';
 import '../services/product_service.dart';
+import 'add_product_screen.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 //
@@ -90,6 +91,10 @@ class _MarketTabState extends State<MarketTab> {
               _welcomeHeader(name, docs.length),
               const SizedBox(height: 16),
               _statRow(docs.length),
+              if (docs.isEmpty) ...[
+                const SizedBox(height: 16),
+                _addFirstProductCard(context),
+              ],
               const SizedBox(height: 16),
               _salesPerformanceCard(),
               const SizedBox(height: 16),
@@ -180,6 +185,64 @@ class _MarketTabState extends State<MarketTab> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // Shown only while this farmer has zero listings — a friendly nudge with
+  // a direct path to their first product, instead of leaving the stat row
+  // ("0 products listed") as the only clue something's missing.
+  Widget _addFirstProductCard(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _accent, width: 1.4),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+                child: const Icon(Icons.add_a_photo_outlined, color: _dark, size: 22),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
+                  'List your first product',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            "You haven't posted anything yet — buyers can't find you until you do. It only takes a minute.",
+            style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AddProductScreen())),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add Your First Product'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _dark,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

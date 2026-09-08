@@ -61,7 +61,7 @@ class AuthService {
 
       return null;
     } catch (e) {
-      return 'Hindi naisave ang dokumento. Subukan ulit.';
+      return 'Could not save the document. Please try again.';
     }
   }
 
@@ -114,22 +114,28 @@ class AuthService {
     }
   }
 
-  // Log in and verify the account's role matches the login door used.
+  // Log in. If expectedRole is given, also verify the account's role
+  // matches the login door used (e.g. a buyer account signing in through
+  // the farmer-specific door). Pass null for a role-agnostic login — the
+  // caller is then responsible for looking up the account's real role
+  // afterward (see LoginScreen's generic login path).
   Future<String?> logIn({
     required String email,
     required String password,
-    required String expectedRole,
+    String? expectedRole,
   }) async {
     try {
       final cred = await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
-      final doc = await _users.doc(cred.user!.uid).get();
-      final role = doc.data()?['role'];
-      if (role != null && role != expectedRole) {
-        await _auth.signOut();
-        return 'ROLE_MISMATCH:$role';
+      if (expectedRole != null) {
+        final doc = await _users.doc(cred.user!.uid).get();
+        final role = doc.data()?['role'];
+        if (role != null && role != expectedRole) {
+          await _auth.signOut();
+          return 'ROLE_MISMATCH:$role';
+        }
       }
       return null;
     } on FirebaseAuthException catch (e) {
@@ -236,6 +242,53 @@ class AuthService {
     await FirebaseAuth.instance.signOut();
   }
 
+  // ----------------------------------------------------------
+  // FORGOT PASSWORD — sends a reset link to the given email.
+  // Works the same for farmer, buyer, and admin accounts since
+  // they're all just Firebase Auth users underneath.
+  // ----------------------------------------------------------
+  Future<String?> sendPasswordResetEmail(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email.trim());
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return _messageFromCode(e.code);
+    } catch (e) {
+      return 'Could not send the reset email. Please try again.';
+    }
+  }
+
+  // ----------------------------------------------------------
+  // CHANGE PASSWORD — for an already-logged-in user. Firebase
+  // requires a recent sign-in before this kind of sensitive
+  // change, so we re-authenticate with their current password
+  // first (this also doubles as verifying they know it).
+  // ----------------------------------------------------------
+  Future<String?> updatePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      final user = _auth.currentUser;
+      final email = user?.email;
+      if (user == null || email == null) {
+        return 'You are not logged in.';
+      }
+
+      final credential = EmailAuthProvider.credential(
+        email: email,
+        password: currentPassword,
+      );
+      await user.reauthenticateWithCredential(credential);
+      await user.updatePassword(newPassword);
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return _messageFromCode(e.code);
+    } catch (e) {
+      return 'Could not update your password. Please try again.';
+    }
+  }
+
   // ============================================================
   // ONE MORE CHANGE — inside your existing signUp() method
   // ------------------------------------------------------------
@@ -269,6 +322,10 @@ class AuthService {
       case 'wrong-password':
       case 'invalid-credential':
         return 'Incorrect email or password.';
+      case 'requires-recent-login':
+        return 'Please log out and back in, then try again.';
+      case 'too-many-requests':
+        return 'Too many attempts. Please wait a bit and try again.';
       default:
         return 'Login failed. Please try again.';
     }

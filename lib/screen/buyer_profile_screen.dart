@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/change_password_dialog.dart';
 
 class BuyerProfileScreen extends StatefulWidget {
   final VoidCallback onLogout;
@@ -38,6 +39,13 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                     child: Icon(Icons.person, size: 36, color: _dark),
                   ),
                   const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(foregroundColor: _dark),
+                    onPressed: () => showChangePasswordDialog(context),
+                    icon: const Icon(Icons.lock_outline),
+                    label: const Text('Change Password'),
+                  ),
+                  const SizedBox(height: 10),
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(backgroundColor: _dark, foregroundColor: Colors.white),
                     onPressed: widget.onLogout,
