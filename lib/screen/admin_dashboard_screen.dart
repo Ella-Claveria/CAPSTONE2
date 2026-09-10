@@ -8,6 +8,7 @@ import 'verification_queue_view.dart';
 import 'moderation_queue_view.dart';
 import '../widgets/agritrade_text.dart';
 import '../data/laurel_barangays.dart';
+import '../services/connectivity_service.dart';
 import '../services/market_price_helpers.dart';
 import '../widgets/change_password_dialog.dart';
 
@@ -320,8 +321,7 @@ class _AdminNotification {
     required this.title,
     required this.subtitle,
     required this.time,
-    this.read = false,
-  });
+  }) : read = false;
 }
 
 class _NotificationBell extends StatelessWidget {
@@ -874,6 +874,47 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
+/// Shown in place of a section while its Firestore stream's first snapshot
+/// hasn't arrived yet — cards must never flash "0" / empty before real data
+/// is known (see requirement: no fallback values while still loading).
+class _AdminLoadingSpinner extends StatelessWidget {
+  const _AdminLoadingSpinner();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _AdminThemeScope.of(context).palette;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 48),
+      child: Center(child: CircularProgressIndicator(color: c.green)),
+    );
+  }
+}
+
+/// Shown when a dashboard stream errors out (e.g. permission denied,
+/// offline with nothing cached) instead of silently rendering empty data.
+class _AdminStreamError extends StatelessWidget {
+  static const String message = 'Could not load this data. Check your connection and try again.';
+  const _AdminStreamError();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _AdminThemeScope.of(context).palette;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 48),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline_rounded, color: c.red, size: 32),
+            const SizedBox(height: 10),
+            Text(message, style: TextStyle(color: c.textSecondary, fontSize: 13), textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ============================================================
 // ANALYTICS DASHBOARD (main admin landing view)
 // Wired to live Firestore collections: users, verificationDocs,
@@ -881,12 +922,14 @@ class _EmptyState extends StatelessWidget {
 // ============================================================
 
 class _VerificationRow {
+  final String uid;
   final String farmerId;
   final String fullName;
   final String category; // shows the applicant's barangay
   final String dateSubmitted;
   final String status; // Pending, Approved, Rejected
-  const _VerificationRow(this.farmerId, this.fullName, this.category, this.dateSubmitted, this.status);
+  const _VerificationRow(
+      this.uid, this.farmerId, this.fullName, this.category, this.dateSubmitted, this.status);
 }
 
 class _CommodityPrice {
@@ -910,7 +953,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
 
   List<_VerificationRow> _recentVerifications(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> verifDocs,
-    Map<String, String> barangayByUid,
+    Map<String, Map<String, dynamic>> usersByUid,
   ) {
     final sorted = [...verifDocs]..sort((a, b) {
         final at = a.data()['submittedAt'] as Timestamp?;
@@ -921,13 +964,24 @@ class _AnalyticsDashboardView extends StatelessWidget {
     return sorted.take(5).map((doc) {
       final data = doc.data();
       final userId = (data['userId'] ?? doc.id).toString();
-      final fullName = (data['fullName'] ?? 'Unknown Farmer').toString();
-      final barangay = barangayByUid[userId] ?? '—';
+      final userDoc = usersByUid[userId];
+      // The verificationDocs record's own fullName wins when present (it's
+      // the name the farmer typed at submission time); otherwise fall back
+      // to their live user profile — this is what actually fixes "Unknown
+      // Farmer" for legacy records that predate `fullName` being stored on
+      // the verification doc itself.
+      final fullName = _firstNonEmpty([
+        data['fullName'],
+        userDoc?['fullName'],
+        userDoc?['name'],
+      ]) ?? 'Unknown Farmer';
+      final barangay = _firstNonEmpty([userDoc?['barangay']]) ?? '—';
       final submittedAt = data['submittedAt'] as Timestamp?;
       final dateSubmitted = submittedAt != null
           ? DateFormat('MMM d, y').format(submittedAt.toDate())
           : '—';
       return _VerificationRow(
+        userId,
         userId.length > 8 ? userId.substring(0, 8) : userId,
         fullName,
         barangay,
@@ -935,6 +989,14 @@ class _AnalyticsDashboardView extends StatelessWidget {
         _statusLabel(data['status']),
       );
     }).toList();
+  }
+
+  static String? _firstNonEmpty(List<dynamic> candidates) {
+    for (final c in candidates) {
+      final s = c?.toString().trim();
+      if (s != null && s.isNotEmpty) return s;
+    }
+    return null;
   }
 
   num _platformTransactionTotal(List<QueryDocumentSnapshot<Map<String, dynamic>>> orders) {
@@ -1018,49 +1080,72 @@ class _AnalyticsDashboardView extends StatelessWidget {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('users').snapshots(),
       builder: (context, usersSnap) {
-        final userDocs = usersSnap.data?.docs ?? [];
-        final totalUsers = userDocs.length;
-        final barangayByUid = <String, String>{
-          for (final doc in userDocs)
-            doc.id: (doc.data()['barangay'] ?? '—').toString(),
-        };
-
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance.collection('verificationDocs').snapshots(),
           builder: (context, verifSnap) {
-            final verifDocs = verifSnap.data?.docs ?? [];
-            final pendingVerifications = verifDocs.where((doc) {
-              final status = doc.data()['status'];
-              return status == null || status == 'pending';
-            }).length;
-            final recentVerifications = _recentVerifications(verifDocs, barangayByUid);
-
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance
                   .collection('reports')
                   .where('status', isEqualTo: 'pending')
                   .snapshots(),
               builder: (context, reportsSnap) {
-                final flaggedReports = reportsSnap.data?.docs.length ?? 0;
-
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance.collection('orders').snapshots(),
                   builder: (context, ordersSnap) {
-                    final orders = ordersSnap.data?.docs ?? [];
-                    final platformTotal = _platformTransactionTotal(orders);
-                    final topProduct = _topSellingProduct(orders);
-
                     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                       stream: FirebaseFirestore.instance.collection('market_prices').snapshots(),
                       builder: (context, pricesSnap) {
-                        final prices = _commodityPrices(pricesSnap.data?.docs ?? []);
+                        final snapshots = [usersSnap, verifSnap, reportsSnap, ordersSnap, pricesSnap];
+                        if (snapshots.any((s) => s.hasError)) {
+                          return const _AdminStreamError();
+                        }
+                        // Every stream must have delivered its first snapshot before
+                        // any KPI renders — otherwise a card would briefly show "0"
+                        // while Firestore is still loading, which reads as real data.
+                        if (snapshots.any((s) => !s.hasData)) {
+                          return const _AdminLoadingSpinner();
+                        }
+
+                        final userDocs = usersSnap.data!.docs;
+                        final usersByUid = <String, Map<String, dynamic>>{
+                          for (final doc in userDocs) doc.id: doc.data(),
+                        };
+                        // Marketplace users only — Admin accounts aren't part of
+                        // the Farmer/Buyer user base this KPI reports on.
+                        final farmerCount = userDocs.where((d) => d.data()['role'] == 'farmer').length;
+                        final buyerCount = userDocs.where((d) => d.data()['role'] == 'buyer').length;
+                        final totalUsers = farmerCount + buyerCount;
+
+                        final verifDocs = verifSnap.data!.docs;
+                        // Sourced from `users` (role + approvalStatus), matching the
+                        // field the approval action itself writes to — this stays
+                        // accurate even for legacy farmers who have a pending status
+                        // but never went through the verificationDocs submission flow
+                        // (verificationDocs is still the right source for *which*
+                        // submitted applications are actionable, in the queue below).
+                        final pendingVerifications = userDocs
+                            .where((d) =>
+                                d.data()['role'] == 'farmer' && d.data()['approvalStatus'] == 'pending')
+                            .length;
+                        final recentVerifications = _recentVerifications(verifDocs, usersByUid);
+
+                        final flaggedReports = reportsSnap.data!.docs.length;
+
+                        final orders = ordersSnap.data!.docs;
+                        final totalTransactionValue = _platformTransactionTotal(orders);
+                        final topProduct = _topSellingProduct(orders);
+
+                        final prices = _commodityPrices(pricesSnap.data!.docs);
+
                         return _buildBody(
                           context,
                           c,
                           totalUsers: totalUsers,
+                          farmerCount: farmerCount,
+                          buyerCount: buyerCount,
                           pendingVerifications: pendingVerifications,
                           flaggedReports: flaggedReports,
-                          platformTotal: platformTotal,
+                          totalTransactionValue: totalTransactionValue,
                           verifications: recentVerifications,
                           prices: prices,
                           topProduct: topProduct,
@@ -1081,9 +1166,11 @@ class _AnalyticsDashboardView extends StatelessWidget {
     BuildContext context,
     AdminPalette c, {
     required int totalUsers,
+    required int farmerCount,
+    required int buyerCount,
     required int pendingVerifications,
     required int flaggedReports,
-    required num platformTotal,
+    required num totalTransactionValue,
     required List<_VerificationRow> verifications,
     required List<_CommodityPrice> prices,
     required ({String name, num revenue, num quantity})? topProduct,
@@ -1099,7 +1186,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
               _StatCard(
                 label: 'Total Users',
                 value: '$totalUsers',
-                delta: 'Live',
+                delta: '$farmerCount farmers · $buyerCount buyers',
                 icon: Icons.groups_2_outlined,
                 iconColor: (c) => c.blue,
                 iconBg: (c) => c.blueBg,
@@ -1108,7 +1195,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
               _StatCard(
                 label: 'Pending Verifications',
                 value: '$pendingVerifications',
-                delta: 'Live',
+                delta: 'Awaiting admin review',
                 icon: Icons.fact_check_outlined,
                 iconColor: (c) => c.amber,
                 iconBg: (c) => c.amberBg,
@@ -1117,20 +1204,20 @@ class _AnalyticsDashboardView extends StatelessWidget {
               _StatCard(
                 label: 'Flagged Reports',
                 value: '$flaggedReports',
-                delta: 'Live',
+                delta: 'Unresolved',
                 icon: Icons.flag_outlined,
                 iconColor: (c) => c.red,
                 iconBg: (c) => c.redBg,
                 isEmpty: flaggedReports == 0,
               ),
               _StatCard(
-                label: 'Platform Transactions',
-                value: formatPeso(platformTotal),
-                delta: 'Live',
+                label: 'Total Transaction Value',
+                value: formatPeso(totalTransactionValue),
+                delta: 'From completed orders',
                 icon: Icons.receipt_long_outlined,
                 iconColor: (c) => c.green,
                 iconBg: (c) => c.greenBg,
-                isEmpty: platformTotal == 0,
+                isEmpty: totalTransactionValue == 0,
               ),
             ];
             final isNarrow = constraints.maxWidth < 900;
@@ -1247,8 +1334,9 @@ class _AnalyticsDashboardView extends StatelessWidget {
                                     color: _statusColor(c, v.status),
                                     bg: _statusBg(c, v.status))),
                                 DataCell(IconButton(
+                                  tooltip: 'View verification details',
                                   icon: Icon(Icons.visibility_outlined, size: 18, color: c.textSecondary),
-                                  onPressed: () => onNavigate(2),
+                                  onPressed: () => showFarmerVerificationDetails(context, uid: v.uid),
                                 )),
                               ]))
                           .toList(),
@@ -1559,16 +1647,19 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
               .where('status', isEqualTo: 'completed')
               .snapshots(),
           builder: (context, ordersSnap) {
-            final demand = _computeBarangayDemand(
-              usersSnap.data?.docs ?? [],
-              ordersSnap.data?.docs ?? [],
-            );
-            final rankedDemand = [...demand]..sort((a, b) => b.orderCount.compareTo(a.orderCount));
-
             return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance.collection('searchEvents').snapshots(),
               builder: (context, searchSnap) {
-                final topSearches = _topSearchQueries(searchSnap.data?.docs ?? []);
+                if (usersSnap.hasError || ordersSnap.hasError || searchSnap.hasError) {
+                  return const _AdminStreamError();
+                }
+                if (!usersSnap.hasData || !ordersSnap.hasData || !searchSnap.hasData) {
+                  return const _AdminLoadingSpinner();
+                }
+
+                final demand = _computeBarangayDemand(usersSnap.data!.docs, ordersSnap.data!.docs);
+                final rankedDemand = [...demand]..sort((a, b) => b.orderCount.compareTo(a.orderCount));
+                final topSearches = _topSearchQueries(searchSnap.data!.docs);
 
                 return Padding(
                   padding: const EdgeInsets.all(24.0),
@@ -1766,6 +1857,12 @@ class _PriceManagementView extends StatelessWidget {
       ),
     );
     if (confirm != true) return;
+    if (!await ConnectivityService.instance.checkNow()) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
+      }
+      return;
+    }
     await FirebaseFirestore.instance.collection('market_prices').doc(commodityId).delete();
   }
 
@@ -1807,12 +1904,18 @@ class _PriceManagementView extends StatelessWidget {
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               stream: FirebaseFirestore.instance.collection('market_prices').orderBy('name').snapshots(),
               builder: (context, pricesSnap) {
-                final priceDocs = pricesSnap.data?.docs ?? [];
-
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance.collection('products').snapshots(),
                   builder: (context, productsSnap) {
-                    final products = productsSnap.data?.docs ?? [];
+                    if (pricesSnap.hasError || productsSnap.hasError) {
+                      return const _AdminStreamError();
+                    }
+                    if (!pricesSnap.hasData || !productsSnap.hasData) {
+                      return const _AdminLoadingSpinner();
+                    }
+
+                    final priceDocs = pricesSnap.data!.docs;
+                    final products = productsSnap.data!.docs;
 
                     return Container(
                       width: double.infinity,
@@ -1957,6 +2060,11 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
       _saving = true;
       _error = null;
     });
+
+    if (!await ConnectivityService.instance.checkNow()) {
+      if (mounted) setState(() { _saving = false; _error = kNoInternetActionMessage; });
+      return;
+    }
 
     try {
       final docId = widget.commodityId ??
