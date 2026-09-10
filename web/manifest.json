@@ -1,6 +1,6 @@
 {
-    "name": "agritrade",
-    "short_name": "agritrade",
+    "name": "AgriTrade+",
+    "short_name": "AgriTrade+",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
