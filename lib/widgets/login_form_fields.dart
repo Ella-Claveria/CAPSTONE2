@@ -1,13 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
+import '../services/auth_routing_service.dart';
 import '../services/session_prefs_service.dart';
 import '../theme/app_theme.dart';
-import '../screen/admin_dashboard_screen.dart';
-import '../screen/farmer_home_screen.dart';
-import '../screen/buyer_marketplace_screen.dart';
+import '../screen/auth_route_handler.dart';
 import '../screen/forgot_password_screen.dart';
 import '../screen/page_transitions.dart';
 import 'role_mismatch_dialog.dart';
@@ -75,17 +72,6 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     super.dispose();
   }
 
-  Future<String?> _lookUpMyRole() async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return null;
-    try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
-      return doc.data()?['role'] as String?;
-    } catch (_) {
-      return null;
-    }
-  }
-
   Future<void> _login() async {
     final email = _emailController.text.trim();
     final password = _passwordController.text;
@@ -97,7 +83,10 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     final error = await _authService.logIn(
       email: email,
       password: password,
-      expectedRole: widget.role,
+      // The admin door's role/platform enforcement happens below, via
+      // AuthRoutingService, so its exact required messaging is shown —
+      // skip the generic role-mismatch check only for that door.
+      expectedRole: _isAdmin ? null : widget.role,
     );
     if (!mounted) return;
 
@@ -114,12 +103,21 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
       return;
     }
 
-    // Logged in successfully, so this is definitely a registered user —
-    // "save login info" only ever writes anything from this point on.
-    final role = widget.role ?? await _lookUpMyRole();
+    // Logged in with Firebase — now the one, shared source of truth for
+    // "where does this account belong": reads users/{uid}.role (and
+    // approvalStatus for farmers), and enforces the mobile-vs-web platform
+    // rule. See AuthRoutingService for the actual decision logic.
+    final uid = _authService.currentUid;
+    final result = uid == null
+        ? const AuthRouteResult(
+            decision: AuthRouteDecision.error,
+            message: 'Something went wrong. Please try again.',
+          )
+        : await AuthRoutingService.decide(uid);
     if (!mounted) return;
 
-    if (role != 'admin') {
+    final role = result.role;
+    if (result.isSignedIn && role != 'admin') {
       if (_saveLoginInfo) {
         await _sessionPrefs.saveLastLogin(role: role ?? '', email: email);
       } else {
@@ -135,7 +133,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     // new registrant never passes through here on their way to their home
     // screen (register → verify → [approval] → home), so this can't
     // accidentally suppress a genuinely new user's first-time tour.
-    if (role == 'farmer' || role == 'buyer') {
+    if (result.isSignedIn && (role == 'farmer' || role == 'buyer')) {
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('walkthrough_seen_$role', true);
@@ -144,19 +142,10 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
     if (!mounted) return;
     setState(() => _loading = false);
-    // pushAndRemoveUntil clears splash/role-selection/login from the stack,
-    // so the back button on Home has nothing left to pop to.
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(
-        builder: (_) {
-          if (role == 'admin') return AdminDashboardScreen();
-          if (role == 'farmer') return FarmerHomeScreen();
-          return const BuyerMarketplaceScreen();
-        },
-      ),
-      (route) => false,
-    );
+    // pushAndRemoveUntil (inside applyAuthRouteResult) clears splash/
+    // role-selection/login from the stack, so the back button on Home has
+    // nothing left to pop to.
+    await applyAuthRouteResult(context, result);
   }
 
   void _showMessage(String message) {

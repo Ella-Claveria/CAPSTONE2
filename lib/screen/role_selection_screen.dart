@@ -5,10 +5,10 @@ import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import '../widgets/login_form_fields.dart';
 import '../services/session_prefs_service.dart';
+import '../services/auth_routing_service.dart';
+import 'auth_route_handler.dart';
 import 'login_screen.dart';
 import 'register_screen.dart';
-import 'farmer_home_screen.dart';
-import 'buyer_marketplace_screen.dart';
 import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
 
@@ -36,6 +36,9 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   final _sessionPrefs = SessionPrefsService();
   List<SavedAccount> _accounts = [];
   bool _loaded = false;
+  // Email currently being verified against Firestore, if any — disables
+  // taps and shows a small spinner on that one tile while the check runs.
+  String? _resolvingEmail;
 
   @override
   void initState() {
@@ -56,22 +59,28 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   // its home screen — genuinely one tap. Any other saved account still
   // needs its password: there's no secure way to switch a Firebase session
   // to a different user without it (see SessionPrefsService's doc comment).
-  void _continueWithAccount(SavedAccount account) {
+  //
+  // The locally-remembered `account.role` is only ever used to decide
+  // *which* saved account this is — the actual navigation always goes
+  // through AuthRoutingService, which re-reads the live role/approvalStatus
+  // from Firestore first. That's what keeps a farmer whose approval status
+  // changed (or, in principle, any other role change) from ever landing on
+  // a screen that's no longer correct for their real, current status.
+  Future<void> _continueWithAccount(SavedAccount account) async {
     final current = FirebaseAuth.instance.currentUser;
-    if (current != null && (current.email ?? '').toLowerCase() == account.email.toLowerCase()) {
-      Navigator.pushAndRemoveUntil(
+    if (current == null || (current.email ?? '').toLowerCase() != account.email.toLowerCase()) {
+      Navigator.push(
         context,
-        MaterialPageRoute(
-          builder: (_) => account.role == 'farmer' ? const FarmerHomeScreen() : const BuyerMarketplaceScreen(),
-        ),
-        (route) => false,
+        slideRoute(LoginScreen(role: account.role, initialEmail: account.email)),
       );
       return;
     }
-    Navigator.push(
-      context,
-      slideRoute(LoginScreen(role: account.role, initialEmail: account.email)),
-    );
+
+    setState(() => _resolvingEmail = account.email);
+    final result = await AuthRoutingService.decide(current.uid);
+    if (!mounted) return;
+    setState(() => _resolvingEmail = null);
+    await applyAuthRouteResult(context, result);
   }
 
   Future<void> _removeAccount(SavedAccount account) async {
@@ -120,7 +129,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                   RichText(
                     textAlign: TextAlign.center,
                     text: TextSpan(
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         fontSize: 19,
                         fontWeight: FontWeight.w500,
                       ),
@@ -175,7 +184,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                       alignment: Alignment.centerLeft,
                       child: Text(
                         'Continue as',
-                        style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[800]),
+                        style: GoogleFonts.montserrat(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey[800]),
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -184,7 +193,8 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: _SavedAccountTile(
                           account: a,
-                          onTap: () => _continueWithAccount(a),
+                          isResolving: _resolvingEmail == a.email,
+                          onTap: _resolvingEmail == null ? () => _continueWithAccount(a) : null,
                           onRemove: () => _removeAccount(a),
                         ),
                       ),
@@ -195,7 +205,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                         onPressed: () => Navigator.push(context, slideRoute(const LoginScreen())),
                         child: Text(
                           'Log in with another account',
-                          style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w600, color: dark),
+                          style: GoogleFonts.montserrat(fontSize: 13.5, fontWeight: FontWeight.w600, color: dark),
                         ),
                       ),
                     ),
@@ -225,12 +235,12 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                     },
                     child: RichText(
                       text: TextSpan(
-                        style: GoogleFonts.inter(fontSize: 14, color: Colors.black87),
+                        style: GoogleFonts.montserrat(fontSize: 14, color: Colors.black87),
                         children: [
                           TextSpan(text: AppLocalizations.of(context)!.noAccountSignUp),
                           TextSpan(
                             text: AppLocalizations.of(context)!.createOne,
-                            style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: dark),
+                            style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, color: dark),
                           ),
                         ],
                       ),
@@ -259,10 +269,20 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
 
 class _SavedAccountTile extends StatelessWidget {
   final SavedAccount account;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final VoidCallback onRemove;
+  // True while this specific tile's tap is being verified against
+  // Firestore (see _RoleSelectionScreenState._continueWithAccount) — shows
+  // a small spinner in place of the remove button instead of letting the
+  // row look like nothing happened.
+  final bool isResolving;
 
-  const _SavedAccountTile({required this.account, required this.onTap, required this.onRemove});
+  const _SavedAccountTile({
+    required this.account,
+    required this.onTap,
+    required this.onRemove,
+    this.isResolving = false,
+  });
 
   static const Color _dark = AppTheme.dark;
 
@@ -286,7 +306,7 @@ class _SavedAccountTile extends StatelessWidget {
               CircleAvatar(
                 radius: 20,
                 backgroundColor: const Color(0xFFE8F5E9),
-                child: Text(initial, style: GoogleFonts.inter(fontWeight: FontWeight.bold, color: _dark)),
+                child: Text(initial, style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, color: _dark)),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -297,20 +317,32 @@ class _SavedAccountTile extends StatelessWidget {
                       account.email,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
+                      style: GoogleFonts.montserrat(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
                     ),
                     Text(
-                      isLive ? '${account.role} · tap to continue' : '${account.role} · needs password',
-                      style: GoogleFonts.inter(fontSize: 11.5, color: Colors.grey[600]),
+                      isResolving
+                          ? 'Checking your account…'
+                          : (isLive ? '${account.role} · tap to continue' : '${account.role} · needs password'),
+                      style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.grey[600]),
                     ),
                   ],
                 ),
               ),
-              IconButton(
-                icon: Icon(Icons.close, size: 18, color: Colors.grey[500]),
-                tooltip: 'Remove',
-                onPressed: onRemove,
-              ),
+              if (isResolving)
+                const Padding(
+                  padding: EdgeInsets.all(8),
+                  child: SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: _dark),
+                  ),
+                )
+              else
+                IconButton(
+                  icon: Icon(Icons.close, size: 18, color: Colors.grey[500]),
+                  tooltip: 'Remove',
+                  onPressed: onRemove,
+                ),
             ],
           ),
         ),

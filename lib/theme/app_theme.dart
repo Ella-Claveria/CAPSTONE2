@@ -18,12 +18,12 @@ class AppTheme {
   //
   //     theme: AppTheme.themeData(),
   //
-  // That one line makes Inter the default everywhere.
+  // That one line makes Montserrat the default everywhere.
   // ==========================================================
   static ThemeData themeData() {
     // Takes Flutter's standard set of text sizes (headings, body,
-    // captions...) and rebuilds all of them in Inter.
-    final interText = GoogleFonts.interTextTheme();
+    // captions...) and rebuilds all of them in Montserrat.
+    final montserratText = GoogleFonts.montserratTextTheme();
 
     return ThemeData(
       useMaterial3: true,
@@ -31,14 +31,14 @@ class AppTheme {
       scaffoldBackgroundColor: bgLight,
 
       // <-- THIS is the line that changes the whole app's font.
-      textTheme: interText,
-      primaryTextTheme: interText,
+      textTheme: montserratText,
+      primaryTextTheme: montserratText,
 
       appBarTheme: AppBarTheme(
         backgroundColor: mid,
         foregroundColor: Colors.white,
         elevation: 0,
-        titleTextStyle: GoogleFonts.inter(
+        titleTextStyle: GoogleFonts.montserrat(
           fontSize: 18,
           fontWeight: FontWeight.bold,
           color: Colors.white,
@@ -54,7 +54,7 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(30),
           ),
-          textStyle: GoogleFonts.inter(
+          textStyle: GoogleFonts.montserrat(
             fontSize: 16,
             fontWeight: FontWeight.bold,
           ),
@@ -64,7 +64,7 @@ class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: dark,
-          textStyle: GoogleFonts.inter(fontSize: 13.5),
+          textStyle: GoogleFonts.montserrat(fontSize: 13.5),
         ),
       ),
 
@@ -72,8 +72,8 @@ class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: fieldFill,
-        hintStyle: GoogleFonts.inter(fontSize: 13.5, color: Colors.grey),
-        errorStyle: GoogleFonts.inter(fontSize: 11.5),
+        hintStyle: GoogleFonts.montserrat(fontSize: 13.5, color: Colors.grey),
+        errorStyle: GoogleFonts.montserrat(fontSize: 11.5),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide.none,
@@ -89,7 +89,7 @@ class AppTheme {
       ),
 
       snackBarTheme: SnackBarThemeData(
-        contentTextStyle: GoogleFonts.inter(fontSize: 13.5),
+        contentTextStyle: GoogleFonts.montserrat(fontSize: 13.5),
       ),
     );
   }
@@ -98,29 +98,29 @@ class AppTheme {
   // HELPER STYLES
   // ----------------------------------------------------------
   // You mostly won't need these now that the global theme handles
-  // fonts — a plain Text('Hello') is already Montserrat. Keep them
-  // for when you want a specific size or weight quickly.
+  // fonts — a plain Text('Hello') already renders in Montserrat. Keep
+  // them for when you want a specific size or weight quickly.
   // ==========================================================
 
-  static TextStyle heading(double size) => GoogleFonts.inter(
+  static TextStyle heading(double size) => GoogleFonts.montserrat(
         fontSize: size,
         fontWeight: FontWeight.bold,
         color: Colors.black87,
       );
 
-  static TextStyle label() => GoogleFonts.inter(
+  static TextStyle label() => GoogleFonts.montserrat(
         fontSize: 14,
         fontWeight: FontWeight.w600,
         color: Colors.black87,
       );
 
   static TextStyle body({Color? color, double size = 13.5}) =>
-      GoogleFonts.inter(
+      GoogleFonts.montserrat(
         fontSize: size,
         color: color ?? Colors.grey[700],
       );
 
-  static TextStyle buttonText() => GoogleFonts.inter(
+  static TextStyle buttonText() => GoogleFonts.montserrat(
         fontSize: 16,
         fontWeight: FontWeight.bold,
       );
