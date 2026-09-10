@@ -1,0 +1,16 @@
+{
+  "name": "agritrade-firestore-migrations",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Schema-standardization migration and cleanup scripts for AgriTrade+'s Firestore project. See README.md before running anything.",
+  "type": "commonjs",
+  "scripts": {
+    "migrate:dry-run": "node 001_standardize_schema.js --dry-run",
+    "migrate": "node 001_standardize_schema.js",
+    "cleanup:dry-run": "node 002_cleanup_deprecated_fields.js --dry-run",
+    "cleanup": "node 002_cleanup_deprecated_fields.js --confirm --apply"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}

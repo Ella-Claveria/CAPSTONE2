@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/message_service.dart';
+import '../services/push_notification_service.dart';
 import 'role_selection_screen.dart';
-import '../widgets/agritrade_text.dart';
 import '../widgets/coach_mark.dart';
+import '../widgets/notification_bell.dart';
 import 'buyer_explore_screen.dart';
 import 'chat_list_screen.dart';
 import 'buyer_orders_screen.dart';
@@ -13,6 +14,8 @@ import 'notifications_screen.dart';
 import '../l10n/app_localizations.dart';
 import '../l10n/locale_controller.dart';
 
+// A one-shot "command channel", not persisted UI state — see the matching
+// comment on globalFarmerTabIndex in farmer_home_screen.dart.
 final ValueNotifier<int> globalMarketplaceIndex = ValueNotifier<int>(0);
 
 class BuyerMarketplaceScreen extends StatefulWidget {
@@ -43,7 +46,22 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     // Register this device for push notifications (new messages, order
     // status updates) so they reach the buyer even when backgrounded.
     MessageService().registerFcmToken();
+    // If the app was launched (cold start) by tapping a push notification,
+    // this replays that navigation now that routing has actually finished.
+    PushNotificationService.consumePendingNavigation();
+    globalMarketplaceIndex.addListener(_onGlobalIndexChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _showWalkthrough());
+  }
+
+  void _onGlobalIndexChanged() {
+    if (!mounted) return;
+    setState(() => _navIndex = globalMarketplaceIndex.value);
+  }
+
+  @override
+  void dispose() {
+    globalMarketplaceIndex.removeListener(_onGlobalIndexChanged);
+    super.dispose();
   }
 
   // A one-time, subtle tour pointing at the two things a brand-new buyer
@@ -121,25 +139,43 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
           elevation: 1,
           iconTheme: const IconThemeData(color: _dark),
           titleSpacing: 16,
-          title: Row(
-            children: [
-              Image.asset('assets/logo.png', height: 44, errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark)),
-              const SizedBox(width: 8),
-              const AgriTradeText(fontSize: 22),
-            ],
+          title: Container(
+            width: 46,
+            height: 46,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _bg,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: ClipOval(
+              child: Image.asset(
+                'assets/logo.png',
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark, size: 26),
+              ),
+            ),
           ),
           actions: [
             IconButton(
               onPressed: () => _showLanguagePicker(context),
               icon: const Icon(Icons.language, color: _dark, size: 22),
             ),
-            IconButton(
+            NotificationBell(
               key: _notificationsKey,
+              color: _dark,
               onPressed: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const NotificationsScreen()),
               ),
-              icon: const Icon(Icons.notifications_none_rounded, color: _dark, size: 22),
             ),
             const SizedBox(width: 8),
           ],

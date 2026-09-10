@@ -1,7 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'chat_screen.dart';
+import '../services/connectivity_service.dart';
+import '../services/notification_navigation_service.dart';
 import '../services/push_notification_service.dart';
 
 /// Reads notifications/{uid}/items — written by Cloud Functions
@@ -39,33 +40,55 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     PushNotificationService().setupFCM().catchError((_) {});
   }
 
+  // Marking a notification read is itself a write, so — same as the rest of
+  // AgriTrade+'s online-only actions — it must not appear to succeed while
+  // actually offline (it would otherwise silently queue in Firestore's
+  // local cache instead of being confirmed).
   Future<void> _markRead(QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
     if (doc.data()['read'] == true) return;
-    await doc.reference.update({'read': true});
+    if (!await ConnectivityService.instance.checkNow()) return;
+    try {
+      await doc.reference.update({'read': true});
+    } catch (_) {
+      // Non-fatal — the notification just stays visually unread; the next
+      // successful read (or "Mark all as read") will catch it up.
+    }
+  }
+
+  Future<void> _markAllRead(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    final unread = docs.where((d) => d.data()['read'] != true).toList();
+    if (unread.isEmpty) return;
+
+    if (!await ConnectivityService.instance.checkNow()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(kNoInternetActionMessage)),
+      );
+      return;
+    }
+
+    // Each item lives under notifications/{currentUid}/items, so this batch
+    // can only ever touch the signed-in user's own notifications.
+    final batch = FirebaseFirestore.instance.batch();
+    for (final doc in unread) {
+      batch.update(doc.reference, {'read': true});
+    }
+    try {
+      await batch.commit();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not mark all as read. Please try again.')),
+      );
+    }
   }
 
   void _openNotification(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
     _markRead(doc);
     final data = doc.data();
     final type = (data['type'] ?? '').toString();
-    if (type != 'chat_message') return;
-
     final payload = Map<String, dynamic>.from(data['data'] ?? {});
-    final conversationId = payload['conversationId']?.toString();
-    final senderId = payload['senderId']?.toString();
-    final senderName = payload['senderName']?.toString() ?? 'User';
-    if (conversationId == null || senderId == null) return;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => ChatScreen(
-          conversationId: conversationId,
-          otherUserId: senderId,
-          otherUserName: senderName,
-        ),
-      ),
-    );
+    NotificationNavigationService.open(type: type, data: payload);
   }
 
   IconData _iconFor(String type) {
@@ -100,51 +123,62 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       return const Scaffold(body: Center(child: Text('Please log in to see notifications.')));
     }
 
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        title: const Text('Notifications'),
-        backgroundColor: Colors.white,
-        foregroundColor: _dark,
-        elevation: 1,
-      ),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: itemsRef.orderBy('createdAt', descending: true).limit(50).snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: _dark));
-          }
-          if (snapshot.hasError) {
-            return const Center(child: Text('Error loading notifications. Please try again.'));
-          }
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: itemsRef.orderBy('createdAt', descending: true).limit(50).snapshots(),
+      builder: (context, snapshot) {
+        final docs = snapshot.data?.docs ?? [];
+        final hasUnread = docs.any((d) => d.data()['read'] != true);
 
-          final docs = snapshot.data?.docs ?? [];
-          if (docs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.done_all, size: 64, color: Colors.grey[300]),
-                  const SizedBox(height: 16),
-                  Text('No notifications yet',
-                      style: TextStyle(fontSize: 16, color: Colors.grey[600], fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8),
-                  Text('New messages, orders, and updates will appear here.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 13, color: Colors.grey[500])),
-                ],
-              ),
+        return Scaffold(
+          backgroundColor: _bg,
+          appBar: AppBar(
+            title: const Text('Notifications'),
+            backgroundColor: Colors.white,
+            foregroundColor: _dark,
+            elevation: 1,
+            actions: [
+              if (hasUnread)
+                TextButton(
+                  onPressed: () => _markAllRead(docs),
+                  child: const Text('Mark all read', style: TextStyle(color: _dark)),
+                ),
+            ],
+          ),
+          body: Builder(builder: (context) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(color: _dark));
+            }
+            if (snapshot.hasError) {
+              return const Center(child: Text('Error loading notifications. Please try again.'));
+            }
+
+            if (docs.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.done_all, size: 64, color: Colors.grey[300]),
+                    const SizedBox(height: 16),
+                    Text('No notifications yet',
+                        style: TextStyle(fontSize: 16, color: Colors.grey[600], fontWeight: FontWeight.w500)),
+                    const SizedBox(height: 8),
+                    Text('New messages, orders, and updates will appear here.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+                  ],
+                ),
+              );
+            }
+
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+              itemCount: docs.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 4),
+              itemBuilder: (context, i) => _notificationTile(docs[i]),
             );
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
-            itemCount: docs.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 4),
-            itemBuilder: (context, i) => _notificationTile(docs[i]),
-          );
-        },
-      ),
+          }),
+        );
+      },
     );
   }
 

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/message_service.dart';
-import '../widgets/agritrade_text.dart';
+import '../services/push_notification_service.dart';
 import '../widgets/coach_mark.dart';
+import '../widgets/notification_bell.dart';
 import 'add_product_screen.dart';
 import 'market_tab.dart';
 import 'chat_list_screen.dart';
@@ -12,8 +13,18 @@ import 'notifications_screen.dart';
 import '../l10n/app_localizations.dart';
 import '../l10n/locale_controller.dart';
 
+// A one-shot "command channel", not persisted UI state: setting this while
+// a FarmerHomeScreen is already mounted (e.g. from a notification tap, see
+// NotificationNavigationService) switches its active tab in place instead
+// of pushing a second, stacked Home screen. A fresh FarmerHomeScreen always
+// takes its starting tab from its own `initialIndex` constructor argument,
+// never from whatever this notifier was last set to.
+final ValueNotifier<int> globalFarmerTabIndex = ValueNotifier<int>(0);
+
 class FarmerHomeScreen extends StatefulWidget {
-  const FarmerHomeScreen({super.key});
+  final int initialIndex;
+
+  const FarmerHomeScreen({super.key, this.initialIndex = 0});
 
   @override
   State<FarmerHomeScreen> createState() => _FarmerHomeScreenState();
@@ -26,7 +37,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
   final MessageService _messageService = MessageService();
 
   // 0 = Market, 1 = Messages, 2 = Orders, 3 = Profile
-  int _selectedIndex = 0;
+  late int _selectedIndex = widget.initialIndex;
 
   final _addProductKey = GlobalKey();
   final _ordersTabKey = GlobalKey();
@@ -37,7 +48,22 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     // Register this device for push notifications so new messages can
     // reach the farmer even when the app is backgrounded.
     _messageService.registerFcmToken();
+    // If the app was launched (cold start) by tapping a push notification,
+    // this replays that navigation now that routing has actually finished.
+    PushNotificationService.consumePendingNavigation();
+    globalFarmerTabIndex.addListener(_onGlobalTabIndexChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _showWalkthrough());
+  }
+
+  void _onGlobalTabIndexChanged() {
+    if (!mounted) return;
+    setState(() => _selectedIndex = globalFarmerTabIndex.value);
+  }
+
+  @override
+  void dispose() {
+    globalFarmerTabIndex.removeListener(_onGlobalTabIndexChanged);
+    super.dispose();
   }
 
   // A one-time, subtle tour pointing at the two things a brand-new farmer
@@ -175,23 +201,37 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           elevation: 1,
           iconTheme: const IconThemeData(color: _dark),
           titleSpacing: 16,
-          title: Row(
-            children: [
-              Image.asset('assets/logo.png', height: 44,
-                  errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark)),
-              const SizedBox(width: 8),
-              const AgriTradeText(fontSize: 22),
-            ],
+          title: Container(
+            width: 46,
+            height: 46,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _bg,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.12),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: ClipOval(
+              child: Image.asset(
+                'assets/logo.png',
+                width: 36,
+                height: 36,
+                fit: BoxFit.cover,
+                errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark, size: 26),
+              ),
+            ),
           ),
           actions: [
             IconButton(
               onPressed: () => _showLanguagePicker(context),
               icon: const Icon(Icons.language, color: _dark, size: 22),
             ),
-            IconButton(
-              onPressed: _openNotifications,
-              icon: const Icon(Icons.notifications_none_rounded, color: _dark, size: 22),
-            ),
+            NotificationBell(onPressed: _openNotifications, color: _dark),
             const SizedBox(width: 8),
           ],
         ),

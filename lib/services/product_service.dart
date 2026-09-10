@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'connectivity_service.dart';
+
 class ProductService {
   final _products = FirebaseFirestore.instance.collection('products');
 
@@ -17,6 +19,9 @@ class ProductService {
     bool deliveryAvailable = false,
     bool pickupOnly = false,
   }) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return 'You are not logged in.';
@@ -36,6 +41,14 @@ class ProductService {
         'imageUrl': imageUrls.isNotEmpty ? imageUrls.first : '',
         'deliveryAvailable': deliveryAvailable,
         'pickupOnly': pickupOnly,
+        // Standardized defaults so every product doc has these fields from
+        // creation instead of relying on callers to treat them as absent
+        // (see docs/firestore-schema-migration.md). 'rating'/'reviewCount'
+        // are kept current by ReviewService.submitReview.
+        'isArchived': false,
+        'isSuspended': false,
+        'rating': 0.0,
+        'reviewCount': 0,
         'createdAt': FieldValue.serverTimestamp(),
       });
       return null;
@@ -58,6 +71,9 @@ class ProductService {
     bool deliveryAvailable = false,
     bool pickupOnly = false,
   }) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       await _products.doc(id).update({
         'name': name,
@@ -81,6 +97,9 @@ class ProductService {
   }
 
   Future<String?> deleteProduct(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       await _products.doc(id).delete();
       return null;
@@ -93,6 +112,9 @@ class ProductService {
   /// marketplace, but stays in the farmer's own product list so they can
   /// restore it later (e.g. seasonal items, temporary stock-outs).
   Future<String?> archiveProduct(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       await _products.doc(id).update({
         'isArchived': true,
@@ -105,6 +127,9 @@ class ProductService {
   }
 
   Future<String?> unarchiveProduct(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       await _products.doc(id).update({
         'isArchived': false,
@@ -113,6 +138,26 @@ class ProductService {
       return null;
     } catch (e) {
       return 'Could not restore product. Please try again.';
+    }
+  }
+
+  /// Quick standalone quantity edit — used by the farmer's product list for
+  /// restocking or correcting inventory without opening the full edit form.
+  /// This manually-set value becomes the available stock for future orders,
+  /// same as if it came from the full edit form.
+  Future<String?> updateQuantity(String id, int quantity) async {
+    if (quantity < 0) return 'Quantity cannot be negative.';
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
+    try {
+      await _products.doc(id).update({
+        'quantity': quantity,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return null;
+    } catch (e) {
+      return 'Could not update quantity. Please try again.';
     }
   }
 

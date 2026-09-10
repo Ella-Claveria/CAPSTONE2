@@ -25,11 +25,26 @@ const messaging = getMessaging();
 /** Sends a push notification to every device registered for `uid` (pruning
  * any token FCM reports as no longer valid), AND writes a durable record to
  * notifications/{uid}/items so the in-app Notifications screen has history
- * even for events that happened while the app was closed. */
-async function notifyUser(uid, { title, body, type, data }) {
-  if (!uid) return;
+ * even for events that happened while the app was closed.
+ *
+ * `dedupeId` must be stable across retries of the same underlying event
+ * (each trigger below passes its Cloud Functions `event.id`, which Firestore
+ * redelivers unchanged on retry) and unique per distinct event otherwise —
+ * it becomes the notification's own document id, so a retried event
+ * overwrites/no-ops the same doc rather than creating a duplicate. */
+async function notifyUser(uid, { title, body, type, data, dedupeId }) {
+  if (!uid || !dedupeId) return;
 
-  await db.collection("notifications").doc(uid).collection("items").add({
+  const itemRef = db.collection("notifications").doc(uid).collection("items").doc(dedupeId);
+  const existing = await itemRef.get();
+  if (existing.exists) {
+    // Already processed this exact event — a Cloud Functions retry of the
+    // same delivery, not a new one. Skip both the Firestore write and the
+    // push so retries can never produce duplicate notifications.
+    return;
+  }
+
+  await itemRef.set({
     title,
     body,
     type,
@@ -99,6 +114,7 @@ exports.sendMessageNotification = onDocumentCreated(
         senderId: message.senderId,
         senderName,
       },
+      dedupeId: event.id,
     });
   }
 );
@@ -117,6 +133,7 @@ exports.notifyNewOrder = onDocumentCreated("orders/{orderId}", async (event) => 
     body: `${buyerName} ordered ${qtyLabel || "an item"} of ${productName}.`,
     type: "new_order",
     data: { orderId: event.params.orderId },
+    dedupeId: event.id,
   });
 });
 
@@ -138,6 +155,7 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
     body: `Your order for ${after.productName || "a product"} was ${label}.`,
     type: "order_status",
     data: { orderId: event.params.orderId, status: after.status },
+    dedupeId: event.id,
   });
 });
 
@@ -162,6 +180,7 @@ exports.notifyVerificationStatusChange = onDocumentUpdated(
         : "Your verification application was not approved. Please review and resubmit your documents.",
       type: "verification_status",
       data: { status: after.status },
+      dedupeId: event.id,
     });
   }
 );

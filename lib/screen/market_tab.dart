@@ -4,16 +4,19 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/farmer_revenue_service.dart';
 import '../services/order_service.dart';
 import '../services/product_service.dart';
+import '../widgets/shimmer.dart';
+import '../widgets/skeleton_loaders.dart';
 import 'add_product_screen.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 //
 // onNavigateToTab lets this tab jump to another bottom-nav tab in the
-// parent Scaffold (tapping "Welcome back" goes to Profile). Wire it up
-// in FarmerHomeScreen:
+// parent Scaffold (tapping "Welcome back" or the Total Products card goes
+// to Profile; the Total Orders card goes to Orders). Wire it up in
+// FarmerHomeScreen:
 //   MarketTab(onNavigateToTab: (i) => setState(() => _selectedIndex = i))
-// Index assumption, matching the rest of this build: 3=Profile — adjust
-// the number below if your order differs.
+// Index assumption, matching the rest of this build: 2=Orders, 3=Profile —
+// adjust _ordersTabIndex/_profileTabIndex below if your order differs.
 class MarketTab extends StatefulWidget {
   final ValueChanged<int>? onNavigateToTab;
 
@@ -28,12 +31,15 @@ class _MarketTabState extends State<MarketTab> {
   static const Color _accent = Color(0xFFDCEDC8);
 
   static const int _profileTabIndex = 3;
+  static const int _ordersTabIndex = 2;
   FarmerRevenueView _selectedRevenueView = FarmerRevenueView.weekly;
+  bool _isRefreshing = false;
 
   Future<void> _refreshMarket() async {
+    setState(() => _isRefreshing = true);
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    setState(() {});
+    setState(() => _isRefreshing = false);
   }
 
   DateTime? _parseDateTime(dynamic value) {
@@ -73,7 +79,7 @@ class _MarketTabState extends State<MarketTab> {
       stream: productService.myProductsStream(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: _dark));
+          return const MarketTabSkeleton();
         }
         if (snapshot.hasError) {
           return const Center(
@@ -85,22 +91,24 @@ class _MarketTabState extends State<MarketTab> {
         return RefreshIndicator(
           color: _dark,
           onRefresh: _refreshMarket,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
-            children: [
-              _welcomeHeader(name, docs.length),
-              const SizedBox(height: 16),
-              _statRow(docs.length),
-              if (docs.isEmpty) ...[
-                const SizedBox(height: 16),
-                _addFirstProductCard(context),
-              ],
-              const SizedBox(height: 16),
-              _salesPerformanceCard(),
-              const SizedBox(height: 16),
-              _marketObjectivesCard(),
-            ],
-          ),
+          child: _isRefreshing
+              ? const MarketTabSkeleton()
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
+                  children: [
+                    _welcomeHeader(name, docs.length),
+                    const SizedBox(height: 16),
+                    _statRow(docs.length),
+                    if (docs.isEmpty) ...[
+                      const SizedBox(height: 16),
+                      _addFirstProductCard(context),
+                    ],
+                    const SizedBox(height: 16),
+                    _salesPerformanceCard(docs.isNotEmpty),
+                    const SizedBox(height: 16),
+                    _marketObjectivesCard(docs.isNotEmpty),
+                  ],
+                ),
         );
       },
     );
@@ -264,59 +272,83 @@ class _MarketTabState extends State<MarketTab> {
               date.day == today.day;
         }).length;
 
-        return Row(
-          children: [
-            Expanded(child: _statCard('TOTAL ORDERS', '$totalOrdersToday')),
-            const SizedBox(width: 12),
-            Expanded(child: _statCard('TOTAL\nPRODUCTS', '$productCount')),
-          ],
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _statCard(
+                  'TOTAL ORDERS',
+                  '$totalOrdersToday',
+                  onTap: () => widget.onNavigateToTab?.call(_ordersTabIndex),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _statCard(
+                  'TOTAL PRODUCTS',
+                  '$productCount',
+                  onTap: () => widget.onNavigateToTab?.call(_profileTabIndex),
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
   }
 
-  Widget _statCard(String label, String value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
+  Widget _statCard(String label, String value, {VoidCallback? onTap}) {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
         borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[600],
-              letterSpacing: 0.4,
-              height: 1.3,
-            ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[600],
+                  letterSpacing: 0.4,
+                  height: 1.3,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: _dark,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-              color: _dark,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
-  Widget _salesPerformanceCard() {
+  Widget _salesPerformanceCard(bool hasProducts) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null || uid.isEmpty) {
       return Container(
@@ -336,22 +368,29 @@ class _MarketTabState extends State<MarketTab> {
       );
     }
 
+    // A farmer with zero listings has nothing to sell yet — show the
+    // friendly nudge without waiting on any Firestore round-trip.
+    if (!hasProducts) {
+      return _newFarmerSalesCard();
+    }
+
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection('users')
           .doc(uid)
           .snapshots(),
       builder: (context, userSnapshot) {
-        final userData = userSnapshot.data?.data() ?? const <String, dynamic>{};
-        final registeredAt = _parseDateTime(userData['createdAt']);
-        final now = DateTime.now();
-        if (registeredAt == null ||
-            FarmerRevenueService.isBeginner(
-              registeredAt: registeredAt,
-              now: now,
-            )) {
-          return _newFarmerSalesCard();
+        // Wait for the farmer's profile doc before deciding what to show —
+        // never fall through to a default state while this is still `waiting`.
+        if (userSnapshot.connectionState == ConnectionState.waiting) {
+          return const Shimmer(child: SalesPerformanceCardSkeleton());
         }
+
+        final now = DateTime.now();
+        final userData = userSnapshot.data?.data() ?? const <String, dynamic>{};
+        // Missing createdAt (e.g. an older account) defaults to "now" —
+        // restricts to the weekly view rather than crashing or guessing.
+        final registeredAt = _parseDateTime(userData['createdAt']) ?? now;
 
         final canViewMonthly = FarmerRevenueService.canViewMonthly(
           registeredAt: registeredAt,
@@ -364,6 +403,10 @@ class _MarketTabState extends State<MarketTab> {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: OrderService().farmerOrdersStream(),
           builder: (context, ordersSnapshot) {
+            if (ordersSnapshot.connectionState == ConnectionState.waiting) {
+              return const Shimmer(child: SalesPerformanceCardSkeleton());
+            }
+
             final orders =
                 (ordersSnapshot.data?.docs ??
                         const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
@@ -389,6 +432,7 @@ class _MarketTabState extends State<MarketTab> {
               view: effectiveView,
               now: now,
             );
+            final hasCompletedSales = totalRevenue > 0;
 
             return Container(
               padding: const EdgeInsets.all(18),
@@ -509,7 +553,9 @@ class _MarketTabState extends State<MarketTab> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Revenue updates as completed orders come in.',
+                    hasCompletedSales
+                        ? 'Revenue updates as completed orders come in.'
+                        : 'No completed sales in this period yet.',
                     style: TextStyle(
                       fontSize: 11,
                       fontStyle: FontStyle.italic,
@@ -561,7 +607,7 @@ class _MarketTabState extends State<MarketTab> {
           ),
           SizedBox(height: 6),
           Text(
-            'Add your products and start accepting orders. Your weekly sales will appear here after your first week.',
+            'List your first product and start accepting orders — your sales performance will appear here once you do.',
             style: TextStyle(fontSize: 12, color: Colors.black54, height: 1.4),
           ),
         ],
@@ -591,10 +637,18 @@ class _MarketTabState extends State<MarketTab> {
     );
   }
 
-  Widget _marketObjectivesCard() {
+  // hasProducts distinguishes "this farmer hasn't listed anything yet" from
+  // "the marketplace itself has no data" — Current Market Average is a
+  // marketplace-wide figure and stays real either way, but the
+  // personalized rows (season pick, demand pick, suggestion) switch to
+  // onboarding copy for a farmer with zero listings of their own.
+  Widget _marketObjectivesCard(bool hasProducts) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance.collection('products').snapshots(),
       builder: (context, productsSnapshot) {
+        if (productsSnapshot.connectionState == ConnectionState.waiting) {
+          return const Shimmer(child: MarketObjectiveCardSkeleton());
+        }
         final products =
             (productsSnapshot.data?.docs ??
                     const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
@@ -607,6 +661,9 @@ class _MarketTabState extends State<MarketTab> {
               .where('status', isEqualTo: 'completed')
               .snapshots(),
           builder: (context, ordersSnapshot) {
+            if (ordersSnapshot.connectionState == ConnectionState.waiting) {
+              return const Shimmer(child: MarketObjectiveCardSkeleton());
+            }
             final orders =
                 (ordersSnapshot.data?.docs ??
                         const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
@@ -619,13 +676,20 @@ class _MarketTabState extends State<MarketTab> {
               now: DateTime.now(),
             );
 
-            final avgPrice =
-                (insight['marketAverage'] as num?)?.toDouble() ?? 0.0;
-            final seasonPick =
-                insight['seasonalPick']?.toString() ?? 'Vegetables';
-            final marketPick =
-                insight['marketPick']?.toString() ?? 'Vegetables';
+            final avgPrice = (insight['marketAverage'] as num?)?.toDouble();
             final seasonLabel = insight['season']?.toString() ?? 'Season';
+            // A farmer with no listings of their own gets onboarding copy
+            // for these rows, even if the wider marketplace already has
+            // real seasonal/demand data — only the market average above
+            // is shown to everyone regardless of hasProducts.
+            final seasonPick =
+                hasProducts ? insight['seasonalPick']?.toString() : null;
+            final marketPick =
+                hasProducts ? insight['marketPick']?.toString() : null;
+            final suggestion = hasProducts
+                ? (insight['suggestion']?.toString() ??
+                    'Suggested focus: Continue listing products while more market data is collected.')
+                : 'Suggested focus: Start by listing your products to see current market prices and buyer demand.';
 
             return Container(
               padding: const EdgeInsets.all(18),
@@ -654,21 +718,32 @@ class _MarketTabState extends State<MarketTab> {
                   const SizedBox(height: 10),
                   _objectiveRow(
                     title: 'Current market average',
-                    value: '₱${avgPrice.toStringAsFixed(0)}/kg',
+                    value: avgPrice != null
+                        ? '₱${avgPrice.toStringAsFixed(0)}/kg'
+                        : 'No active listings yet',
                     subtitle: 'Average price across listed products',
                   ),
                   const SizedBox(height: 10),
                   _objectiveRow(
                     title: 'Best this $seasonLabel',
-                    value: seasonPick,
-                    subtitle: 'Top product by seasonal buyer demand',
+                    value: seasonPick ??
+                        (hasProducts ? 'Not enough data yet' : 'No data yet'),
+                    subtitle: seasonPick != null
+                        ? 'Highest buyer demand this season.'
+                        : (hasProducts
+                            ? 'Not enough completed sales this season.'
+                            : 'Add products to start receiving seasonal insights.'),
                   ),
                   const SizedBox(height: 10),
                   _objectiveRow(
                     title: 'Marketplace demand',
-                    value: marketPick,
-                    subtitle:
-                        'Most bought product by buyers in the marketplace',
+                    value: marketPick ??
+                        (hasProducts ? 'Not enough data yet' : 'No data yet'),
+                    subtitle: marketPick != null
+                        ? 'Based on recent buyer purchases in the marketplace.'
+                        : (hasProducts
+                            ? 'Check back once more orders come in.'
+                            : 'Demand insights will appear as buyers interact with products.'),
                   ),
                   const SizedBox(height: 12),
                   Container(
@@ -679,7 +754,7 @@ class _MarketTabState extends State<MarketTab> {
                       border: Border.all(color: _accent),
                     ),
                     child: Text(
-                      'Suggested focus: sell more $marketPick during the $seasonLabel to match buyer demand and improve turnover.',
+                      suggestion,
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey[700],

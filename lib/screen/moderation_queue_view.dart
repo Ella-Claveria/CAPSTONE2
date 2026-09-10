@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../services/connectivity_service.dart';
+
 class ModerationQueueView extends StatefulWidget {
   const ModerationQueueView({super.key});
 
@@ -73,11 +75,21 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                   itemBuilder: (context, index) {
                     final data = docs[index].data() as Map<String, dynamic>;
                     final reportId = docs[index].id;
-                    final productId = data['productId'] ?? 'Unknown ID';
-                    final productName = data['productName'] ?? 'Unknown Product';
-                    final sellerName = data['sellerName'] ?? 'Unknown Seller';
                     final issueType = data['issueType'] ?? 'General Report';
                     final description = data['description'] ?? 'No details provided.';
+                    final reporterName = data['reporterName'] ?? 'Unknown user';
+
+                    // Reports come from two flows: a product listing (has
+                    // productId/productName/sellerName — e.g. reported from a
+                    // product page) or a chat/user report (has reportedUserId
+                    // /reportedUserName instead — see ChatScreen). Showing
+                    // "Unknown Product / Unknown Seller" on a chat report would
+                    // be misleading, so branch on which fields actually exist.
+                    final productId = data['productId']?.toString();
+                    final hasProduct = productId != null && productId.isNotEmpty;
+                    final productName = data['productName'] ?? 'Unknown Product';
+                    final sellerName = data['sellerName'] ?? 'Unknown Seller';
+                    final reportedUserName = data['reportedUserName'] ?? 'Unknown user';
 
                     return Card(
                       margin: EdgeInsets.only(bottom: 16),
@@ -108,8 +120,17 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                                     ],
                                   ),
                                   SizedBox(height: 4),
-                                  Text(productName, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                  Text('Seller: $sellerName | Product ID: $productId', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+                                  Text(
+                                    hasProduct ? productName : 'Reported user: $reportedUserName',
+                                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text(
+                                    hasProduct
+                                        ? 'Seller: $sellerName | Product ID: $productId'
+                                        : 'Reported account, not a product listing',
+                                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                  ),
+                                  Text('Reported by: $reporterName', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
                                   SizedBox(height: 8),
                                   Text(description, style: TextStyle(color: Colors.black87)),
                                 ],
@@ -119,16 +140,17 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                             Column(
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                ElevatedButton.icon(
-                                  icon: Icon(Icons.gavel, size: 18),
-                                  label: Text('Suspend Listing'),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                                  onPressed: () => _suspendListing(context, reportId, productId),
-                                ),
-                                SizedBox(height: 8),
+                                if (hasProduct)
+                                  ElevatedButton.icon(
+                                    icon: Icon(Icons.gavel, size: 18),
+                                    label: Text('Suspend Listing'),
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                    onPressed: () => _suspendListing(context, reportId, productId),
+                                  ),
+                                if (hasProduct) SizedBox(height: 8),
                                 OutlinedButton.icon(
                                   icon: Icon(Icons.warning, size: 18, color: Colors.orange),
-                                  label: Text('Warn Seller', style: TextStyle(color: Colors.orange)),
+                                  label: Text(hasProduct ? 'Warn Seller' : 'Warn User', style: TextStyle(color: Colors.orange)),
                                   onPressed: () => _warnSeller(context, reportId),
                                 ),
                                 SizedBox(height: 8),
@@ -162,9 +184,21 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
     return query.snapshots();
   }
 
-  // ---- Mock Actions for the Admin ----
+  // ---- Admin moderation actions ----
+
+  /// Every action below changes marketplace/report state, so none of them
+  /// may run while offline — Firestore would otherwise silently queue the
+  /// write and report success before it's actually reached the server.
+  Future<bool> _ensureOnline(BuildContext context) async {
+    if (await ConnectivityService.instance.checkNow()) return true;
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
+    }
+    return false;
+  }
 
   Future<void> _suspendListing(BuildContext context, String reportId, String productId) async {
+    if (!await _ensureOnline(context)) return;
     try {
       // 1. Mark report as resolved
       await FirebaseFirestore.instance.collection('reports').doc(reportId).update({'status': 'resolved', 'action': 'suspended'});
@@ -179,6 +213,7 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
   }
 
   Future<void> _warnSeller(BuildContext context, String reportId) async {
+    if (!await _ensureOnline(context)) return;
     try {
       await FirebaseFirestore.instance.collection('reports').doc(reportId).update({'status': 'resolved', 'action': 'warned'});
       if (!context.mounted) return;
@@ -190,6 +225,7 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
   }
 
   Future<void> _dismissReport(BuildContext context, String reportId) async {
+    if (!await _ensureOnline(context)) return;
     try {
       await FirebaseFirestore.instance.collection('reports').doc(reportId).update({'status': 'dismissed'});
       if (!context.mounted) return;

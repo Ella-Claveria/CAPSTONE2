@@ -140,10 +140,13 @@ service cloud.firestore {
 
     // ---- In-app notification history, written by Cloud Functions
     // (Admin SDK bypasses these rules) — clients may only read their own
-    // and mark their own as read, never create or delete. ----
+    // and toggle `read` on their own; nothing else about a notification
+    // (title, body, type, data, recipient) is client-editable, so no one
+    // can rewrite their own history or impersonate a system notification. ----
     match /notifications/{uid}/items/{itemId} {
       allow read: if request.auth != null && request.auth.uid == uid;
-      allow update: if request.auth != null && request.auth.uid == uid;
+      allow update: if request.auth != null && request.auth.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
       allow create, delete: if false;
     }
 

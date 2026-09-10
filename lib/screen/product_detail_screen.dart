@@ -739,6 +739,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             (widget.data['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1,
         retailMaximumQuantity:
             (widget.data['retailMaximumQuantity'] as num?)?.toInt() ?? 1,
+        deliveryAvailable: widget.data['deliveryAvailable'] == true,
+        pickupOnly: widget.data['pickupOnly'] == true,
       );
     } catch (_) {
       // Swallow chat creation errors and continue to the chat view.

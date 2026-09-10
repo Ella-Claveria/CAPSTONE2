@@ -5,6 +5,9 @@ class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final _users = FirebaseFirestore.instance.collection('users');
 
+  // The signed-in user's UID, or null if nobody's logged in.
+  String? get currentUid => _auth.currentUser?.uid;
+
   // Create an account with a role ('farmer' or 'buyer').
   Future<String?> signUp({
     required String fullName,
@@ -20,10 +23,19 @@ class AuthService {
       await FirebaseAuth.instance.currentUser?.sendEmailVerification();
       await cred.user?.updateDisplayName(fullName.trim());
       await _users.doc(cred.user!.uid).set({
+        // 'fullName' is kept for backward compatibility with older reads;
+        // 'name' is the standardized display-name field going forward
+        // (matches what EditProfileScreen writes on later edits — see
+        // docs/firestore-schema-migration.md).
         'fullName': fullName.trim(),
+        'name': fullName.trim(),
         'email': email.trim(),
         'role': role,
         'approvalStatus': role == 'farmer' ? 'pending' : 'approved',
+        // Buyers have no verification step, so they're verified on
+        // creation; farmers become verified once an admin approves them
+        // (see VerificationQueueView._approveFarmer).
+        'isVerified': role != 'farmer',
         'createdAt': FieldValue.serverTimestamp(),
       });
       return null;
@@ -326,6 +338,8 @@ class AuthService {
         return 'Please log out and back in, then try again.';
       case 'too-many-requests':
         return 'Too many attempts. Please wait a bit and try again.';
+      case 'network-request-failed':
+        return 'No internet connection. Please check your connection and try again.';
       default:
         return 'Login failed. Please try again.';
     }

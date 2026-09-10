@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/order_service.dart';
+import '../widgets/shimmer.dart';
+import '../widgets/skeleton_loaders.dart';
 
 // Body-only widget — it renders inside the FarmerHomeScreen Scaffold
 // (which already provides the AgriTrade+ app bar and bottom nav).
@@ -16,11 +18,13 @@ class _OrdersTabState extends State<OrdersTab> {
   static const Color _accent = Color(0xFFDCEDC8);
 
   final OrderService _orderService = OrderService();
+  bool _isRefreshing = false;
 
   Future<void> _refreshOrders() async {
+    setState(() => _isRefreshing = true);
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    setState(() {});
+    setState(() => _isRefreshing = false);
   }
 
   // 'pending' | 'confirmed' | 'completed'
@@ -100,75 +104,6 @@ class _OrdersTabState extends State<OrdersTab> {
     );
   }
 
-  // Projects this calendar month's total from completed orders only —
-  // distinct from market_tab.dart's weekly/monthly revenue chart, this is
-  // a running total for the current month specifically, right where the
-  // farmer is already looking at their orders.
-  Widget _monthlySalesSummary() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _orderService.farmerOrdersStream(),
-      builder: (context, snapshot) {
-        final now = DateTime.now();
-        num monthTotal = 0;
-        var completedCount = 0;
-        for (final doc in snapshot.data?.docs ?? const []) {
-          final data = doc.data();
-          if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
-          final createdAt = data['createdAt'];
-          final date = createdAt is Timestamp ? createdAt.toDate() : null;
-          if (date == null || date.year != now.year || date.month != now.month) continue;
-          final total = data['total'];
-          monthTotal += total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0;
-          completedCount++;
-        }
-
-        final monthLabel = const [
-          'January', 'February', 'March', 'April', 'May', 'June',
-          'July', 'August', 'September', 'October', 'November', 'December',
-        ][now.month - 1];
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [_dark, Color(0xFF2E7D32)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('$monthLabel Sales',
-                          style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
-                      const SizedBox(height: 4),
-                      Text(_peso(monthTotal),
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 2),
-                      Text(
-                        '$completedCount completed order${completedCount == 1 ? '' : 's'} this month',
-                        style: const TextStyle(color: Colors.white70, fontSize: 11.5),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.trending_up_rounded, color: Colors.white70, size: 32),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -185,70 +120,85 @@ class _OrdersTabState extends State<OrdersTab> {
             ),
           ),
         ),
-        _monthlySalesSummary(),
-        const SizedBox(height: 12),
-        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _orderService.farmerOrdersStream(),
-          builder: (context, snapshot) {
-            final counts = <String, int>{
-              'pending': 0,
-              'confirmed': 0,
-              'completed': 0,
-            };
-            for (final doc in snapshot.data?.docs ?? const []) {
-              final status = (doc.data()['status'] ?? 'pending')
-                  .toString()
-                  .toLowerCase();
-              if (counts.containsKey(status)) {
-                counts[status] = counts[status]! + 1;
-              }
-            }
-
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  _filterTab('Pending', 'pending', counts['pending']!),
-                  const SizedBox(width: 8),
-                  _filterTab('Confirmed', 'confirmed', counts['confirmed']!),
-                  const SizedBox(width: 8),
-                  _filterTab('Completed', 'completed', counts['completed']!),
-                ],
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 12),
         Expanded(
-          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: _orderService.farmerOrdersStream(),
-            builder: (context, snap) {
-              if (snap.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  child: CircularProgressIndicator(color: _dark),
-                );
-              }
-              if (snap.hasError) {
-                return const Center(child: Text('Could not load orders.'));
-              }
-              final all = snap.data?.docs ?? [];
-              final docs = all
-                  .where(
-                    (d) =>
-                        (d.data()['status'] ?? 'pending').toString() == _filter,
-                  )
-                  .toList();
-              if (docs.isEmpty) return _emptyState();
-              return RefreshIndicator(
-                color: _dark,
-                onRefresh: _refreshOrders,
-                child: ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
-                  itemCount: docs.length,
-                  itemBuilder: (context, i) => _orderCard(docs[i]),
-                ),
-              );
-            },
+          child: RefreshIndicator(
+            color: _dark,
+            onRefresh: _refreshOrders,
+            child: _isRefreshing
+                ? const OrdersTabSkeleton()
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: _orderService.farmerOrdersStream(),
+                        builder: (context, snapshot) {
+                          final counts = <String, int>{
+                            'pending': 0,
+                            'confirmed': 0,
+                            'completed': 0,
+                          };
+                          for (final doc in snapshot.data?.docs ?? const []) {
+                            final status = (doc.data()['status'] ?? 'pending')
+                                .toString()
+                                .toLowerCase();
+                            if (counts.containsKey(status)) {
+                              counts[status] = counts[status]! + 1;
+                            }
+                          }
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Row(
+                              children: [
+                                _filterTab('Pending', 'pending', counts['pending']!),
+                                const SizedBox(width: 8),
+                                _filterTab('Confirmed', 'confirmed', counts['confirmed']!),
+                                const SizedBox(width: 8),
+                                _filterTab('Completed', 'completed', counts['completed']!),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: _orderService.farmerOrdersStream(),
+                          builder: (context, snap) {
+                            if (snap.connectionState == ConnectionState.waiting) {
+                              return Shimmer(
+                                child: ListView.builder(
+                                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+                                  itemCount: 4,
+                                  itemBuilder: (context, i) => const Padding(
+                                    padding: EdgeInsets.only(bottom: 14),
+                                    child: OrderCardSkeleton(),
+                                  ),
+                                ),
+                              );
+                            }
+                            if (snap.hasError) {
+                              return const Center(child: Text('Could not load orders.'));
+                            }
+                            final all = snap.data?.docs ?? [];
+                            final docs = all
+                                .where(
+                                  (d) =>
+                                      (d.data()['status'] ?? 'pending').toString() ==
+                                      _filter,
+                                )
+                                .toList();
+                            if (docs.isEmpty) return _emptyState();
+                            return ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+                              itemCount: docs.length,
+                              itemBuilder: (context, i) => _orderCard(docs[i]),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
           ),
         ),
       ],

@@ -47,6 +47,8 @@ class MessageService {
     int wholesaleMinimumQuantity = 1,
     int retailMaximumQuantity =
         1, // Pass retail maximum quantity through conversation metadata
+    bool deliveryAvailable = false,
+    bool pickupOnly = false,
   }) async {
     final currentUserId = FirebaseAuth.instance.currentUser!.uid;
     final currentUser = FirebaseAuth.instance.currentUser!;
@@ -57,10 +59,10 @@ class MessageService {
     final userData = userSnapshot.data();
     final currentUserName = currentUser.displayName?.trim().isNotEmpty == true
         ? currentUser.displayName!.trim()
-        : (userData?['fullName']?.toString().trim().isNotEmpty == true
-              ? userData!['fullName'].toString().trim()
-              : userData?['name']?.toString().trim().isNotEmpty == true
+        : (userData?['name']?.toString().trim().isNotEmpty == true
               ? userData!['name'].toString().trim()
+              : userData?['fullName']?.toString().trim().isNotEmpty == true
+              ? userData!['fullName'].toString().trim()
               : 'Buyer');
 
     // Consistent conversation ID format
@@ -79,6 +81,16 @@ class MessageService {
       },
       'farmerId': otherUserId,
       'farmerName': otherUserName,
+      // Standardized product-context fields — see
+      // docs/firestore-schema-migration.md. 'farmerImage' below is kept
+      // (unused/deprecated) only so older reads of it aren't broken; new
+      // reads should use 'productImageUrl'.
+      'productId': productId,
+      'productName': productName,
+      'productImageUrl': productImageUrl,
+      'productPrice': '₱${retailPrice ?? 0}/kilo',
+      'deliveryAvailable': deliveryAvailable,
+      'pickupOnly': pickupOnly,
       'farmerImage': productImageUrl,
       'retailPrice': retailPrice,
       'wholesalePrice': wholesalePrice,

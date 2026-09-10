@@ -49,6 +49,7 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   shared_preferences: ^2.5.3
+  flutter_local_notifications: ^22.3.0
 
 
 dev_dependencies:
@@ -90,6 +91,12 @@ flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
   image_path: "assets/logo.png"
+  # Same current logo for the adaptive icon's foreground layer, on a plain
+  # white background — matches this logo's own dark-green/gold linework and
+  # keeps it distinct from assets/icon_foreground.png, an older/unrelated
+  # badge design that is no longer used anywhere in the app itself.
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/logo.png"
 
 flutter_native_splash:
   color: "#F1F8E9"

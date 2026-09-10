@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../widgets/agritrade_text.dart';
+import '../theme/app_theme.dart';
 
 /// First-run intro carousel — shown once on a fresh install, before the app
 /// routes to role selection or login. Both "Skip" and reaching the last card
@@ -20,42 +20,32 @@ class OnboardingScreen extends StatefulWidget {
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardPage {
-  final IconData icon;
+/// One onboarding card's content. A single reusable page widget
+/// ([_OnboardPageView]) renders every item, instead of three near-identical
+/// screens.
+class _OnboardingItem {
+  final String image;
   final String title;
   final String description;
-  final String imagePath;
-  final bool isBrand;
-
-  const _OnboardPage({
-    required this.icon,
-    required this.title,
-    required this.description,
-    required this.imagePath,
-    this.isBrand = false,
-  });
+  const _OnboardingItem({required this.image, required this.title, required this.description});
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const List<_OnboardPage> _pages = [
-    _OnboardPage(
-      icon: Icons.agriculture_outlined,
-      title: 'Welcome to AgriTrade+',
-      description: 'Connecting local farmers directly with buyers — fresh produce, fair prices, no middlemen.',
-      imagePath: 'assets/background.png',
-      isBrand: true,
-    ),
-    _OnboardPage(
-      icon: Icons.storefront_outlined,
+  static const List<_OnboardingItem> _items = [
+    _OnboardingItem(
+      image: 'assets/background.png',
       title: 'Discover Fresh Produce',
-      description: 'Browse listings from verified farmers near you and order fruits, vegetables, and livestock in just a few taps.',
-      imagePath: 'assets/farmers.png',
+      description: 'Find fresh products directly from verified local farmers.',
     ),
-    _OnboardPage(
-      icon: Icons.notifications_active_outlined,
-      title: 'Stay Connected',
-      description: 'Chat with sellers, track your orders, and get notified the moment something changes.',
-      imagePath: 'assets/taalview.png',
+    _OnboardingItem(
+      image: 'assets/farmers.png',
+      title: 'Support Local Farmers',
+      description: 'Connect with local farmers and livestock raisers in your community.',
+    ),
+    _OnboardingItem(
+      image: 'assets/taalview.png',
+      title: 'Trade with Confidence',
+      description: 'List products, place orders, and receive important transaction updates in one place.',
     ),
   ];
 
@@ -63,7 +53,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   int _index = 0;
   bool _submitting = false;
 
-  bool get _isLastPage => _index == _pages.length - 1;
+  bool get _isLastPage => _index == _items.length - 1;
 
   void _next() {
     if (_isLastPage) {
@@ -90,80 +80,126 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.dispose();
   }
 
-  static const _textShadow = [Shadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 2))];
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       body: Stack(
         children: [
           PageView.builder(
             controller: _controller,
-            itemCount: _pages.length,
+            itemCount: _items.length,
             onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) => _OnboardPageView(page: _pages[i]),
+            itemBuilder: (context, i) => _OnboardPageView(item: _items[i]),
           ),
 
-          // ----- Skip, top-right -----
+          // ----- Skip, top-right — hidden on the last page since Get -----
+          // ----- Started already finishes onboarding the same way. -----
           if (!_isLastPage)
             SafeArea(
               child: Align(
                 alignment: Alignment.topRight,
                 child: Padding(
-                  padding: const EdgeInsets.only(right: 16, top: 4),
+                  padding: const EdgeInsets.only(right: 20, top: 8),
                   child: TextButton(
                     onPressed: _submitting ? null : _skip,
+                    style: TextButton.styleFrom(foregroundColor: Colors.white),
                     child: Text(
                       'Skip',
-                      style: GoogleFonts.inter(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                        shadows: _textShadow,
-                      ),
+                      style: GoogleFonts.montserrat(fontSize: 14.5, fontWeight: FontWeight.w600),
                     ),
                   ),
                 ),
               ),
             ),
 
-          // ----- Dots + Next/Get Started, floating directly over the photo -----
+          // ----- Title, description, page indicator, action button — all -----
+          // ----- anchored to the lower section, over the darkest part of  -----
+          // ----- each photo's gradient. -----
           Align(
             alignment: Alignment.bottomCenter,
             child: SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                padding: const EdgeInsets.fromLTRB(28, 0, 28, 20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // The only motion besides the page swipe itself: a
+                    // small fade/slide when the title and description
+                    // change, instead of hard-cutting.
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 280),
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: SlideTransition(
+                          position: Tween<Offset>(begin: const Offset(0, 0.08), end: Offset.zero)
+                              .animate(anim),
+                          child: child,
+                        ),
+                      ),
+                      child: Column(
+                        key: ValueKey<int>(_index),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              _items[_index].title,
+                              style: GoogleFonts.montserrat(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                                height: 1.2,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            _items[_index].description,
+                            style: GoogleFonts.montserrat(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w400,
+                              color: Colors.white.withValues(alpha: 0.85),
+                              height: 1.45,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+
+                    // ----- Page indicator -----
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: List.generate(_pages.length, (i) {
+                      children: List.generate(_items.length, (i) {
                         final active = i == _index;
                         return AnimatedContainer(
                           duration: const Duration(milliseconds: 250),
-                          margin: const EdgeInsets.symmetric(horizontal: 4),
-                          width: active ? 22 : 8,
-                          height: 8,
+                          margin: const EdgeInsets.only(right: 6),
+                          width: active ? 22 : 7,
+                          height: 7,
                           decoration: BoxDecoration(
-                            color: active ? Colors.white : Colors.white.withValues(alpha: 0.45),
+                            color: active ? Colors.white : Colors.white.withValues(alpha: 0.4),
                             borderRadius: BorderRadius.circular(4),
-                            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 4)],
                           ),
                         );
                       }),
                     ),
                     const SizedBox(height: 18),
+
+                    // ----- Action button -----
                     SizedBox(
                       width: double.infinity,
+                      height: 52,
                       child: ElevatedButton(
                         onPressed: _submitting ? null : _next,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF1B5E20),
+                          backgroundColor: AppTheme.dark,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                         ),
                         child: _submitting
                             ? const SizedBox(
@@ -173,7 +209,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               )
                             : Text(
                                 _isLastPage ? 'Get Started' : 'Next',
-                                style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold),
+                                style: GoogleFonts.montserrat(fontSize: 16, fontWeight: FontWeight.w600),
                               ),
                       ),
                     ),
@@ -188,105 +224,68 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
+/// One full-bleed photo page: the realistic agricultural background, a
+/// gradient scrim for text contrast, and the small brand mark — the title/
+/// description/indicator/button chrome above lives outside this widget so
+/// it can animate independently of the page swipe.
 class _OnboardPageView extends StatelessWidget {
-  final _OnboardPage page;
-  const _OnboardPageView({required this.page});
-
-  static const Color _dark = Color(0xFF1B5E20);
-  static const _darkTextShadow = [Shadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 2))];
-  // A soft white halo behind dark brand text — keeps "Welcome to" and the
-  // description readable even where the photo underneath isn't perfectly
-  // light, without needing a solid scrim over the whole image.
-  static const _lightTextShadow = [
-    Shadow(color: Colors.white, blurRadius: 12),
-    Shadow(color: Colors.white, blurRadius: 12),
-  ];
+  final _OnboardingItem item;
+  const _OnboardPageView({required this.item});
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // ----- Full-bleed photo, no overlay -----
-        Image.asset(page.imagePath, fit: BoxFit.cover),
+        // ----- Full-bleed realistic photo, never stretched -----
+        Image.asset(item.image, fit: BoxFit.cover),
 
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 36),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                // Sits the branding/icon block in the upper portion of the
-                // photo (each image's lightest, least busy area) instead of
-                // dead-center, so the text stays legible with no scrim.
-                const SizedBox(height: 56),
-                if (page.isBrand) ...[
-                  Container(
-                    width: 120,
-                    height: 120,
-                    decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                    padding: const EdgeInsets.all(8),
-                    child: ClipOval(
-                      child: Image.asset(
-                        'assets/logo.png',
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => const Icon(Icons.agriculture, size: 54, color: _dark),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    'Welcome to',
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                      shadows: _lightTextShadow,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: AgriTradeText(fontSize: 36),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    page.description,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.inter(
-                      fontSize: 14.5,
-                      height: 1.5,
-                      color: Colors.black87,
-                      shadows: _lightTextShadow,
-                    ),
-                  ),
-                ] else ...[
-                  Container(
-                    width: 140,
-                    height: 140,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.92),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 18, offset: const Offset(0, 6)),
-                      ],
-                    ),
-                    child: Icon(page.icon, size: 66, color: _dark),
-                  ),
-                  const SizedBox(height: 32),
-                  Text(
-                    page.title,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white, shadows: _darkTextShadow),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    page.description,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.inter(fontSize: 14.5, height: 1.5, color: Colors.white, shadows: _darkTextShadow),
-                  ),
-                ],
+        // ----- Dark green/black gradient: transparent near the top so the -----
+        // ----- photo stays visible, solid enough by the bottom for white -----
+        // ----- text to stay readable without needing per-letter shadows. -----
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              stops: [0.0, 0.42, 0.72, 1.0],
+              colors: [
+                Colors.transparent,
+                Colors.transparent,
+                Color(0xCC0B2210),
+                Color(0xF20B2210),
               ],
+            ),
+          ),
+        ),
+
+        // ----- Small brand mark, upper-middle. A small white disc gives -----
+        // ----- the logo contrast against whatever the photo behind it -----
+        // ----- happens to be (sky, foliage, water) without becoming the -----
+        // ----- oversized generic icon this replaces. -----
+        SafeArea(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 20),
+              child: Container(
+                width: 60,
+                height: 60,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, 3)),
+                  ],
+                ),
+                child: Image.asset(
+                  'assets/logo.png',
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) =>
+                      const Icon(Icons.eco, size: 26, color: AppTheme.dark),
+                ),
+              ),
             ),
           ),
         ),

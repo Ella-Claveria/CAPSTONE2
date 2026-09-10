@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'connectivity_service.dart';
+
 class OrderService {
   final _orders = FirebaseFirestore.instance.collection('orders');
 
@@ -31,6 +33,11 @@ class OrderService {
     required String buyerAddress,
     required String deliveryMethod,
   }) async {
+    // An order must never be silently queued for later — if it can't be
+    // confirmed against live Firestore data right now, it doesn't happen.
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       final buyerId = FirebaseAuth.instance.currentUser?.uid;
       if (buyerId == null || buyerId.isEmpty) {
@@ -48,6 +55,11 @@ class OrderService {
         final productSnapshot = await transaction.get(productRef);
         if (!productSnapshot.exists) {
           throw StateError('Product is no longer available.');
+        }
+        final productData = productSnapshot.data();
+        if (productData?['isArchived'] == true ||
+            productData?['isSuspended'] == true) {
+          throw StateError('This listing is no longer available.');
         }
 
         final available =
@@ -95,6 +107,9 @@ class OrderService {
 
   // Confirm / reject / complete an order.
   Future<String?> updateStatus(String id, String status) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
     try {
       await _orders.doc(id).update({
         'status': status,

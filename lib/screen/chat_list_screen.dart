@@ -196,11 +196,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
             .snapshots(),
         builder: (context, snapshot) {
           final profile = snapshot.data?.data();
+          // 'name' (kept fresh by EditProfileScreen) wins over 'fullName'
+          // (set once at signup and never updated afterward) — see
+          // docs/firestore-schema-migration.md.
           final resolvedName =
-              profile?['fullName']?.toString().trim().isNotEmpty == true
-              ? profile!['fullName'].toString().trim()
-              : profile?['name']?.toString().trim().isNotEmpty == true
+              profile?['name']?.toString().trim().isNotEmpty == true
               ? profile!['name'].toString().trim()
+              : profile?['fullName']?.toString().trim().isNotEmpty == true
+              ? profile!['fullName'].toString().trim()
               : otherName;
           return _conversationTileContent(
             context,

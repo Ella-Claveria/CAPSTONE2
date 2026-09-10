@@ -37,7 +37,7 @@ class AgriTradeApp extends StatelessWidget {
           // Hides the red "DEBUG" ribbon in the corner.
           debugShowCheckedModeBanner: false,
 
-          // One line = Inter everywhere, plus your green theme.
+          // One line = Montserrat everywhere, plus your green theme.
           theme: AppTheme.themeData(),
 
           locale: LocaleController.instance.locale,
