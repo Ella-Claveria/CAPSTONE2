@@ -305,7 +305,11 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
         }
         var docs = snapshot.data?.docs ?? [];
 
-        docs = docs.where((doc) => doc.data()['isArchived'] != true).toList();
+        docs = docs
+            .where((doc) =>
+                doc.data()['isArchived'] != true &&
+                doc.data()['isSuspended'] != true)
+            .toList();
 
         if (_selectedCategory != 'All Postings') {
           docs = docs.where((doc) {

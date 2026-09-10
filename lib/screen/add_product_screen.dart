@@ -242,7 +242,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 alignment: Alignment.centerLeft,
                 child: Text(
                   'Add Photo',
-                  style: GoogleFonts.inter(
+                  style: GoogleFonts.montserrat(
                     fontWeight: FontWeight.bold,
                     fontSize: 15,
                     color: Colors.black87,
@@ -258,7 +258,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
               title: Text(
                 'Take Photo',
-                style: GoogleFonts.inter(
+                style: GoogleFonts.montserrat(
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
                 ),
@@ -272,7 +272,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
               title: Text(
                 'Choose from Gallery',
-                style: GoogleFonts.inter(
+                style: GoogleFonts.montserrat(
                   fontWeight: FontWeight.w600,
                   fontSize: 14,
                 ),
@@ -406,25 +406,25 @@ class _AddProductScreenState extends State<AddProductScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
           'Delete Product?',
-          style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+          style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
         ),
         content: Text(
           'This will permanently remove this product.',
-          style: GoogleFonts.inter(),
+          style: GoogleFonts.montserrat(),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: Text(
               'Cancel',
-              style: GoogleFonts.inter(color: Colors.black54),
+              style: GoogleFonts.montserrat(color: Colors.black54),
             ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: Text(
               'Delete',
-              style: GoogleFonts.inter(
+              style: GoogleFonts.montserrat(
                 color: Colors.red,
                 fontWeight: FontWeight.w600,
               ),
@@ -471,7 +471,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         backgroundColor: _darkGreen,
         content: Text(
           message,
-          style: GoogleFonts.inter(color: Colors.white),
+          style: GoogleFonts.montserrat(color: Colors.white),
         ),
       ),
     );
@@ -485,7 +485,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }) {
     return InputDecoration(
       hintText: hint,
-      hintStyle: GoogleFonts.inter(color: Colors.black38, fontSize: 13.5),
+      hintStyle: GoogleFonts.montserrat(color: Colors.black38, fontSize: 13.5),
       prefixIcon: icon != null ? Icon(icon, color: _midGreen) : null,
       prefix: prefix,
       suffixIcon: suffix,
@@ -512,7 +512,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       padding: const EdgeInsets.only(left: 4, bottom: 6, top: 4),
       child: Text(
         text,
-        style: GoogleFonts.inter(
+        style: GoogleFonts.montserrat(
           fontSize: 13.5,
           fontWeight: FontWeight.w600,
           color: Colors.black87,
@@ -538,7 +538,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           children: [
             Text(
               name,
-              style: GoogleFonts.inter(
+              style: GoogleFonts.montserrat(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: Colors.black87,
@@ -546,7 +546,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ),
             Text(
               'Farmer',
-              style: GoogleFonts.inter(
+              style: GoogleFonts.montserrat(
                 fontSize: 12.5,
                 color: Colors.grey[600],
               ),
@@ -589,7 +589,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     Text(
                       'Tap to take or choose a photo\nof your livestock or crops',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         color: _midGreen,
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -599,7 +599,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     Text(
                       'High-quality photos sell faster',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         color: Colors.grey[500],
                         fontSize: 9.5,
                       ),
@@ -672,7 +672,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       return _recoShell(
         child: Text(
           'Type a product title to see a price suggestion.',
-          style: GoogleFonts.inter(color: Colors.white70, fontSize: 12.5),
+          style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12.5),
         ),
       );
     }
@@ -683,7 +683,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         child: Text(
           'No market data yet for "$typedName" — no similar active listings, '
           'past sales, or admin baseline price found.',
-          style: GoogleFonts.inter(color: Colors.white70, fontSize: 12.5),
+          style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12.5),
         ),
       );
     }
@@ -705,7 +705,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   children: [
                     Text(
                       'SUGGESTED PRICE',
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         color: Colors.white70,
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
@@ -715,7 +715,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     const SizedBox(height: 4),
                     Text(
                       '₱${median.toStringAsFixed(2)}/kg',
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         color: Colors.white,
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -732,7 +732,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   children: [
                     Text(
                       'TYPICAL RANGE',
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         color: Colors.white70,
                         fontSize: 10,
                         fontWeight: FontWeight.w600,
@@ -742,7 +742,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     const SizedBox(height: 4),
                     Text(
                       '₱${low.toStringAsFixed(2)} to ₱${high.toStringAsFixed(2)}',
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         color: Colors.white,
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
@@ -756,7 +756,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           const SizedBox(height: 14),
           Text(
             'Basis of Recommendation',
-            style: GoogleFonts.inter(
+            style: GoogleFonts.montserrat(
               color: Colors.white,
               fontSize: 12.5,
               fontWeight: FontWeight.w600,
@@ -789,12 +789,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
           const SizedBox(height: 10),
           Text(
             'Suggested wholesale price: ₱${wholesaleSuggestion.toStringAsFixed(2)}/kg (10% volume discount).',
-            style: GoogleFonts.inter(color: Colors.white70, fontSize: 11),
+            style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 11),
           ),
           const SizedBox(height: 10),
           Text(
             'This recommendation serves as a pricing guide only.',
-            style: GoogleFonts.inter(
+            style: GoogleFonts.montserrat(
               color: Colors.white60,
               fontSize: 10.5,
               fontStyle: FontStyle.italic,
@@ -819,7 +819,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
               child: Text(
                 'Apply Suggested Price',
-                style: GoogleFonts.inter(
+                style: GoogleFonts.montserrat(
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -852,7 +852,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               const SizedBox(width: 6),
               Text(
                 'AI-Driven Price Recommendation',
-                style: GoogleFonts.inter(
+                style: GoogleFonts.montserrat(
                   color: Colors.white,
                   fontSize: 13.5,
                   fontWeight: FontWeight.bold,
@@ -880,7 +880,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           Expanded(
             child: Text(
               text,
-              style: GoogleFonts.inter(
+              style: GoogleFonts.montserrat(
                 color: Colors.white70,
                 fontSize: 11,
                 height: 1.35,
@@ -899,7 +899,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       appBar: AppBar(
         title: Text(
           _isEditing ? 'Edit Product' : 'Add Product',
-          style: GoogleFonts.inter(
+          style: GoogleFonts.montserrat(
             fontWeight: FontWeight.bold,
             fontSize: 18,
           ),
@@ -946,7 +946,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     Expanded(
                       child: Text(
                         'This listing is archived and hidden from the marketplace.',
-                        style: GoogleFonts.inter(fontSize: 12, color: Colors.orange[900]),
+                        style: GoogleFonts.montserrat(fontSize: 12, color: Colors.orange[900]),
                       ),
                     ),
                   ],
@@ -962,7 +962,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _label('Product Title'),
             TextField(
               controller: _nameController,
-              style: GoogleFonts.inter(fontSize: 14),
+              style: GoogleFonts.montserrat(fontSize: 14),
               decoration: _inputDecoration('e.g., Premium Free-Range Chicken'),
             ),
             const SizedBox(height: 8),
@@ -979,7 +979,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       DropdownButtonFormField<String>(
                         initialValue: _category,
                         isExpanded: true,
-                        style: GoogleFonts.inter(
+                        style: GoogleFonts.montserrat(
                           color: Colors.black87,
                           fontSize: 14,
                         ),
@@ -988,7 +988,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                         decoration: _inputDecoration('Select...'),
                         hint: Text(
                           'Select...',
-                          style: GoogleFonts.inter(
+                          style: GoogleFonts.montserrat(
                             color: Colors.black38,
                             fontSize: 13.5,
                           ),
@@ -999,7 +999,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                 value: c,
                                 child: Text(
                                   c,
-                                  style: GoogleFonts.inter(fontSize: 14),
+                                  style: GoogleFonts.montserrat(fontSize: 14),
                                 ),
                               ),
                             )
@@ -1018,7 +1018,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       TextField(
                         controller: _quantityController,
                         keyboardType: TextInputType.number,
-                        style: GoogleFonts.inter(fontSize: 14),
+                        style: GoogleFonts.montserrat(fontSize: 14),
                         decoration: _inputDecoration('e.g., 50 kg'),
                       ),
                     ],
@@ -1037,7 +1037,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _priceController,
               keyboardType: TextInputType.number,
-              style: GoogleFonts.inter(
+              style: GoogleFonts.montserrat(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
@@ -1047,7 +1047,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
                     '₱',
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.montserrat(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: _darkGreen,
@@ -1058,7 +1058,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 14),
                   child: Text(
                     'Php / kg',
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.montserrat(
                       fontSize: 13,
                       color: Colors.grey[600],
                     ),
@@ -1072,7 +1072,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _wholesalePriceController,
               keyboardType: TextInputType.number,
-              style: GoogleFonts.inter(
+              style: GoogleFonts.montserrat(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
               ),
@@ -1082,7 +1082,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
                     '₱',
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.montserrat(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
                       color: _darkGreen,
@@ -1093,7 +1093,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   padding: const EdgeInsets.only(right: 14),
                   child: Text(
                     'Php / kg',
-                    style: GoogleFonts.inter(
+                    style: GoogleFonts.montserrat(
                       fontSize: 13,
                       color: Colors.grey[600],
                     ),
@@ -1106,7 +1106,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _wholesaleMinimumController,
               keyboardType: TextInputType.number,
-              style: GoogleFonts.inter(fontSize: 14),
+              style: GoogleFonts.montserrat(fontSize: 14),
               decoration: _inputDecoration('e.g., 10 kg'),
             ),
             const SizedBox(height: 12),
@@ -1116,7 +1116,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             TextField(
               controller: _descriptionController,
               maxLines: 3,
-              style: GoogleFonts.inter(fontSize: 14),
+              style: GoogleFonts.montserrat(fontSize: 14),
               decoration: _inputDecoration(
                 'Tell buyers about how it was raised or grown...',
               ),
@@ -1128,7 +1128,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               contentPadding: EdgeInsets.zero,
               title: Text(
                 'Delivery Available',
-                style: GoogleFonts.inter(
+                style: GoogleFonts.montserrat(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -1141,7 +1141,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               contentPadding: EdgeInsets.zero,
               title: Text(
                 'Pick-up Only',
-                style: GoogleFonts.inter(
+                style: GoogleFonts.montserrat(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -1176,7 +1176,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     )
                   : Text(
                       _isEditing ? 'Update' : 'Post',
-                      style: GoogleFonts.inter(
+                      style: GoogleFonts.montserrat(
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),

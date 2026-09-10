@@ -4,10 +4,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/auth_service.dart';
 import '../services/message_service.dart';
+import '../services/product_service.dart';
 import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
 import 'farmer_edit_profile_screen.dart';
 import '../widgets/change_password_dialog.dart';
+import '../widgets/shimmer.dart';
+import '../widgets/skeleton_loaders.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 class ProfileTab extends StatefulWidget {
@@ -20,11 +23,17 @@ class ProfileTab extends StatefulWidget {
 class _ProfileTabState extends State<ProfileTab> {
   static const Color _dark = Color(0xFF1B5E20);
   static const Color _accent = Color(0xFFDCEDC8);
+  bool _isRefreshing = false;
+
+  final ProductService _productService = ProductService();
+  // 'active' | 'archived' — which of the farmer's own listings to show.
+  String _productFilter = 'active';
 
   Future<void> _refreshData() async {
+    setState(() => _isRefreshing = true);
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    setState(() {});
+    setState(() => _isRefreshing = false);
   }
 
   Future<void> _handleLogout(BuildContext context) async {
@@ -252,6 +261,14 @@ class _ProfileTabState extends State<ProfileTab> {
             ],
           ),
           const SizedBox(height: 10),
+          Row(
+            children: [
+              _productFilterChip('Active', 'active'),
+              const SizedBox(width: 8),
+              _productFilterChip('Archived', 'archived'),
+            ],
+          ),
+          const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
               color: Colors.white,
@@ -271,18 +288,28 @@ class _ProfileTabState extends State<ProfileTab> {
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(child: CircularProgressIndicator()),
+                  return const Shimmer(
+                    child: Column(
+                      children: [
+                        ProductRowSkeleton(),
+                        Divider(height: 1, indent: 16, endIndent: 16),
+                        ProductRowSkeleton(),
+                      ],
+                    ),
                   );
                 }
 
-                final docs = snap.data?.docs ?? [];
+                final showArchived = _productFilter == 'archived';
+                final docs = (snap.data?.docs ?? [])
+                    .where((d) => (d.data()['isArchived'] == true) == showArchived)
+                    .toList();
                 if (docs.isEmpty) {
                   return Padding(
                     padding: const EdgeInsets.all(20),
                     child: Text(
-                      "You haven't posted any products yet.",
+                      showArchived
+                          ? "You don't have any archived products."
+                          : "You haven't posted any active products yet.",
                       style: TextStyle(fontSize: 13, color: Colors.grey[600]),
                     ),
                   );
@@ -301,6 +328,29 @@ class _ProfileTabState extends State<ProfileTab> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _productFilterChip(String label, String value) {
+    final selected = _productFilter == value;
+    return GestureDetector(
+      onTap: () => setState(() => _productFilter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? _dark : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: selected ? _dark : Colors.grey.shade300),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : Colors.grey[700],
+          ),
+        ),
       ),
     );
   }
@@ -384,7 +434,61 @@ class _ProfileTabState extends State<ProfileTab> {
                   style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
                 )
               : null,
-          trailing: Icon(Icons.chevron_right, color: Colors.grey[400]),
+          trailing: PopupMenuButton<String>(
+            icon: Icon(Icons.more_vert, color: Colors.grey[500]),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onSelected: (value) {
+              switch (value) {
+                case 'edit':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          AddProductScreen(productId: id, existingData: data),
+                    ),
+                  );
+                  break;
+                case 'quantity':
+                  _showUpdateQuantityDialog(context, id, name, quantity);
+                  break;
+                case 'archive':
+                  _setArchived(context, id, !isArchived);
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'edit',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.edit_outlined, color: _dark),
+                  title: Text('Edit Product', style: TextStyle(fontSize: 14)),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'quantity',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.inventory_2_outlined, color: _dark),
+                  title: Text('Update Quantity', style: TextStyle(fontSize: 14)),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'archive',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+                    color: isArchived ? _dark : Colors.orange[800],
+                  ),
+                  title: Text(
+                    isArchived ? 'Restore Listing' : 'Archive Listing',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
@@ -396,6 +500,88 @@ class _ProfileTabState extends State<ProfileTab> {
         _productReviews(id),
       ],
     );
+  }
+
+  void _snack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        backgroundColor: _dark,
+        content: Text(message),
+      ),
+    );
+  }
+
+  Future<void> _setArchived(BuildContext context, String id, bool archive) async {
+    final error = archive
+        ? await _productService.archiveProduct(id)
+        : await _productService.unarchiveProduct(id);
+    if (!context.mounted) return;
+    _snack(
+      context,
+      error ??
+          (archive
+              ? 'Listing archived — hidden from the marketplace until you restore it.'
+              : 'Listing restored — visible in the marketplace again.'),
+    );
+  }
+
+  Future<void> _showUpdateQuantityDialog(
+    BuildContext context,
+    String id,
+    String name,
+    dynamic currentQuantity,
+  ) async {
+    final controller = TextEditingController(
+      text: (currentQuantity as num?)?.toInt().toString() ?? '0',
+    );
+    final newQuantity = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Update Quantity'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Available quantity',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final parsed = int.tryParse(controller.text.trim());
+              if (parsed == null || parsed < 0) {
+                _snack(dialogContext, 'Please enter a valid, non-negative quantity.');
+                return;
+              }
+              Navigator.pop(dialogContext, parsed);
+            },
+            child: const Text('Save', style: TextStyle(color: _dark, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newQuantity == null) return;
+    final error = await _productService.updateQuantity(id, newQuantity);
+    if (!context.mounted) return;
+    _snack(context, error ?? 'Quantity updated to $newQuantity.');
   }
 
   Widget _productReviews(String productId) {
@@ -478,7 +664,12 @@ class _ProfileTabState extends State<ProfileTab> {
     return RefreshIndicator(
       color: _dark,
       onRefresh: _refreshData,
-      child: SingleChildScrollView(
+      child: _isRefreshing
+          ? const SingleChildScrollView(
+              physics: AlwaysScrollableScrollPhysics(),
+              child: ProfileTabSkeleton(),
+            )
+          : SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.only(bottom: 90),
         child: Column(

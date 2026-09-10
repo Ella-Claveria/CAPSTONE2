@@ -133,7 +133,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         backgroundColor: _dark,
-        content: Text(message, style: GoogleFonts.inter(color: Colors.white)),
+        content: Text(message, style: GoogleFonts.montserrat(color: Colors.white)),
       ),
     );
   }
@@ -157,18 +157,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('Choose Photo', style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
+                    child: Text('Choose Photo', style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
                   ),
                 ),
                 const SizedBox(height: 4),
                 ListTile(
                   leading: const Icon(Icons.photo_camera_outlined, color: _dark),
-                  title: Text('Take Photo', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14)),
+                  title: Text('Take Photo', style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, fontSize: 14)),
                   onTap: () => Navigator.pop(context, ImageSource.camera),
                 ),
                 ListTile(
                   leading: const Icon(Icons.photo_library_outlined, color: _dark),
-                  title: Text('Choose from Gallery', style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 14)),
+                  title: Text('Choose from Gallery', style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, fontSize: 14)),
                   onTap: () => Navigator.pop(context, ImageSource.gallery),
                 ),
                 const SizedBox(height: 8),
@@ -208,7 +208,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return Padding(
       padding: const EdgeInsets.only(left: 4, bottom: 6),
       child: Text(text,
-          style: GoogleFonts.inter(
+          style: GoogleFonts.montserrat(
               fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.grey[600], letterSpacing: 0.5)),
     );
   }
@@ -259,7 +259,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         GestureDetector(
           onTap: _pickProfilePhoto,
           child: Text('Change Photo',
-              style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.w600, color: _dark)),
+              style: GoogleFonts.montserrat(fontSize: 12.5, fontWeight: FontWeight.w600, color: _dark)),
         ),
       ],
     );
@@ -275,7 +275,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         foregroundColor: Colors.black87,
         centerTitle: true,
         title: Text('Edit Profile',
-            style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.black87)),
+            style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.black87)),
       ),
       body: _initialLoading
           ? const Center(child: CircularProgressIndicator(color: _dark))
@@ -290,7 +290,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   _fieldLabel('FULL NAME'),
                   TextField(
                     controller: _nameController,
-                    style: GoogleFonts.inter(fontSize: 14),
+                    style: GoogleFonts.montserrat(fontSize: 14),
                     decoration: _fieldDecoration(Icons.person_outline),
                   ),
                   const SizedBox(height: 14),
@@ -299,7 +299,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   TextField(
                     controller: _emailController,
                     enabled: false, // email changes need re-auth; edit elsewhere if needed
-                    style: GoogleFonts.inter(fontSize: 14, color: Colors.black54),
+                    style: GoogleFonts.montserrat(fontSize: 14, color: Colors.black54),
                     decoration: _fieldDecoration(Icons.mail_outline),
                   ),
                   const SizedBox(height: 14),
@@ -308,7 +308,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   TextField(
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
-                    style: GoogleFonts.inter(fontSize: 14),
+                    style: GoogleFonts.montserrat(fontSize: 14),
                     decoration: _fieldDecoration(Icons.call_outlined),
                   ),
                   const SizedBox(height: 14),
@@ -316,7 +316,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   _fieldLabel('LOCATION'),
                   TextField(
                     controller: _locationController,
-                    style: GoogleFonts.inter(fontSize: 14),
+                    style: GoogleFonts.montserrat(fontSize: 14),
                     decoration: _fieldDecoration(Icons.location_on_outlined),
                   ),
                   const SizedBox(height: 28),
@@ -333,7 +333,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ),
                     child: _loading
                         ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : Text('Save Changes', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold)),
+                        : Text('Save Changes', style: GoogleFonts.montserrat(fontSize: 15, fontWeight: FontWeight.bold)),
                   ),
                 ],
               ),

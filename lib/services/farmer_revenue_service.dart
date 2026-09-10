@@ -145,104 +145,121 @@ class FarmerRevenueService {
     );
   }
 
-  static String seasonLabel(DateTime now) {
-    final month = now.month;
-    if (month >= 6 && month <= 11) return 'Rainy season';
-    return 'Dry season';
+  /// The Philippine agricultural season for [now] — Rainy Season runs
+  /// June through November, Dry Season runs December through May. This is
+  /// the single reusable source of truth for "what season is it right
+  /// now"; nothing in the UI should hardcode a season name.
+  static String getCurrentSeason(DateTime now) {
+    return (now.month >= 6 && now.month <= 11) ? 'Rainy Season' : 'Dry Season';
   }
 
+  /// The current season's start date through [now] — e.g. in September
+  /// 2026 this is June 1, 2026 through the current date. Dry Season spans
+  /// a calendar-year boundary (Dec–May), so the start year is resolved
+  /// from [now]'s month.
+  static ({DateTime start, DateTime end}) currentSeasonRange(DateTime now) {
+    if (now.month >= 6 && now.month <= 11) {
+      return (start: DateTime(now.year, 6, 1), end: now);
+    }
+    final startYear = now.month == 12 ? now.year : now.year - 1;
+    return (start: DateTime(startYear, 12, 1), end: now);
+  }
+
+  // How far back "recent marketplace activity" looks for Marketplace
+  // Demand — deliberately a short rolling window (not the whole season)
+  // so it never just mirrors the Top Product This Season figure.
+  static const int _recentWindowDays = 30;
+
+  static num _asNum(dynamic raw) {
+    if (raw is num) return raw;
+    return num.tryParse(raw?.toString() ?? '') ?? 0;
+  }
+
+  static String? _topByQuantity(Map<String, num> quantities) {
+    if (quantities.isEmpty) return null;
+    return quantities.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+  }
+
+  /// Market insights for the "Market Objective" card — entirely derived
+  /// from live marketplace data (active listings + completed orders), with
+  /// no hardcoded products, prices, or demand values. Any metric without
+  /// enough supporting data comes back null so the UI can show an honest
+  /// "not enough data" state instead of a fake number.
   static Map<String, dynamic> marketObjective({
     required List<Map<String, dynamic>> products,
     required List<Map<String, dynamic>> orders,
     required DateTime now,
   }) {
+    // ---- 1. Current Market Average — active (non-archived) listings with
+    // a valid price and a recorded quantity/unit only.
+    final activePrices = products
+        .where((product) =>
+            product['isArchived'] != true && product['quantity'] != null)
+        .map((product) => _asNum(product['price']).toDouble())
+        .where((price) => price > 0)
+        .toList();
+    final double? marketAverage = activePrices.isEmpty
+        ? null
+        : activePrices.reduce((a, b) => a + b) / activePrices.length;
+
     final completedOrders = orders.where((order) {
       final status = (order['status'] ?? '').toString().toLowerCase();
-      if (status != 'completed') return false;
-      final createdAt = _toDateTime(order['createdAt']);
-      if (createdAt == null) return false;
-      final daysAgo = now.difference(createdAt).inDays;
-      return daysAgo <= 365;
+      return status == 'completed' && _toDateTime(order['createdAt']) != null;
     }).toList();
 
-    final seasonOrders = completedOrders.where((order) {
-      final createdAt = _toDateTime(order['createdAt']);
-      if (createdAt == null) return false;
-      final month = createdAt.month;
-      if (month >= 6 && month <= 11) return seasonLabel(now) == 'Rainy season';
-      return seasonLabel(now) == 'Dry season';
-    }).toList();
-
-    final seasonalCounts = <String, int>{};
-    for (final order in seasonOrders) {
-      final name = (order['productName'] ?? order['name'] ?? '').toString();
-      if (name.trim().isEmpty) continue;
-      seasonalCounts[name] = (seasonalCounts[name] ?? 0) + 1;
-    }
-
-    final marketplaceCounts = <String, int>{};
+    // ---- 2. Top Product This Season — total quantity sold per product,
+    // for completed orders placed within the current season's start date
+    // through now (e.g. in September, Rainy Season means June 1 through
+    // today).
+    final currentSeason = getCurrentSeason(now);
+    final seasonRange = currentSeasonRange(now);
+    final seasonalQuantities = <String, num>{};
     for (final order in completedOrders) {
-      final name = (order['productName'] ?? order['name'] ?? '').toString();
-      if (name.trim().isEmpty) continue;
-      marketplaceCounts[name] = (marketplaceCounts[name] ?? 0) + 1;
-    }
-
-    final fallbackProductCounts = <String, int>{};
-    for (final product in products) {
-      final name = (product['name'] ?? '').toString();
+      final createdAt = _toDateTime(order['createdAt'])!;
+      if (createdAt.isBefore(seasonRange.start) || createdAt.isAfter(seasonRange.end)) {
+        continue;
+      }
+      final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
       if (name.isEmpty) continue;
-      fallbackProductCounts[name] = (fallbackProductCounts[name] ?? 0) + 1;
+      seasonalQuantities[name] = (seasonalQuantities[name] ?? 0) + _asNum(order['quantity']);
     }
+    final seasonalPick = _topByQuantity(seasonalQuantities);
 
-    String seasonalPick = 'Vegetables';
-    double seasonalShare = 0;
-    if (seasonalCounts.isNotEmpty) {
-      final top = seasonalCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
-      seasonalPick = top.key;
-      final total = seasonalCounts.values.reduce((a, b) => a + b);
-      seasonalShare = total == 0 ? 0 : top.value / total;
-    } else if (fallbackProductCounts.isNotEmpty) {
-      final top = fallbackProductCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
-      seasonalPick = top.key;
-      final total = fallbackProductCounts.values.reduce((a, b) => a + b);
-      seasonalShare = total == 0 ? 0 : top.value / total;
+    // ---- 3. Marketplace Demand — total quantity sold per product from
+    // *recent* completed orders only (last 30 days), so it tracks what's
+    // moving right now rather than repeating the seasonal figure above.
+    // (No search/view tracking exists in this app yet, so purchase
+    // activity is the only demand signal available.)
+    final recentQuantities = <String, num>{};
+    for (final order in completedOrders) {
+      final createdAt = _toDateTime(order['createdAt'])!;
+      if (now.difference(createdAt).inDays > _recentWindowDays) continue;
+      final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      recentQuantities[name] = (recentQuantities[name] ?? 0) + _asNum(order['quantity']);
     }
+    final marketPick = _topByQuantity(recentQuantities);
 
-    String demandPick = 'Vegetables';
-    double marketShare = 0;
-    if (marketplaceCounts.isNotEmpty) {
-      final top = marketplaceCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
-      demandPick = top.key;
-      final total = marketplaceCounts.values.reduce((a, b) => a + b);
-      marketShare = total == 0 ? 0 : top.value / total;
-    } else if (fallbackProductCounts.isNotEmpty) {
-      final top = fallbackProductCounts.entries.reduce((a, b) => a.value >= b.value ? a : b);
-      demandPick = top.key;
-      final total = fallbackProductCounts.values.reduce((a, b) => a + b);
-      marketShare = total == 0 ? 0 : top.value / total;
-    }
-
-    double averagePrice = 0;
-    final validPrices = products
-        .map((product) {
-          final raw = product['price'];
-          if (raw is num) return raw.toDouble();
-          return num.tryParse(raw?.toString() ?? '')?.toDouble() ?? 0.0;
-        })
-        .where((value) => value > 0)
-        .toList();
-
-    if (validPrices.isNotEmpty) {
-      averagePrice = validPrices.reduce((a, b) => a + b) / validPrices.length;
+    // ---- 4. Suggested Focus — generated from whichever real signal is
+    // available, favoring current demand over seasonal demand.
+    final String suggestion;
+    if (marketPick != null) {
+      suggestion =
+          'Suggested focus: Consider listing more $marketPick based on current buyer demand.';
+    } else if (seasonalPick != null) {
+      suggestion =
+          'Suggested focus: Consider increasing your $seasonalPick listings based on seasonal demand.';
+    } else {
+      suggestion =
+          'Suggested focus: Continue listing products while more market data is collected.';
     }
 
     return {
-      'season': seasonLabel(now),
+      'season': currentSeason,
+      'marketAverage': marketAverage,
       'seasonalPick': seasonalPick,
-      'marketPick': demandPick,
-      'marketAverage': averagePrice,
-      'seasonalShare': seasonalShare,
-      'marketShare': marketShare,
+      'marketPick': marketPick,
+      'suggestion': suggestion,
     };
   }
 

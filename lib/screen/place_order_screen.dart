@@ -112,7 +112,10 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
           .doc(widget.productId)
           .get();
       final data = productSnap.data();
-      if (!productSnap.exists || data == null || data['isArchived'] == true) {
+      if (!productSnap.exists ||
+          data == null ||
+          data['isArchived'] == true ||
+          data['isSuspended'] == true) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('This listing is no longer available.')),

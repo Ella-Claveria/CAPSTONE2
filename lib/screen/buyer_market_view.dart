@@ -116,7 +116,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
     final counts = <String, int>{};
     for (final doc in _productDocs) {
       final data = doc.data();
-      if (data['isArchived'] == true) continue;
+      if (data['isArchived'] == true || data['isSuspended'] == true) continue;
       final farmerId = (data['farmerId'] ?? '').toString();
       if (!farmerIds.contains(farmerId)) continue;
       final category = (data['category'] ?? 'General').toString();
