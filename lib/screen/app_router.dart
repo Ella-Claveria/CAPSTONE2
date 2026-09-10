@@ -3,23 +3,30 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'role_selection_screen.dart';
-import 'farmer_home_screen.dart';
-import 'buyer_marketplace_screen.dart';
 import 'onboarding_screen.dart';
 import 'page_transitions.dart';
+import 'auth_route_handler.dart';
+import '../services/auth_routing_service.dart';
+import '../services/connectivity_service.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/branded_loading_screen.dart';
+import '../widgets/no_internet_screen.dart';
 
 /// Gatekeeper shown right after the native splash: a fresh install sees the
 /// onboarding carousel first, then every launch — first-run or not — sends
 /// the app straight to the right screen. Whoever's already logged in on this
 /// device goes straight to their home screen, and everyone else goes to role
 /// selection, which shows a one-tap "continue as" option for any account
-/// saved on this device. Reads the cached copy of their user doc first so
-/// this works even with no internet connection; only falls back to a live
-/// (timeout-guarded) read if nothing is cached yet, and only falls back to
-/// role selection if neither works.
+/// saved on this device.
 ///
+/// AgriTrade+ requires current approval/role data, so the user doc is
+/// always read live (`Source.server`) here — never from Firestore's local
+/// cache — and a failed read is treated as "offline", not as "show
+/// whatever we last saw" (AppBootstrap already confirms connectivity
+/// before this screen is ever reached; this is only a defensive fallback
+/// for a connection that drops in that split second, or a slow network).
+///
+
 /// Deliberately does NOT request location or notification permissions —
 /// those are asked for contextually, the first time the user reaches a
 /// feature that actually needs them (see [BuyerMarketView] for location and
@@ -35,6 +42,7 @@ class _AppRouterState extends State<AppRouter> {
   static const _onboardingCompleteKey = 'onboarding_complete';
 
   bool? _needsOnboarding;
+  bool _offline = false;
 
   @override
   void initState() {
@@ -83,6 +91,8 @@ class _AppRouterState extends State<AppRouter> {
   }
 
   Future<void> _route() async {
+    if (mounted && _offline) setState(() => _offline = false);
+
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
       // Role selection itself now shows any saved accounts for this device
@@ -93,36 +103,41 @@ class _AppRouterState extends State<AppRouter> {
       return;
     }
 
-    final usersRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
-    String? role;
-
+    // Always a live, server-confirmed read — never Firestore's local cache.
+    // A stale cached doc could still show an old approval status or role,
+    // which is exactly what this account must never be routed on.
+    Map<String, dynamic>? data;
+    var reachable = true;
     try {
-      final cached = await usersRef.get(const GetOptions(source: Source.cache));
-      role = cached.data()?['role'] as String?;
+      final live = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 8));
+      data = live.data();
     } catch (_) {
-      // No cached copy yet — fall through to a live read below.
-    }
-
-    if (role == null) {
-      try {
-        final live = await usersRef.get().timeout(const Duration(seconds: 4));
-        role = live.data()?['role'] as String?;
-      } catch (_) {
-        // Offline with nothing cached yet — nothing more to try.
-      }
+      reachable = false;
     }
 
     if (!mounted) return;
-    switch (role) {
-      case 'farmer':
-        _goTo(const FarmerHomeScreen());
-        break;
-      case 'buyer':
-        _goTo(const BuyerMarketplaceScreen());
-        break;
-      default:
-        _goTo(const RoleSelectionScreen());
+
+    if (!reachable) {
+      // Couldn't confirm current data at all — a connectivity problem, not
+      // an invalid account. Stay on this device's real state rather than
+      // guessing at a destination from data that might already be stale.
+      setState(() => _offline = true);
+      return;
     }
+
+    // We have real profile data, so from here on this goes through the
+    // exact same mobile-only (Farmer/Buyer) and farmer-approval-status
+    // rules as a fresh login — resuming an already-logged-in session on
+    // cold start must never be able to skip them (e.g. a farmer whose
+    // application was rejected after their last session, or — in
+    // principle — an admin account somehow still signed in on this
+    // device).
+    final result = AuthRoutingService.decideFromData(data);
+    await applyAuthRouteResult(context, result);
   }
 
   void _goTo(Widget screen) {
@@ -132,6 +147,9 @@ class _AppRouterState extends State<AppRouter> {
 
   @override
   Widget build(BuildContext context) {
+    if (_offline) {
+      return NoInternetScreen(message: kNoInternetMessage, onRetry: _route);
+    }
     if (_needsOnboarding == true) {
       return OnboardingScreen(onGetStarted: _finishOnboarding);
     }

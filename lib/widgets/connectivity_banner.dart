@@ -1,13 +1,17 @@
 import 'dart:async';
 
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 
-/// Wraps the whole app so it can tell the user when they're offline (still
-/// fully usable — Firestore's own on-device cache keeps the app working
-/// off cached data) and when they've just come back online (Firestore
-/// syncs automatically the moment connectivity returns; this is purely a
-/// visible confirmation that a sync is happening).
+import '../services/connectivity_service.dart';
+
+/// Wraps the whole app so it can warn the user the moment connectivity is
+/// lost while they're already inside it. AgriTrade+ requires live Firebase
+/// data, so this is a warning, not just an FYI — screens keep whatever they
+/// last rendered, but every write action re-checks connectivity itself
+/// (see requireOnlineOrError) and refuses to run while offline rather than
+/// silently queuing a marketplace transaction for later. Reads its status
+/// from the single shared [ConnectivityService] so there's only ever one
+/// connectivity watchdog running, not one per widget.
 class ConnectivityBanner extends StatefulWidget {
   final Widget child;
   const ConnectivityBanner({super.key, required this.child});
@@ -17,42 +21,31 @@ class ConnectivityBanner extends StatefulWidget {
 }
 
 class _ConnectivityBannerState extends State<ConnectivityBanner> {
-  StreamSubscription<List<ConnectivityResult>>? _sub;
+  StreamSubscription<bool>? _sub;
   bool _offline = false;
-  bool _showSyncing = false;
-  Timer? _syncingTimer;
+  bool _showBackOnline = false;
+  Timer? _backOnlineTimer;
 
   @override
   void initState() {
     super.initState();
-    _init();
+    final known = ConnectivityService.instance.lastKnownOnline;
+    if (known != null) _offline = !known;
+    _sub = ConnectivityService.instance.onStatusChanged.listen(_handle);
   }
 
-  Future<void> _init() async {
-    try {
-      final initial = await Connectivity().checkConnectivity();
-      _handle(initial);
-    } catch (_) {
-      // Connectivity plugin unavailable on this platform — assume online
-      // rather than showing a false "offline" banner forever.
-    }
-    _sub = Connectivity().onConnectivityChanged.listen(_handle);
-  }
-
-  void _handle(List<ConnectivityResult> results) {
-    final isOffline = results.every((r) => r == ConnectivityResult.none);
-    if (!mounted || isOffline == _offline) return;
-
+  void _handle(bool online) {
+    if (!mounted) return;
     final wasOffline = _offline;
-    setState(() => _offline = isOffline);
+    setState(() => _offline = !online);
 
-    if (wasOffline && !isOffline) {
-      // Just came back online — Firestore's local cache syncs on its own;
-      // this is just a brief, visible confirmation for the user.
-      setState(() => _showSyncing = true);
-      _syncingTimer?.cancel();
-      _syncingTimer = Timer(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _showSyncing = false);
+    if (wasOffline && online) {
+      // Just came back online — Firestore's live listeners resume on their
+      // own; this is just a brief, visible confirmation for the user.
+      setState(() => _showBackOnline = true);
+      _backOnlineTimer?.cancel();
+      _backOnlineTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _showBackOnline = false);
       });
     }
   }
@@ -60,7 +53,7 @@ class _ConnectivityBannerState extends State<ConnectivityBanner> {
   @override
   void dispose() {
     _sub?.cancel();
-    _syncingTimer?.cancel();
+    _backOnlineTimer?.cancel();
     super.dispose();
   }
 
@@ -69,7 +62,7 @@ class _ConnectivityBannerState extends State<ConnectivityBanner> {
     return Stack(
       children: [
         widget.child,
-        if (_offline || _showSyncing)
+        if (_offline || _showBackOnline)
           Positioned(
             top: 0,
             left: 0,
@@ -89,12 +82,15 @@ class _ConnectivityBannerState extends State<ConnectivityBanner> {
                         size: 14,
                       ),
                       const SizedBox(width: 6),
-                      Text(
-                        _offline
-                            ? 'No internet connection — showing saved data'
-                            : 'Back online — syncing recent activity…',
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                      Flexible(
+                        child: Text(
+                          _offline
+                              ? 'No internet connection — some actions are unavailable until you\'re back online.'
+                              : 'Back online — refreshing…',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                          textAlign: TextAlign.center,
+                        ),
                       ),
                     ],
                   ),
