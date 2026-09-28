@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import '../services/connectivity_service.dart';
 import '../services/notification_navigation_service.dart';
@@ -19,9 +20,10 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   static const Color _dark = Color(0xFF1B5E20);
   static const Color _accent = Color(0xFFDCEDC8);
-  static const Color _bg = Color(0xFFF7F9F5);
+  static const Color _bg = Colors.white;
 
   CollectionReference<Map<String, dynamic>>? _itemsRef;
+  AuthorizationStatus? _permissionStatus;
 
   @override
   void initState() {
@@ -38,6 +40,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     // so by the time they've navigated here it's already been decided —
     // this just keeps the FCM token fresh (a silent no-op otherwise).
     PushNotificationService().setupFCM().catchError((_) {});
+    _checkPermission();
+  }
+
+  // Surfaces WHY push notifications might not be arriving — a denied OS
+  // permission is otherwise invisible: the app never re-prompts for it,
+  // and every failure downstream of it (no token saved, so
+  // notifyUser skips the push) is silent by design so it never blocks
+  // anything else. This is the one place that actually tells the user.
+  Future<void> _checkPermission() async {
+    try {
+      final settings = await FirebaseMessaging.instance.getNotificationSettings();
+      if (!mounted) return;
+      setState(() => _permissionStatus = settings.authorizationStatus);
+    } catch (_) {}
   }
 
   // Marking a notification read is itself a write, so — same as the rest of
@@ -101,6 +117,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return Icons.local_shipping_outlined;
       case 'verification_status':
         return Icons.verified_user_outlined;
+      case 'moderation_warning':
+        return Icons.warning_amber_rounded;
       default:
         return Icons.notifications_none_rounded;
     }
@@ -144,41 +162,112 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 ),
             ],
           ),
-          body: Builder(builder: (context) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator(color: _dark));
-            }
-            if (snapshot.hasError) {
-              return const Center(child: Text('Error loading notifications. Please try again.'));
-            }
+          body: Column(
+            children: [
+              _permissionBanner(),
+              Expanded(
+                child: Builder(builder: (context) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator(color: _dark));
+                  }
+                  if (snapshot.hasError) {
+                    return const Center(child: Text('Error loading notifications. Please try again.'));
+                  }
 
-            if (docs.isEmpty) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.done_all, size: 64, color: Colors.grey[300]),
-                    const SizedBox(height: 16),
-                    Text('No notifications yet',
-                        style: TextStyle(fontSize: 16, color: Colors.grey[600], fontWeight: FontWeight.w500)),
-                    const SizedBox(height: 8),
-                    Text('New messages, orders, and updates will appear here.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 13, color: Colors.grey[500])),
-                  ],
-                ),
-              );
-            }
+                  if (docs.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.done_all, size: 64, color: Colors.grey[300]),
+                          const SizedBox(height: 16),
+                          Text('No notifications yet',
+                              style: TextStyle(fontSize: 16, color: Colors.grey[600], fontWeight: FontWeight.w500)),
+                          const SizedBox(height: 8),
+                          Text('New messages, orders, and updates will appear here.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+                        ],
+                      ),
+                    );
+                  }
 
-            return ListView.separated(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
-              itemCount: docs.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 4),
-              itemBuilder: (context, i) => _notificationTile(docs[i]),
-            );
-          }),
+                  return ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
+                    itemCount: docs.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 4),
+                    itemBuilder: (context, i) => _notificationTile(docs[i]),
+                  );
+                }),
+              ),
+            ],
+          ),
         );
       },
+    );
+  }
+
+  Widget _permissionBanner() {
+    final status = _permissionStatus;
+    if (status == null || status == AuthorizationStatus.authorized) {
+      return const SizedBox.shrink();
+    }
+
+    // notDetermined: the OS has never actually asked yet (rare — usually
+    // resolved before landing here), so a fresh request still shows the
+    // real permission dialog. denied: Android never re-prompts once
+    // denied, so the only path back is the phone's own Settings.
+    final canPromptAgain = status == AuthorizationStatus.notDetermined;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.red.shade200),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.notifications_off_outlined, color: Colors.red.shade700, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  canPromptAgain
+                      ? "Push notifications aren't turned on yet, so you won't be alerted "
+                          "about new messages or orders while the app is closed."
+                      : "Push notifications are off for AgriTrade+, so you won't be alerted "
+                          "about new messages or orders while the app is closed. To turn them "
+                          "on: phone Settings → Apps → AgriTrade+ → Notifications.",
+                  style: TextStyle(fontSize: 12.5, color: Colors.red.shade900, height: 1.4),
+                ),
+                if (canPromptAgain) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 32,
+                    child: OutlinedButton(
+                      onPressed: () async {
+                        await PushNotificationService().setupFCM();
+                        _checkPermission();
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red.shade900,
+                        side: BorderSide(color: Colors.red.shade300),
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                      ),
+                      child: const Text('Enable Notifications', style: TextStyle(fontSize: 12.5)),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

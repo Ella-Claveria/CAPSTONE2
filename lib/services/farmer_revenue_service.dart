@@ -180,6 +180,34 @@ class FarmerRevenueService {
     return quantities.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
+  /// Top products by completed-order revenue, for one farmer's own orders
+  /// — powers the Market tab's "Best-Selling Products" card. Mirrors the
+  /// platform-wide single-product version on the admin dashboard, but
+  /// scoped to a farmer's [orders] and returning a ranked list.
+  static List<({String name, num revenue, num quantity})> bestSellingProducts({
+    required List<Map<String, dynamic>> orders,
+    int limit = 3,
+  }) {
+    final revenueByProduct = <String, num>{};
+    final qtyByProduct = <String, num>{};
+    for (final order in orders) {
+      final status = (order['status'] ?? '').toString().toLowerCase();
+      if (status != 'completed') continue;
+      final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      revenueByProduct[name] = (revenueByProduct[name] ?? 0) + _asNum(order['total']);
+      qtyByProduct[name] = (qtyByProduct[name] ?? 0) + _asNum(order['quantity']);
+    }
+    if (revenueByProduct.isEmpty) return const [];
+
+    final ranked = revenueByProduct.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return ranked
+        .take(limit)
+        .map((e) => (name: e.key, revenue: e.value, quantity: qtyByProduct[e.key] ?? 0))
+        .toList();
+  }
+
   /// Market insights for the "Market Objective" card — entirely derived
   /// from live marketplace data (active listings + completed orders), with
   /// no hardcoded products, prices, or demand values. Any metric without

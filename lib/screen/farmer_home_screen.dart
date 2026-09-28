@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../services/message_service.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/coach_mark.dart';
 import '../widgets/notification_bell.dart';
+import '../widgets/unread_messages_dot.dart';
 import 'add_product_screen.dart';
 import 'market_tab.dart';
 import 'chat_list_screen.dart';
@@ -32,9 +32,7 @@ class FarmerHomeScreen extends StatefulWidget {
 
 class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
   static const Color _dark = Color(0xFF1B5E20);
-  static const Color _bg = Color(0xFFF7F9F5);
-
-  final MessageService _messageService = MessageService();
+  static const Color _bg = Colors.white;
 
   // 0 = Market, 1 = Messages, 2 = Orders, 3 = Profile
   late int _selectedIndex = widget.initialIndex;
@@ -45,9 +43,6 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
   @override
   void initState() {
     super.initState();
-    // Register this device for push notifications so new messages can
-    // reach the farmer even when the app is backgrounded.
-    _messageService.registerFcmToken();
     // If the app was launched (cold start) by tapping a push notification,
     // this replays that navigation now that routing has actually finished.
     PushNotificationService.consumePendingNavigation();
@@ -218,7 +213,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
             ),
             child: ClipOval(
               child: Image.asset(
-                'assets/logo.png',
+                'assets/images/logo.png',
                 width: 36,
                 height: 36,
                 fit: BoxFit.cover,
@@ -248,7 +243,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
                 _navItem(0, Icons.storefront_outlined, Icons.storefront,
                     AppLocalizations.of(context)!.navMarket),
                 _navItem(1, Icons.mail_outline, Icons.mail,
-                    AppLocalizations.of(context)!.navMessages),
+                    AppLocalizations.of(context)!.navMessages, showUnreadDot: true),
                 _buildAddButton(),
                 _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag,
                     AppLocalizations.of(context)!.navOrders, key: _ordersTabKey),
@@ -275,9 +270,11 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     );
   }
 
-  Widget _navItem(int index, IconData icon, IconData activeIcon, String label, {Key? key}) {
+  Widget _navItem(int index, IconData icon, IconData activeIcon, String label,
+      {Key? key, bool showUnreadDot = false}) {
     final selected = _selectedIndex == index;
     final color = selected ? _dark : Colors.grey;
+    final iconWidget = Icon(selected ? activeIcon : icon, color: color, size: 24);
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => _selectedIndex = index),
@@ -286,7 +283,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(selected ? activeIcon : icon, color: color, size: 24),
+            showUnreadDot ? UnreadMessagesDot(child: iconWidget) : iconWidget,
             const SizedBox(height: 3),
             Text(
               label,

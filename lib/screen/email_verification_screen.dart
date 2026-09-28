@@ -158,7 +158,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
         decoration: const BoxDecoration(
           color: AppTheme.dark,
           image: DecorationImage(
-            image: AssetImage('assets/background.png'),
+            image: AssetImage('assets/images/onboarding_1_farming.png'),
             fit: BoxFit.cover,
           ),
         ),

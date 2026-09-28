@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/order_service.dart';
+import '../widgets/open_in_maps_button.dart';
 import 'add_review_screen.dart';
 
 class BuyerOrdersScreen extends StatefulWidget {
@@ -64,24 +65,22 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
 
   Widget _filterTab(String label, String value) {
     final selected = _filter == value;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _filter = value),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: selected ? _dark : Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: selected ? _dark : Colors.grey.shade300),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: selected ? Colors.white : Colors.grey[700],
-              fontWeight: FontWeight.w600,
-              fontSize: 13,
-            ),
+    return GestureDetector(
+      onTap: () => setState(() => _filter = value),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? _dark : Colors.white,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: selected ? _dark : Colors.grey.shade300),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: selected ? Colors.white : Colors.grey[700],
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
           ),
         ),
       ),
@@ -93,6 +92,9 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     switch (status) {
       case 'confirmed':
         c = _dark;
+        break;
+      case 'shipped':
+        c = Colors.blue;
         break;
       case 'completed':
         c = Colors.blueGrey;
@@ -166,12 +168,18 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     final name = d['productName']?.toString() ?? 'Product';
     final qty = d['quantityLabel']?.toString() ?? '${d['quantity'] ?? ''} ${d['unit'] ?? ''}'.trim();
     final seller = d['sellerName']?.toString() ?? 'Farmer';
+    final sellerId = d['sellerId']?.toString() ?? '';
     final totalRaw = d['total'];
     final total = totalRaw is num ? totalRaw : (num.tryParse('$totalRaw') ?? 0);
     final status = (d['status'] ?? 'pending').toString();
     final method = d['deliveryMethod']?.toString() ?? '';
     final imageUrl = d['imageUrl']?.toString();
     final isReviewed = d['reviewedAt'] != null;
+    // Exact farm location stays hidden until the seller has actually
+    // committed to the order — matches the same privacy promise shown on
+    // the buyer map view (barangay clusters only, no individual pins,
+    // until an order is confirmed).
+    final locationRevealed = status == 'confirmed' || status == 'shipped' || status == 'completed';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -214,6 +222,21 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                         Icon(Icons.person, size: 13, color: Colors.grey[500]),
                         const SizedBox(width: 3),
                         Text(seller, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                        if (locationRevealed && sellerId.isNotEmpty) ...[
+                          const SizedBox(width: 6),
+                          StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                            stream: FirebaseFirestore.instance.collection('users').doc(sellerId).snapshots(),
+                            builder: (context, sellerSnap) {
+                              final sellerData = sellerSnap.data?.data();
+                              return MapPinIconButton(
+                                latitude: (sellerData?['latitude'] as num?)?.toDouble(),
+                                longitude: (sellerData?['longitude'] as num?)?.toDouble(),
+                                farmerName: seller,
+                                size: 16,
+                              );
+                            },
+                          ),
+                        ],
                       ],
                     ),
                   ],
@@ -291,13 +314,16 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
           child: Text('My Orders',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.black87)),
         ),
-        Padding(
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
               _filterTab('Pending', 'pending'),
               const SizedBox(width: 8),
               _filterTab('Confirmed', 'confirmed'),
+              const SizedBox(width: 8),
+              _filterTab('Shipped', 'shipped'),
               const SizedBox(width: 8),
               _filterTab('Completed', 'completed'),
               const SizedBox(width: 8),

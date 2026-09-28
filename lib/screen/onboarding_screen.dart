@@ -33,17 +33,17 @@ class _OnboardingItem {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   static const List<_OnboardingItem> _items = [
     _OnboardingItem(
-      image: 'assets/background.png',
+      image: 'assets/images/onboarding_1_farming.png',
       title: 'Discover Fresh Produce',
       description: 'Find fresh products directly from verified local farmers.',
     ),
     _OnboardingItem(
-      image: 'assets/farmers.png',
+      image: 'assets/images/onboarding_2_connection.png',
       title: 'Support Local Farmers',
       description: 'Connect with local farmers and livestock raisers in your community.',
     ),
     _OnboardingItem(
-      image: 'assets/taalview.png',
+      image: 'assets/images/onboarding_3_marketplace.png',
       title: 'Trade with Confidence',
       description: 'List products, place orders, and receive important transaction updates in one place.',
     ),
@@ -199,7 +199,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           backgroundColor: AppTheme.dark,
                           foregroundColor: Colors.white,
                           elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
                         ),
                         child: _submitting
                             ? const SizedBox(
@@ -259,32 +259,17 @@ class _OnboardPageView extends StatelessWidget {
           ),
         ),
 
-        // ----- Small brand mark, upper-middle. A small white disc gives -----
-        // ----- the logo contrast against whatever the photo behind it -----
-        // ----- happens to be (sky, foliage, water) without becoming the -----
-        // ----- oversized generic icon this replaces. -----
+        // ----- Brand mark, upper-middle. No background — just the logo. -----
         SafeArea(
           child: Align(
             alignment: Alignment.topCenter,
             child: Padding(
-              padding: const EdgeInsets.only(top: 20),
-              child: Container(
-                width: 60,
-                height: 60,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 8, offset: const Offset(0, 3)),
-                  ],
-                ),
-                child: Image.asset(
-                  'assets/logo.png',
-                  fit: BoxFit.contain,
-                  errorBuilder: (context, error, stackTrace) =>
-                      const Icon(Icons.eco, size: 26, color: AppTheme.dark),
-                ),
+              padding: const EdgeInsets.only(top: 44),
+              child: Image.asset(
+                'assets/images/logo.png',
+                height: 150,
+                errorBuilder: (context, error, stackTrace) =>
+                    const Icon(Icons.eco, size: 84, color: Colors.white),
               ),
             ),
           ),

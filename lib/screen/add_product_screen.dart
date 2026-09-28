@@ -23,7 +23,7 @@ class AddProductScreen extends StatefulWidget {
 class _AddProductScreenState extends State<AddProductScreen> {
   static const Color _darkGreen = Color(0xFF1B5E20);
   static const Color _midGreen = Color(0xFF2E7D32);
-  static const Color _lightGreenBg = Color(0xFFF1F8E9);
+  static const Color _lightGreenBg = Colors.white;
   static const Color _lightGreenAccent = Color(0xFFDCEDC8);
 
   final _nameController = TextEditingController();

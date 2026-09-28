@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/audit_log_service.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
@@ -8,7 +9,13 @@ import '../widgets/agritrade_text.dart';
 /// verify it's them and pick a new password, then confirms it was sent.
 class ForgotPasswordScreen extends StatefulWidget {
   final String initialEmail;
-  const ForgotPasswordScreen({super.key, this.initialEmail = ''});
+
+  // Whether this was opened from the Admin login door — only that door's
+  // reset requests are recorded in the Admin Portal's Audit Log (see
+  // AuditLogService); farmer/buyer resets aren't in scope for it.
+  final bool isAdmin;
+
+  const ForgotPasswordScreen({super.key, this.initialEmail = '', this.isAdmin = false});
 
   @override
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
@@ -43,6 +50,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
       return;
+    }
+    if (widget.isAdmin) {
+      AuditLogService.logPreAuth(AuditAction.passwordResetRequested, email: email);
     }
     setState(() => _sent = true);
   }
@@ -84,7 +94,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     children: [
                       Center(
                         child: Image.asset(
-                          'assets/logo.png',
+                          'assets/images/logo.png',
                           width: 70,
                           height: 70,
                           errorBuilder: (context, error, stackTrace) => Container(

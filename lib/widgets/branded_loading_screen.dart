@@ -10,11 +10,11 @@ class BrandedLoadingScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F8E9),
+      backgroundColor: Colors.white,
       body: Center(
         child: ClipOval(
           child: Image.asset(
-            'assets/logo.png',
+            'assets/images/logo.png',
             width: 120,
             height: 120,
             fit: BoxFit.cover,

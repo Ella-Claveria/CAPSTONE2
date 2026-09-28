@@ -1,9 +1,49 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'push_notification_service.dart';
+
+/// What happened when the user tapped "Continue with Google".
+enum GoogleSignInOutcome { signedIn, needsProfile, cancelled, error }
+
+/// Result of [AuthService.signInWithGoogle] — [needsProfile] means this
+/// Google account authenticated successfully but has no users/{uid}
+/// Firestore document yet (a brand-new sign-in), so the caller should send
+/// them to pick a role (and, for farmers, barangay + certificate) instead
+/// of routing them straight into the app.
+class GoogleSignInResult {
+  final GoogleSignInOutcome outcome;
+  final String? uid;
+  final String? email;
+  final String? displayName;
+  final String? message;
+
+  const GoogleSignInResult._(
+    this.outcome, {
+    this.uid,
+    this.email,
+    this.displayName,
+    this.message,
+  });
+
+  const GoogleSignInResult.signedIn(String uid) : this._(GoogleSignInOutcome.signedIn, uid: uid);
+
+  const GoogleSignInResult.needsProfile({
+    required String uid,
+    required String? email,
+    required String? displayName,
+  }) : this._(GoogleSignInOutcome.needsProfile, uid: uid, email: email, displayName: displayName);
+
+  const GoogleSignInResult.cancelled() : this._(GoogleSignInOutcome.cancelled);
+
+  const GoogleSignInResult.error(String message) : this._(GoogleSignInOutcome.error, message: message);
+}
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final _users = FirebaseFirestore.instance.collection('users');
+  final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
+  bool _googleSignInReady = false;
 
   // The signed-in user's UID, or null if nobody's logged in.
   String? get currentUid => _auth.currentUser?.uid;
@@ -77,6 +117,27 @@ class AuthService {
     }
   }
 
+  // Buyers have no verification step (see signUp's approvalStatus
+  // comment) and aren't restricted to Laurel the way farmers are — just a
+  // map pin (MyLocationField/PickLocationScreen) anywhere in the
+  // Philippines, so unlike farmers there's no barangay/municipality/
+  // province to store, only the raw coordinates.
+  Future<String?> saveBuyerLocation({
+    required String uid,
+    required double latitude,
+    required double longitude,
+  }) async {
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        'latitude': latitude,
+        'longitude': longitude,
+      }, SetOptions(merge: true));
+      return null;
+    } catch (e) {
+      return 'Could not save your location. Please try again.';
+    }
+  }
+
   Future<String?> createPendingVerificationApplication({
     required String uid,
     required String fullName,
@@ -123,6 +184,86 @@ class AuthService {
       return doc.data()?['document'] as String?;
     } catch (e) {
       return null;
+    }
+  }
+
+  Future<void> _ensureGoogleSignInReady() async {
+    if (_googleSignInReady) return;
+    // No clientId/serverClientId here — on Android/iOS these come from
+    // google-services.json / GoogleService-Info.plist automatically, as
+    // long as Google is enabled as a Sign-In provider in the Firebase
+    // Console (that step is what populates the web OAuth client those
+    // files need).
+    await _googleSignIn.initialize();
+    _googleSignInReady = true;
+  }
+
+  // "Continue with Google". Returns GoogleSignInOutcome.needsProfile when
+  // this Google account has no users/{uid} doc yet (first time signing in
+  // with it) — the caller should collect a role (and, for farmers,
+  // barangay + certificate) rather than route them into the app.
+  Future<GoogleSignInResult> signInWithGoogle() async {
+    try {
+      await _ensureGoogleSignInReady();
+      final account = await _googleSignIn.authenticate();
+      final idToken = account.authentication.idToken;
+      if (idToken == null) {
+        return const GoogleSignInResult.error('Could not sign in with Google. Please try again.');
+      }
+
+      final credential = GoogleAuthProvider.credential(idToken: idToken);
+      final userCred = await _auth.signInWithCredential(credential);
+      final uid = userCred.user?.uid;
+      if (uid == null) {
+        return const GoogleSignInResult.error('Something went wrong. Please try again.');
+      }
+
+      final doc = await _users.doc(uid).get();
+      if (doc.exists) {
+        return GoogleSignInResult.signedIn(uid);
+      }
+      return GoogleSignInResult.needsProfile(
+        uid: uid,
+        email: userCred.user?.email ?? account.email,
+        displayName: userCred.user?.displayName ?? account.displayName,
+      );
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        return const GoogleSignInResult.cancelled();
+      }
+      return const GoogleSignInResult.error('Google sign-in failed. Please try again.');
+    } on FirebaseAuthException catch (e) {
+      return GoogleSignInResult.error(_messageFromCode(e.code));
+    } catch (e) {
+      return const GoogleSignInResult.error('Something went wrong. Please try again.');
+    }
+  }
+
+  // Creates the users/{uid} doc for a Google account signing in for the
+  // very first time — the same shape signUp() writes, minus the
+  // password-account-only fields. Google already verifies the email, so
+  // there's no separate email-verification step for this path.
+  Future<String?> completeGoogleProfile({
+    required String uid,
+    required String fullName,
+    required String email,
+    required String role,
+  }) async {
+    try {
+      await _auth.currentUser?.updateDisplayName(fullName.trim());
+      await _users.doc(uid).set({
+        'fullName': fullName.trim(),
+        'name': fullName.trim(),
+        'email': email.trim(),
+        'role': role,
+        'approvalStatus': role == 'farmer' ? 'pending' : 'approved',
+        'isVerified': role != 'farmer',
+        'authProvider': 'google',
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return null;
+    } catch (e) {
+      return 'Something went wrong. Please try again.';
     }
   }
 
@@ -251,7 +392,19 @@ class AuthService {
   // 4. SIGN OUT — skip if you already have one.
   // ----------------------------------------------------------
   Future<void> signOut() async {
+    // Must run before FirebaseAuth.signOut() — it needs to know which
+    // account's fcmTokens to clean up this device's token from (see
+    // PushNotificationService.unregisterToken's doc comment).
+    await PushNotificationService().unregisterToken();
     await FirebaseAuth.instance.signOut();
+    // Also drop the cached Google session, if any, so a later "Continue
+    // with Google" doesn't silently re-use it. Harmless no-op if this
+    // device never signed in with Google.
+    if (_googleSignInReady) {
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
+    }
   }
 
   // ----------------------------------------------------------
@@ -319,7 +472,7 @@ class AuthService {
   // ============================================================
 
   Future<void> logOut() async {
-    await _auth.signOut();
+    await signOut();
   }
 
   String _messageFromCode(String code) {
@@ -348,25 +501,11 @@ class AuthService {
   // ── Admin: fetch farmers awaiting approval ──
   // Returns a real-time stream so the dashboard updates automatically
   // whenever a new farmer registers or an admin approves/rejects someone.
-  Stream<QuerySnapshot> getPendingFarmers() {
+  Stream<QuerySnapshot<Map<String, dynamic>>> getPendingFarmers() {
     return FirebaseFirestore.instance
         .collection('users')
         .where('role', isEqualTo: 'farmer')
         .where('approvalStatus', isEqualTo: 'pending')
         .snapshots();
-  }
-
-  // ── Admin: approve a farmer application ──
-  Future<void> approveFarmer(String uid) async {
-    await FirebaseFirestore.instance.collection('users').doc(uid).update({
-      'approvalStatus': 'approved',
-    });
-  }
-
-  // ── Admin: reject a farmer application ──
-  Future<void> rejectFarmer(String uid) async {
-    await FirebaseFirestore.instance.collection('users').doc(uid).update({
-      'approvalStatus': 'rejected',
-    });
   }
 }

@@ -1,108 +1,71 @@
 name: agritrade
 description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+publish_to: 'none'
 
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
 version: 1.0.0+1
 
 environment:
   sdk: ^3.12.2
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
 dependencies:
   flutter:
     sdk: flutter
+
   flutter_localizations:
     sdk: flutter
+
   image_picker: ^1.1.2
   cloudinary_public: ^0.23.1
   cached_network_image: ^3.4.1
   cupertino_icons: ^1.0.8
   google_fonts: ^8.2.0
-  firebase_core: ^4.12.1
-  firebase_auth: ^6.5.6
-  cloud_firestore: ^6.7.1
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
+  cloud_firestore: ^6.10.0
+  firebase_messaging: ^16.7.0
   intl: 0.20.2
   connectivity_plus: ^6.1.0
-  firebase_messaging: ^16.5.0
   url_launcher: ^6.3.1
   google_maps_flutter: ^2.5.3
   geolocator: ^13.0.1
-  flutter_map: ^7.0.2
-  latlong2: ^0.9.1
   shared_preferences: ^2.5.3
   flutter_local_notifications: ^22.3.0
-
+  pdf: ^3.11.1
+  printing: ^5.13.4
+  file_picker: ^13.1.0
+  excel: ^4.0.6
+  google_sign_in: ^7.2.0
+  flutter_svg: ^2.3.0
+  fl_chart: ^1.2.0
+  cloud_functions: ^6.5.0
+  web: ^1.1.1
+  archive: ^3.6.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_launcher_icons: ^0.13.1
 
-
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
   flutter_lints: ^6.0.0
-  flutter_native_splash: ^2.4.6
+  flutter_launcher_icons: ^0.14.4
 
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
-
-# The following section is specific to Flutter packages.
 flutter:
-
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
   generate: true
   uses-material-design: true
+
   assets:
-    - assets/background.png
-    - assets/logo.png
-    - assets/background_login.png
-    - assets/buyer.png
-    - assets/farmer.png
-    - assets/farmers.png
-    - assets/taalview.png
-    - assets/icon_foreground.png
+    - assets/images/logo.png
+    - assets/images/google_logo.svg
+    - assets/images/onboarding_1_farming.png
+    - assets/images/onboarding_2_connection.png
+    - assets/images/onboarding_3_marketplace.png
+    - assets/images/login_hero.png
+    - assets/images/bg_admin.png
+    - assets/images/bg_panel.png
 
 flutter_launcher_icons:
-  android: "launcher_icon"
+  android: true
   ios: true
-  image_path: "assets/logo.png"
-  # Same current logo for the adaptive icon's foreground layer, on a plain
-  # white background — matches this logo's own dark-green/gold linework and
-  # keeps it distinct from assets/icon_foreground.png, an older/unrelated
-  # badge design that is no longer used anywhere in the app itself.
+  remove_alpha_ios: true
+  image_path: "assets/images/app_icon_flat.png"
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/logo.png"
-
-flutter_native_splash:
-  color: "#F1F8E9"
-  image: "assets/logo.png"
-  android_12:
-    color: "#F1F8E9"
-    image: "assets/logo.png"
-  web: false
-
+  adaptive_icon_foreground: "assets/images/app_icon_foreground.png"

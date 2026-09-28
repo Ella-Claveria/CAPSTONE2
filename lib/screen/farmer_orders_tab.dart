@@ -27,7 +27,7 @@ class _OrdersTabState extends State<OrdersTab> {
     setState(() => _isRefreshing = false);
   }
 
-  // 'pending' | 'confirmed' | 'completed'
+  // 'pending' | 'confirmed' | 'shipped' | 'completed'
   String _filter = 'pending';
   final Map<String, int> _seenOrderCounts = <String, int>{};
 
@@ -59,6 +59,45 @@ class _OrdersTabState extends State<OrdersTab> {
     _snack(err ?? 'Order confirmed.');
   }
 
+  Future<void> _markShipped(String id) async {
+    final err = await _orderService.updateStatus(id, 'shipped');
+    if (!mounted) return;
+    _snack(err ?? 'Order marked shipped.');
+  }
+
+  Future<void> _markComplete(String id) async {
+    final err = await _orderService.updateStatus(id, 'completed');
+    if (!mounted) return;
+    _snack(err ?? 'Order marked complete.');
+  }
+
+  Future<void> _reject(String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Reject this order?'),
+        content: const Text(
+          'The buyer will be notified and the item quantity will be returned to your inventory.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Reject', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final err = await _orderService.rejectOrder(id);
+    if (!mounted) return;
+    _snack(err ?? 'Order rejected.');
+  }
+
   void _showDetails(Map<String, dynamic> d) {
     final name =
         d['productName']?.toString() ?? d['name']?.toString() ?? 'Product';
@@ -83,22 +122,6 @@ class _OrdersTabState extends State<OrdersTab> {
             onPressed: () => Navigator.pop(context),
             child: const Text('Close'),
           ),
-          if (status == 'confirmed')
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                final err = await _orderService.updateStatus(
-                  d['id'].toString(),
-                  'completed',
-                );
-                if (!mounted) return;
-                _snack(err ?? 'Order marked complete.');
-              },
-              child: const Text(
-                'Mark Complete',
-                style: TextStyle(color: _dark, fontWeight: FontWeight.w600),
-              ),
-            ),
         ],
       ),
     );
@@ -135,6 +158,7 @@ class _OrdersTabState extends State<OrdersTab> {
                           final counts = <String, int>{
                             'pending': 0,
                             'confirmed': 0,
+                            'shipped': 0,
                             'completed': 0,
                           };
                           for (final doc in snapshot.data?.docs ?? const []) {
@@ -153,6 +177,8 @@ class _OrdersTabState extends State<OrdersTab> {
                                 _filterTab('Pending', 'pending', counts['pending']!),
                                 const SizedBox(width: 8),
                                 _filterTab('Confirmed', 'confirmed', counts['confirmed']!),
+                                const SizedBox(width: 8),
+                                _filterTab('Shipped', 'shipped', counts['shipped']!),
                                 const SizedBox(width: 8),
                                 _filterTab('Completed', 'completed', counts['completed']!),
                               ],
@@ -271,8 +297,14 @@ class _OrdersTabState extends State<OrdersTab> {
       case 'confirmed':
         c = _dark;
         break;
+      case 'shipped':
+        c = Colors.blue;
+        break;
       case 'completed':
         c = Colors.blueGrey;
+        break;
+      case 'rejected':
+        c = Colors.red;
         break;
       default:
         c = const Color(0xFFB8860B); // amber for pending
@@ -419,38 +451,78 @@ class _OrdersTabState extends State<OrdersTab> {
     String status,
     Map<String, dynamic> data,
   ) {
-    if (status == 'pending') {
-      return [
-        ElevatedButton(
-          onPressed: () => _confirm(id),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _dark,
-            foregroundColor: Colors.white,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-          child: const Text('Confirm'),
-        ),
-      ];
-    }
-    // confirmed or completed
-    return [
-      OutlinedButton(
-        onPressed: () => _showDetails(data),
-        style: OutlinedButton.styleFrom(
-          foregroundColor: _dark,
-          side: BorderSide(color: Colors.grey.shade400),
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-        child: const Text('Details'),
+    final detailsButton = OutlinedButton(
+      onPressed: () => _showDetails(data),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: _dark,
+        side: BorderSide(color: Colors.grey.shade400),
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 9),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
       ),
-    ];
+      child: const Text('Details'),
+    );
+
+    switch (status) {
+      case 'pending':
+        return [
+          OutlinedButton(
+            onPressed: () => _reject(id),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red,
+              side: const BorderSide(color: Colors.red),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Reject'),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () => _confirm(id),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _dark,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Confirm'),
+          ),
+        ];
+      case 'confirmed':
+        return [
+          detailsButton,
+          const SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () => _markShipped(id),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _dark,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Mark Shipped'),
+          ),
+        ];
+      case 'shipped':
+        return [
+          detailsButton,
+          const SizedBox(width: 8),
+          ElevatedButton(
+            onPressed: () => _markComplete(id),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _dark,
+              foregroundColor: Colors.white,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('Mark Complete'),
+          ),
+        ];
+      default:
+        return [detailsButton];
+    }
   }
 
   Widget _thumbFallback(String name) {

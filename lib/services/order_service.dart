@@ -81,6 +81,11 @@ class OrderService {
           'buyerAddress': buyerAddress,
           'productId': productId,
           'productName': productName,
+          // Denormalized from the product doc we already read above (same
+          // reasoning as productName/imageUrl) — lets the admin dashboard's
+          // "Sales by Category" chart query orders directly instead of
+          // joining every order back to its product.
+          'category': productData?['category'],
           'imageUrl': imageUrl,
           'quantity': q,
           'unit': unit,
@@ -105,7 +110,8 @@ class OrderService {
     }
   }
 
-  // Confirm / reject / complete an order.
+  // Confirm / ship / complete an order. Rejecting needs rejectOrder below
+  // instead, since it also has to give the reserved stock back.
   Future<String?> updateStatus(String id, String status) async {
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
@@ -118,6 +124,53 @@ class OrderService {
       return null;
     } catch (e) {
       return 'Could not update the order. Please try again.';
+    }
+  }
+
+  // Rejects a pending order and returns its reserved stock to the product
+  // — createOrder decrements the product's quantity immediately when the
+  // order is placed (not on confirm), so rejecting without restocking
+  // would leak that inventory. Both writes happen in one transaction so
+  // they can never happen only one at a time.
+  Future<String?> rejectOrder(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final orderRef = _orders.doc(id);
+        final orderSnapshot = await transaction.get(orderRef);
+        if (!orderSnapshot.exists) {
+          throw StateError('This order no longer exists.');
+        }
+        final orderData = orderSnapshot.data()!;
+        if ((orderData['status'] ?? 'pending') != 'pending') {
+          throw StateError('Only pending orders can be rejected.');
+        }
+
+        final productId = orderData['productId']?.toString();
+        final qty = (orderData['quantity'] as num?) ?? 0;
+        if (productId != null && productId.isNotEmpty) {
+          final productRef =
+              FirebaseFirestore.instance.collection('products').doc(productId);
+          final productSnapshot = await transaction.get(productRef);
+          if (productSnapshot.exists) {
+            final current =
+                (productSnapshot.data()?['quantity'] as num?)?.toDouble() ?? 0;
+            transaction.update(productRef, {'quantity': current + qty});
+          }
+        }
+
+        transaction.update(orderRef, {
+          'status': 'rejected',
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+      return null;
+    } on StateError catch (e) {
+      return e.message;
+    } catch (e) {
+      return 'Could not reject the order. Please try again.';
     }
   }
 }

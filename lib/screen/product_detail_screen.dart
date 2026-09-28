@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../services/cart_service.dart';
 import '../services/message_service.dart';
+import '../services/product_service.dart';
 import 'message_order_screen.dart';
 import 'buyer_market_view.dart';
 
@@ -27,7 +28,7 @@ class ProductDetailScreen extends StatefulWidget {
 class _ProductDetailScreenState extends State<ProductDetailScreen> {
   static const Color _dark = Color(0xFF1B5E20);
   static const Color _accent = Color(0xFFDCEDC8);
-  static const Color _bg = Color(0xFFF7F9F5);
+  static const Color _bg = Colors.white;
 
   int count = 0;
   Uint8List? _imageBytes;
@@ -37,6 +38,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   void initState() {
     super.initState();
     count = CartService.instance.countFor(widget.productId);
+    ProductService().logProductView(widget.productId);
 
     final b64 = widget.data['imageBase64']?.toString();
     if (b64 != null && b64.isNotEmpty) {

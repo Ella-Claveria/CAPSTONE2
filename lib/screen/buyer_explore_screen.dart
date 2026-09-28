@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/product_service.dart';
+import '../services/product_visibility_service.dart';
 import '../services/image_helper.dart';
 import 'product_detail_screen.dart';
 
@@ -32,10 +33,17 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
 
   String _selectedBarangay = 'All Locations';
   Map<String, String> _barangayByFarmerUid = {};
+  Map<String, bool> _verifiedByFarmerUid = {};
   StreamSubscription? _usersSub;
 
   List<String> _trendingSearches = [];
   StreamSubscription? _searchEventsSub;
+
+  // Visibility-ranking inputs (ProductVisibilityService) — completed-order
+  // count per product is the "demand" signal; seller verification feeds
+  // "credibility" alongside each product's own rating/reviewCount.
+  Map<String, int> _completedOrderCountByProduct = {};
+  StreamSubscription? _completedOrdersSub;
 
   @override
   void initState() {
@@ -49,7 +57,26 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                 (doc.data()['barangay'] ?? '').toString().isNotEmpty)
               doc.id: doc.data()['barangay'].toString(),
         };
+        _verifiedByFarmerUid = {
+          for (final doc in snap.docs)
+            if ((doc.data()['role'] ?? '') == 'farmer') doc.id: doc.data()['isVerified'] == true,
+        };
       });
+    });
+
+    _completedOrdersSub = FirebaseFirestore.instance
+        .collection('orders')
+        .where('status', isEqualTo: 'completed')
+        .snapshots()
+        .listen((snap) {
+      if (!mounted) return;
+      final counts = <String, int>{};
+      for (final doc in snap.docs) {
+        final productId = (doc.data()['productId'] ?? '').toString();
+        if (productId.isEmpty) continue;
+        counts[productId] = (counts[productId] ?? 0) + 1;
+      }
+      setState(() => _completedOrderCountByProduct = counts);
     });
 
     _searchEventsSub = FirebaseFirestore.instance
@@ -73,6 +100,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   @override
   void dispose() {
     _usersSub?.cancel();
+    _completedOrdersSub?.cancel();
     _searchEventsSub?.cancel();
     _searchLogDebounce?.cancel();
     _searchController.dispose();
@@ -334,6 +362,23 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
             return _barangayByFarmerUid[farmerId] == _selectedBarangay;
           }).toList();
         }
+
+        // Rank by demand + seller credibility + interaction (prescriptive
+        // analytics: which listings get priority visibility). Ties — most
+        // commonly an all-zero score on a fresh marketplace with no orders/
+        // reviews/views yet — fall back to newest-first, today's old order.
+        final scores = ProductVisibilityService.scoreProducts(
+          products: {for (final d in docs) d.id: d.data()},
+          completedOrderCountByProductId: _completedOrderCountByProduct,
+          verifiedByFarmerId: _verifiedByFarmerUid,
+        );
+        docs.sort((a, b) {
+          final scoreCompare = (scores[b.id] ?? 0).compareTo(scores[a.id] ?? 0);
+          if (scoreCompare != 0) return scoreCompare;
+          final aCreated = a.data()['createdAt'] as Timestamp?;
+          final bCreated = b.data()['createdAt'] as Timestamp?;
+          return (bCreated?.millisecondsSinceEpoch ?? 0).compareTo(aCreated?.millisecondsSinceEpoch ?? 0);
+        });
 
         if (docs.isEmpty) {
           final isFiltered = _searchQuery.isNotEmpty ||

@@ -8,7 +8,7 @@ class AppTheme {
   static const Color dark = Color.fromARGB(255, 14, 50, 16); // main dark green
   static const Color mid = Color(0xFF2E7D32); // brand green
   static const Color accent = Color(0xFFDCEDC8); // pale green
-  static const Color bgLight = Color(0xFFF1F8E9); // splash background
+  static const Color bgLight = Colors.white; // splash / app background
   static const Color fieldFill = Color(0xFFF2F2F2); // textfield grey
 
   // ==========================================================
@@ -146,6 +146,25 @@ class AppTheme {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(30),
         ),
+      );
+
+  // ---------- LOGIN-STYLE "GLOW" FIELD ----------
+  // Pill-shaped, borderless field on its own white plate. At rest it only
+  // has a faint lift shadow; the brand-green glow (in place of the usual
+  // blue-glow neumorphic look) switches on around it while it's focused —
+  // see the field wrapping this in LoginFormFields for the FocusNode that
+  // drives [focused]. Used by the login form.
+  static BoxDecoration glowFieldWrapper({bool focused = false}) => BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: focused
+            ? [
+                BoxShadow(color: mid.withValues(alpha: 0.18), blurRadius: 12, spreadRadius: 0.5),
+                BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 3)),
+              ]
+            : [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3)),
+              ],
       );
 
   static InputDecoration inputBox({

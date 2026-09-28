@@ -95,13 +95,11 @@ class _AppBootstrapState extends State<AppBootstrap> {
       if (!kIsWeb) {
         FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
       }
-      // Mobile asks for notification permission itself, from the onboarding
-      // / app-router flow, so it can be requested alongside location and
-      // after the user has seen what the app is for. Web (the admin portal)
-      // skips that flow entirely, so it sets up FCM eagerly here instead.
-      if (kIsWeb) {
-        await PushNotificationService().setupFCM();
-      }
+      // Notification permission itself is never requested here — this phase
+      // runs on every single boot (every page load, before anyone is even
+      // logged in on web), so asking here would re-prompt constantly. Mobile
+      // asks from the onboarding/app-router flow; the admin web portal asks
+      // once, right after a successful first login (see LoginFormFields).
       // Registers onMessage (foreground display), onMessageOpenedApp
       // (background tap), and captures getInitialMessage() (terminated-app
       // tap) — see PushNotificationService for why the terminated case is

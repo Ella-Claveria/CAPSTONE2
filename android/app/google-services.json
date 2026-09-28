@@ -12,7 +12,20 @@
           "package_name": "com.example.agritrade"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "333409993687-67sujld7qbscdl10jsr174hfblhfo165.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.agritrade",
+            "certificate_hash": "57d9cac57d06ad1383d18087f6d125895bad72de"
+          }
+        },
+        {
+          "client_id": "333409993687-ab1vjt9n2kf2g657p75n831mcfegurkn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyC13bvoWl1TDq7cd5yLj7tvKSxMq1rl64E"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "333409993687-ab1vjt9n2kf2g657p75n831mcfegurkn.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "333409993687-ekup9jvt8cme19f4785ukr5oidmqhdk6.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.agritrade"
+              }
+            }
+          ]
         }
       }
     }

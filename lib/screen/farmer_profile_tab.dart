@@ -1,9 +1,7 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/auth_service.dart';
-import '../services/message_service.dart';
 import '../services/product_service.dart';
 import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
@@ -55,9 +53,6 @@ class _ProfileTabState extends State<ProfileTab> {
       ),
     );
     if (confirm != true) return;
-
-    // Fire-and-forget: don't let a stuck FCM call block logout.
-    unawaited(MessageService().unregisterFcmToken());
 
     await AuthService().logOut();
     if (!context.mounted) return;

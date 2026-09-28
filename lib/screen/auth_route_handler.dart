@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 import '../services/auth_routing_service.dart';
+import '../services/auth_service.dart';
 import 'admin_dashboard_screen.dart';
 import 'buyer_marketplace_screen.dart';
 import 'farmer_home_screen.dart';
@@ -45,8 +45,10 @@ Future<void> applyAuthRouteResult(BuildContext context, AuthRouteResult result) 
 
 Future<void> _blockAndReturnToLogin(BuildContext context, String? message) async {
   // Never rely on just hiding a screen — always fully sign the disallowed
-  // session out before returning to login.
-  await FirebaseAuth.instance.signOut();
+  // session out before returning to login. Goes through AuthService (not
+  // FirebaseAuth directly) so this device's FCM token is also cleaned up
+  // from the blocked account — see AuthService.signOut.
+  await AuthService().signOut();
   if (!context.mounted) return;
 
   await showDialog<void>(

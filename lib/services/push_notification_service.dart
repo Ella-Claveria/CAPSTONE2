@@ -74,6 +74,28 @@ class PushNotificationService {
     }, SetOptions(merge: true));
   }
 
+  /// Call on logout, before FirebaseAuth.signOut() — removes this device's
+  /// token from the account that's signing out. Without this, the same
+  /// physical device switching between accounts (e.g. a farmer and a buyer
+  /// test account on one phone) leaves its token registered on BOTH
+  /// accounts, so a message meant for one account's push notification can
+  /// still be delivered to this device even after switching to the other
+  /// account — since FCM delivers by device token, not by who's currently
+  /// signed into the app.
+  Future<void> unregisterToken() async {
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+    if (userId == null) return;
+    try {
+      final token = await _fcm.getToken();
+      if (token == null) return;
+      await _db.collection('users').doc(userId).set({
+        'fcmTokens': FieldValue.arrayRemove([token]),
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Non-fatal — must never block sign-out.
+    }
+  }
+
   /// Registers the foreground/background/terminated message handlers.
   /// Safe to call once at startup regardless of platform or auth state —
   /// it only listens; it never requests permission or a token itself.
@@ -111,7 +133,7 @@ class PushNotificationService {
   }
 
   Future<void> _initLocalNotifications() async {
-    const androidInit = AndroidInitializationSettings('@mipmap/launcher_icon');
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidInit);
     await _localNotifications.initialize(
       settings: initSettings,

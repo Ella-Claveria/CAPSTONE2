@@ -3,9 +3,12 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/message_service.dart';
 import '../services/cloudinary_service.dart';
+import '../services/location_permission_prompt.dart';
+import '../widgets/open_in_maps_button.dart';
 import '../widgets/pricing_calculator_sheet.dart';
 import 'place_order_screen.dart';
 
@@ -47,7 +50,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   static const Color _dark = Color(0xFF1B5E20);
   static const Color _accent = Color(0xFFDCEDC8);
-  static const Color _bg = Color(0xFFF7F9F5);
+  static const Color _bg = Colors.white;
 
   final MessageService _messageService = MessageService();
   final CloudinaryService _cloudinaryService = CloudinaryService();
@@ -139,6 +142,62 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Future<void> _shareLocation() async {
+    if (_sending) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Share your location?'),
+        content: Text(
+          'Your current location will be sent to ${widget.otherUserName} as a message.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Share')),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() => _sending = true);
+    try {
+      final granted = await maybeRequestLocationPermission(
+        context,
+        title: 'Share your location',
+        message: 'AgriTrade+ uses your current GPS position to share it in this chat.',
+      );
+      if (!granted) return;
+
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Turn on location services to share your location.')),
+        );
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      await _messageService.sendLocationMessage(
+        conversationId: widget.conversationId,
+        otherUserId: widget.otherUserId,
+        latitude: position.latitude,
+        longitude: position.longitude,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not share your location. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
   Future<void> _reportUser() async {
     final reportController = TextEditingController();
     final shouldSend = await showDialog<bool>(
@@ -179,6 +238,11 @@ class _ChatScreenState extends State<ChatScreen> {
         'reporterName': user?.displayName ?? 'User',
         'reportedUserId': widget.otherUserId,
         'reportedUserName': widget.otherUserName,
+        // The Moderation Queue's report-target model: a chat report always
+        // concerns the other participant's account/behavior, not a specific
+        // listing, so targetType is 'farmer' and farmerId is that participant.
+        'targetType': 'farmer',
+        'farmerId': widget.otherUserId,
         'conversationId': widget.conversationId,
         'status': 'pending',
         'createdAt': FieldValue.serverTimestamp(),
@@ -411,6 +475,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               final ts = data['createdAt'] as Timestamp?;
                               if (data['type'] == 'pricingOptions') {
                                 return _pricingOptionsMessage(data);
+                              }
+                              if (data['type'] == 'location') {
+                                return _locationMessage(data);
                               }
                               return _messageBubble(
                                 text,
@@ -677,6 +744,78 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Widget _locationMessage(Map<String, dynamic> data) {
+    final isMe = data['senderId'] == _myUid;
+    final latitude = (data['latitude'] as num?)?.toDouble();
+    final longitude = (data['longitude'] as num?)?.toDouble();
+    final ts = data['createdAt'] as Timestamp?;
+
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Column(
+        crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 3),
+            padding: const EdgeInsets.all(14),
+            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+            decoration: BoxDecoration(
+              color: isMe ? _dark : Colors.white,
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(16),
+                topRight: const Radius.circular(16),
+                bottomLeft: Radius.circular(isMe ? 16 : 4),
+                bottomRight: Radius.circular(isMe ? 4 : 16),
+              ),
+              boxShadow: isMe
+                  ? null
+                  : [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2))],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.location_on, size: 18, color: isMe ? Colors.white : _dark),
+                    const SizedBox(width: 6),
+                    Text(
+                      isMe ? 'You shared your location' : '${widget.otherUserName} shared their location',
+                      style: TextStyle(
+                        color: isMe ? Colors.white : Colors.black87,
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () => MapsLauncher.open(context, latitude: latitude, longitude: longitude),
+                    icon: const Icon(Icons.map_outlined, size: 16),
+                    label: const Text('View on Map'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: isMe ? Colors.white : _dark,
+                      side: BorderSide(color: isMe ? Colors.white70 : _dark),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (ts != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(_formatBubbleTime(ts.toDate()), style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _priceChoice(
     String label,
     num price,
@@ -720,6 +859,11 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: 'Send photo',
             onPressed: _sending ? null : _sendImage,
             icon: const Icon(Icons.camera_alt_outlined, color: _dark),
+          ),
+          IconButton(
+            tooltip: 'Share location',
+            onPressed: _sending ? null : _shareLocation,
+            icon: const Icon(Icons.location_on_outlined, color: _dark),
           ),
           Expanded(
             child: TextField(

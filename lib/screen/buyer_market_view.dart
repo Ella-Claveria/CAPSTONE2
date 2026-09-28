@@ -3,17 +3,16 @@ import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:latlong2/latlong.dart';
 
 import '../data/laurel_barangays.dart';
 import '../services/location_permission_prompt.dart';
 
-/// Uses OpenStreetMap via flutter_map — no Google Maps API key or billing
-/// account needed, unlike the admin Demand Heatmap. Good enough for showing
-/// barangay-level farmer density; swap to Google Maps later if you want
-/// satellite imagery or Google's POI data.
+/// Barangay-level farmer density on a real Google Map. Farmer clusters are
+/// drawn as circles (not individual pins) — see the privacy note in
+/// _showFarmDetails: exact farm locations stay hidden until an order is
+/// confirmed with that farmer.
 class BuyerMapView extends StatefulWidget {
   const BuyerMapView({super.key});
 
@@ -125,62 +124,61 @@ class _BuyerMapViewState extends State<BuyerMapView> {
     return counts;
   }
 
-  List<Marker> _buildMarkers(
+  /// The real, privacy-preserving cluster center for a barangay: the
+  /// average of that barangay's farmers' pinned GPS locations where any
+  /// have set one, otherwise the illustrative ring position. Buyers only
+  /// ever see this cluster point, never an individual farm's exact pin.
+  LatLng _clusterPointFor(
+    LaurelBarangayLocation loc,
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> farmers,
+  ) {
+    final realPoints = <LatLng>[];
+    for (final doc in farmers) {
+      final data = doc.data();
+      final lat = (data['latitude'] as num?)?.toDouble();
+      final lng = (data['longitude'] as num?)?.toDouble();
+      if (lat != null && lng != null) realPoints.add(LatLng(lat, lng));
+    }
+    if (realPoints.isEmpty) return LatLng(loc.lat, loc.lng);
+    final avgLat = realPoints.map((p) => p.latitude).reduce((a, b) => a + b) / realPoints.length;
+    final avgLng = realPoints.map((p) => p.longitude).reduce((a, b) => a + b) / realPoints.length;
+    return LatLng(avgLat, avgLng);
+  }
+
+  Set<Circle> _buildCircles(
     Map<String, List<QueryDocumentSnapshot<Map<String, dynamic>>>> farmersByBarangay,
   ) {
-    final markers = <Marker>[];
+    final circles = <Circle>{};
     for (final loc in kLaurelBarangayLocations) {
       final farmers = farmersByBarangay[loc.name];
       if (farmers == null || farmers.isEmpty) continue;
 
-      final size = 40.0 + math.min(farmers.length, 5) * 8.0;
-      markers.add(
-        Marker(
-          point: LatLng(loc.lat, loc.lng),
-          width: size,
-          height: size,
-          child: GestureDetector(
-            onTap: () => _showFarmDetails(loc, farmers),
-            // Offset from any single farm's exact address to protect
-            // farmer privacy — this marks the barangay, not a home.
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: Colors.green.withValues(alpha: 0.35),
-                border: Border.all(color: Colors.green[800]!, width: 2),
-              ),
-            ),
-          ),
+      final point = _clusterPointFor(loc, farmers);
+      // Radius in meters, not pixels — scales with farmer count but stays
+      // wide enough to read as "this barangay", never a single address.
+      final radius = 180.0 + math.min(farmers.length, 5) * 60.0;
+      circles.add(
+        Circle(
+          circleId: CircleId(loc.name),
+          center: point,
+          radius: radius,
+          fillColor: Colors.green.withValues(alpha: 0.35),
+          strokeColor: Colors.green[800]!,
+          strokeWidth: 2,
+          consumeTapEvents: true,
+          onTap: () => _showFarmDetails(loc.name, point, farmers),
         ),
       );
     }
-
-    if (_myPosition != null) {
-      markers.add(
-        Marker(
-          point: LatLng(_myPosition!.latitude, _myPosition!.longitude),
-          width: 22,
-          height: 22,
-          child: Container(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.blue,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
-            ),
-          ),
-        ),
-      );
-    }
-
-    return markers;
+    return circles;
   }
 
   void _showFarmDetails(
-    LaurelBarangayLocation loc,
+    String barangayName,
+    LatLng point,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> farmers,
   ) {
-    final distanceKm = _distanceKmTo(loc.lat, loc.lng);
+    final distanceKm = _distanceKmTo(point.latitude, point.longitude);
     final categories = _topCategoriesFor(farmers.map((d) => d.id).toSet());
     final topProducts = (categories.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value)))
@@ -205,7 +203,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                 children: [
                   Expanded(
                     child: Text(
-                      'Brgy. ${loc.name}',
+                      'Brgy. $barangayName',
                       style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -289,26 +287,17 @@ class _BuyerMapViewState extends State<BuyerMapView> {
   Widget build(BuildContext context) {
     final farmersByBarangay = _farmersByBarangay();
     final farmMarkerCount = farmersByBarangay.values.where((f) => f.isNotEmpty).length;
-    final markers = _buildMarkers(farmersByBarangay);
+    final circles = _buildCircles(farmersByBarangay);
 
     return Scaffold(
       body: Stack(
         children: [
-          FlutterMap(
-            options: const MapOptions(
-              initialCenter: _laurelCenter,
-              initialZoom: 13.0,
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.example.agritrade',
-              ),
-              MarkerLayer(markers: markers),
-              const SimpleAttributionWidget(
-                source: Text('OpenStreetMap contributors'),
-              ),
-            ],
+          GoogleMap(
+            initialCameraPosition: const CameraPosition(target: _laurelCenter, zoom: 13.0),
+            circles: circles,
+            myLocationEnabled: _myPosition != null,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: true,
           ),
           Positioned(
             top: 50,

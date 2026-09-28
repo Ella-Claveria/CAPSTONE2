@@ -5,9 +5,19 @@ service cloud.firestore {
     // ---- Products ----
     match /products/{productId} {
       allow read: if true;
+      // A farmer under a confirmed-violation suspension/ban may not create
+      // new listings — see Moderation Queue (accountStatus on users/{uid}).
       allow create: if request.auth != null &&
-        request.auth.uid == request.resource.data.farmerId;
-      allow update, delete: if request.auth != null &&
+        request.auth.uid == request.resource.data.farmerId &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('accountStatus', 'active') == 'active';
+      // The owning farmer can edit their own listing; an admin may also
+      // update (never delete) a listing — this is what backs Moderation
+      // Queue's Hide/Remove Listing actions (isSuspended toggle).
+      allow update: if request.auth != null && (
+        request.auth.uid == resource.data.farmerId ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+      allow delete: if request.auth != null &&
         request.auth.uid == resource.data.farmerId;
     }
 
@@ -15,20 +25,50 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null && request.auth.uid == userId;
+      // A user may only edit their own profile fields — approvalStatus,
+      // role, and the admin-review audit trail (reviewedBy/reviewedAt) must
+      // all stay exactly as they were, so a Farmer account cannot bypass
+      // verification by writing approvalStatus == 'approved' (or forging
+      // who/when "reviewed" it) directly from the client. Only an admin
+      // account may change any of those four fields.
+      // Same reasoning extends to moderation/account-status fields: a
+      // suspended or banned farmer must not be able to clear that state (or
+      // its supporting fields) by writing their own profile — only an admin
+      // account may change any of them.
       allow update: if request.auth != null && (
         (request.auth.uid == userId &&
           request.resource.data.approvalStatus == resource.data.approvalStatus &&
-          request.resource.data.role == resource.data.role) ||
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.get('reviewedBy', null) == resource.data.get('reviewedBy', null) &&
+          request.resource.data.get('reviewedAt', null) == resource.data.get('reviewedAt', null) &&
+          request.resource.data.get('accountStatus', null) == resource.data.get('accountStatus', null) &&
+          request.resource.data.get('suspendedUntil', null) == resource.data.get('suspendedUntil', null) &&
+          request.resource.data.get('suspensionReason', null) == resource.data.get('suspensionReason', null) &&
+          request.resource.data.get('banReason', null) == resource.data.get('banReason', null) &&
+          request.resource.data.get('moderationUpdatedBy', null) == resource.data.get('moderationUpdatedBy', null) &&
+          request.resource.data.get('moderationUpdatedAt', null) == resource.data.get('moderationUpdatedAt', null)) ||
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
       );
     }
 
     // ---- Verification documents ----
+    // A farmer may create/update their own submission, but the resulting
+    // `status` must be 'pending' — only an admin can ever set it to
+    // 'approved'/'rejected'. This is what actually blocks a farmer from
+    // self-approving via a direct write here (users/{uid} above is also
+    // locked, but this collection needs its own guard since it carries its
+    // own, separate status field — see docs/firestore-schema-migration.md).
     match /verificationDocs/{userId} {
-      allow read, write: if request.auth != null && (
+      allow read: if request.auth != null && (
         request.auth.uid == userId ||
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
       );
+      allow create, update: if request.auth != null && (
+        (request.auth.uid == userId && request.resource.data.status == 'pending') ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+      allow delete: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
     // ---- Conversations & messages ----
@@ -91,10 +131,24 @@ service cloud.firestore {
           (resource.data.status == 'pending' &&
             (request.resource.data.status == 'confirmed' || request.resource.data.status == 'rejected'))
           ||
-          (resource.data.status == 'confirmed' && request.resource.data.status == 'completed')
+          (resource.data.status == 'confirmed' && request.resource.data.status == 'shipped')
+          ||
+          (resource.data.status == 'shipped' && request.resource.data.status == 'completed')
         );
 
       allow delete: if false;
+    }
+
+    // ---- Market sales (platform-wide, anonymized) — written only by
+    // recordMarketSale in Cloud Functions (Admin SDK bypasses these
+    // rules) whenever an order's status becomes 'completed'. Holds just
+    // {productName, quantity, createdAt}, never buyer/seller identity,
+    // so it's safe for any signed-in user to read for the Market tab's
+    // seasonal/demand insights — unlike orders/{}, which must stay
+    // restricted to that order's own buyer/seller/admin. ----
+    match /market_sales/{saleId} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
 
     // ---- Product reviews ----
@@ -129,6 +183,37 @@ service cloud.firestore {
 
       allow update, delete: if request.auth != null &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+
+      // Append-only moderation audit trail — an admin-confirmed decision on
+      // this report is never edited or removed after the fact, only added to.
+      match /history/{entryId} {
+        allow read: if request.auth != null &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        allow create: if request.auth != null &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+          request.resource.data.adminId == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // ---- Support requests (buyer/farmer -> admin) ----
+    match /supportRequests/{requestId} {
+      // The requester can read back their own submitted requests; an admin
+      // can read all of them to (eventually) triage/respond.
+      allow read: if request.auth != null &&
+        (resource.data.userId == request.auth.uid ||
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'open';
+
+      // Only an admin marks a request resolved/in-progress — the requester
+      // can't edit their own request after sending it.
+      allow update: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+
+      allow delete: if false;
     }
 
     // ---- Admin-managed baseline commodity prices ----
@@ -158,6 +243,36 @@ service cloud.firestore {
         request.resource.data.userId == request.auth.uid;
       allow read: if request.auth != null;
       allow update, delete: if false;
+    }
+
+    // ---- One role per device: which role (farmer/buyer) each device has
+    // already registered, keyed by a random id generated on-device (see
+    // DeviceRoleService). Read must stay open even to signed-out clients —
+    // the sign-up form checks this before the Firebase Auth account itself
+    // is created, so there's no auth token yet at that point. Holds no PII
+    // beyond that opaque id, a role string, and the uid that claimed it. ----
+    match /deviceRoles/{deviceId} {
+      allow read: if true;
+      allow create: if request.auth != null &&
+        request.resource.data.uid == request.auth.uid;
+      // A device that already claimed a role can't silently flip to the
+      // other one — only a same-role re-claim (e.g. a second account of
+      // the same role) may overwrite it.
+      allow update: if request.auth != null &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.role == resource.data.role;
+      allow delete: if false;
+    }
+
+    // ---- Admin Portal audit log — written only by the logAuditEvent
+    // Cloud Function (Admin SDK bypasses these rules), never by a client
+    // directly. This is what makes it tamper-proof: even an admin account
+    // cannot edit or delete an entry, or forge one for another admin,
+    // since there is no client write path into this collection at all. ----
+    match /audit_logs/{logId} {
+      allow read: if request.auth != null &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow write: if false;
     }
   }
 }

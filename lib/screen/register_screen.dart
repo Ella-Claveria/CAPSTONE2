@@ -2,16 +2,18 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart'; // <-- ADDED THIS IMPORT
 import 'package:image_picker/image_picker.dart';
 import '../services/auth_service.dart';
 import '../services/cloudinary_service.dart';
+import '../services/device_role_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import 'email_verification_screen.dart';
 import '../services/connectivity_service.dart';
-import '../data/laurel_barangays.dart';
 import '../services/location_permission_prompt.dart';
+import '../widgets/barangay_location_field.dart';
+import '../widgets/glow_field.dart';
+import '../widgets/my_location_field.dart';
 import '../widgets/permission_rationale_dialog.dart';
 import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
@@ -36,13 +38,19 @@ class _RegisterScreenState extends State<RegisterScreen>
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
 
-  // Farmer-only: chosen barangay + the certificate photo.
+  // Barangay applies to both roles now; the certificate is farmer-only.
   String? _selectedBarangay;
+  // Only set when BarangayLocationField's "Use my location" actually got a
+  // GPS fix — a manually-picked barangay leaves these null, same as how a
+  // farmer's precise pin is a separate, optional step from their barangay.
+  double? _pickedLat;
+  double? _pickedLng;
   XFile? _certFile;        // the picked certificate (uploaded on submit)
   Uint8List? _certBytes;   // preview of the certificate
 
   final _authService = AuthService();
   final _cloudinaryService = CloudinaryService();
+  final _deviceRoleService = DeviceRoleService();
   final _imagePicker = ImagePicker();
 
   bool _loading = false;
@@ -58,11 +66,6 @@ class _RegisterScreenState extends State<RegisterScreen>
   // background and doesn't need one.
   final _scrollController = ScrollController();
   bool _scrolledDown = false;
-
-  // Farmer-only: whether we've already kicked off the location-permission
-  // prompt for this registration session (fires once, the first time they
-  // open the barangay picker).
-  bool _locationPromptShown = false;
 
   // Whether we've already explained why we need photo-library access, the
   // first time they tap to attach their certificate.
@@ -116,9 +119,10 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (role == _selectedRole) return;
     setState(() {
       _selectedRole = role;
-      // Farmer-only fields don't apply once switched back to buyer.
+      // Farmer's barangay and buyer's map pin are separate fields (see the
+      // LOCATION section below), so nothing needs clearing there when
+      // switching — only the certificate is farmer-only.
       if (role != 'farmer') {
-        _selectedBarangay = null;
         _certFile = null;
         _certBytes = null;
       }
@@ -187,6 +191,8 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (_isFarmer) {
       if (_selectedBarangay == null) return false;
       if (_certFile == null) return false;
+    } else {
+      if (_pickedLat == null || _pickedLng == null) return false;
     }
     return true;
   }
@@ -206,7 +212,17 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     setState(() => _loading = true);
 
-    // ---- Step 1: create the account ----
+    // ---- Step 1: this device can only ever hold one role ----
+    final registeredRole = await _deviceRoleService.getRegisteredRole();
+    if (!mounted) return;
+    if (registeredRole != null && registeredRole != _selectedRole) {
+      setState(() => _loading = false);
+      _showMessage('This device already has a $registeredRole account. '
+          'Only one role is allowed per device.');
+      return;
+    }
+
+    // ---- Step 2: create the account ----
     final error = await _authService.signUp(
       fullName: _fullNameController.text.trim(),
       email: _emailController.text.trim(),
@@ -221,7 +237,12 @@ class _RegisterScreenState extends State<RegisterScreen>
       return;
     }
 
-    // ---- Step 2: farmers only — upload the certificate ----
+    final newUid = FirebaseAuth.instance.currentUser?.uid;
+    if (newUid != null) {
+      await _deviceRoleService.claimDevice(role: _selectedRole, uid: newUid);
+    }
+
+    // ---- Step 3: farmers only — upload the certificate ----
     if (_isFarmer) {
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid != null && _certFile != null) {
@@ -251,25 +272,19 @@ class _RegisterScreenState extends State<RegisterScreen>
           return;
         }
 
-        // ==========================================================
-        // NEW CODE ADDED HERE: Add missing fields for the Admin Dashboard
-        // ==========================================================
-        try {
-          await FirebaseFirestore.instance.collection('verificationDocs').doc(uid).set({
-            'status': 'pending',
-            'fullName': _fullNameController.text.trim(),
-            'userId': uid,
-          }, SetOptions(merge: true));
-        } catch (e) {
-          debugPrint('Error attaching admin fields: $e');
-        }
-        // ==========================================================
       }
     } else {
-      // Buyers don't see a location-driven field during registration (that's
-      // the farmer-only barangay picker), so this is their first natural
-      // moment for it — right after their account exists, before they land
-      // on the marketplace.
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null && _pickedLat != null && _pickedLng != null) {
+        await _authService.saveBuyerLocation(
+          uid: uid,
+          latitude: _pickedLat!,
+          longitude: _pickedLng!,
+        );
+      }
+      // Also primes the separate, ongoing "sort nearby farms by distance"
+      // permission used later in the marketplace — a no-op prompt-wise if
+      // MyLocationField's "Use my location" already granted it above.
       if (mounted) {
         await maybeRequestLocationPermission(
           context,
@@ -284,7 +299,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (!mounted) return;
     setState(() => _loading = false);
 
-    // ---- Step 3: go verify the email ----
+    // ---- Step 4: go verify the email ----
     Navigator.pushReplacement(
       context,
       slideRoute(EmailVerificationScreen(
@@ -404,16 +419,14 @@ class _RegisterScreenState extends State<RegisterScreen>
       children: [
         Text(label, style: AppTheme.label()),
         const SizedBox(height: 8),
-        TextField(
+        GlowField(
           controller: controller,
           obscureText: obscure,
           keyboardType: keyboard,
-          decoration: AppTheme.inputBox(
-            hint: hint,
-            icon: icon,
-            suffix: suffix,
-            errorText: errorText,
-          ),
+          hint: hint,
+          icon: icon,
+          suffix: suffix,
+          errorText: errorText,
         ),
         const SizedBox(height: 16),
       ],
@@ -498,49 +511,6 @@ class _RegisterScreenState extends State<RegisterScreen>
           ),
         ],
       ),
-    );
-  }
-
-  // Opening the barangay picker is the clearest signal a farmer has reached
-  // the location-relevant part of the form, so that's when we explain and
-  // ask for location access — once per registration session.
-  void _maybeRequestBarangayLocation() {
-    if (_locationPromptShown) return;
-    _locationPromptShown = true;
-    maybeRequestLocationPermission(
-      context,
-      title: 'Verify your barangay',
-      message: "AgriTrade+ uses your location to help confirm you're "
-          "registering from Laurel, Batangas.",
-    );
-  }
-
-  // ==========================================================
-  // Barangay dropdown (Laurel only)
-  // ==========================================================
-  Widget _buildBarangayDropdown() {
-    final showError = _triedSubmit && _selectedBarangay == null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Barangay (Laurel)', style: AppTheme.label()),
-        const SizedBox(height: 8),
-        DropdownButtonFormField<String>(
-          initialValue: _selectedBarangay,
-          isExpanded: true,
-          onTap: _maybeRequestBarangayLocation,
-          decoration: AppTheme.inputBox(
-            hint: 'Select your barangay',
-            icon: Icons.location_on_outlined,
-            errorText: showError ? 'Please select a barangay in Laurel.' : null,
-          ),
-          items: kLaurelBarangays
-              .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-              .toList(),
-          onChanged: (value) => setState(() => _selectedBarangay = value),
-        ),
-        const SizedBox(height: 16),
-      ],
     );
   }
 
@@ -656,7 +626,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                           // ---- Logo ----
                           Center(
                             child: Image.asset(
-                              'assets/logo.png',
+                              'assets/images/logo.png',
                               width: 70,
                               height: 70,
                               errorBuilder: (context, error, stackTrace) {
@@ -749,17 +719,41 @@ class _RegisterScreenState extends State<RegisterScreen>
                           ),
 
                           // ================================================
-                          // FARMER VERIFICATION — only shown while the
-                          // toggle above is set to Farmer.
+                          // LOCATION — farmers are restricted to Laurel
+                          // (BarangayLocationField, for verification);
+                          // buyers can be anywhere in the Philippines
+                          // (MyLocationField, a free map pin).
+                          // The certificate stays farmer-only below.
                           // ================================================
+                          const Divider(height: 8),
+                          const SizedBox(height: 14),
                           if (_isFarmer) ...[
-                            const Divider(height: 8),
-                            const SizedBox(height: 14),
                             _laurelNotice(),
                             const SizedBox(height: 14),
-                            _buildBarangayDropdown(),
+                            BarangayLocationField(
+                              value: _selectedBarangay,
+                              errorText: _triedSubmit && _selectedBarangay == null
+                                  ? 'Please select a barangay in Laurel.'
+                                  : null,
+                              onChanged: (value) => setState(() => _selectedBarangay = value),
+                              onLocationDetected: (lat, lng) {
+                                _pickedLat = lat;
+                                _pickedLng = lng;
+                              },
+                            ),
                             _buildCertificatePicker(),
-                          ],
+                          ] else
+                            MyLocationField(
+                              latitude: _pickedLat,
+                              longitude: _pickedLng,
+                              errorText: _triedSubmit && (_pickedLat == null || _pickedLng == null)
+                                  ? 'Please set your location.'
+                                  : null,
+                              onPicked: (latLng) => setState(() {
+                                _pickedLat = latLng.latitude;
+                                _pickedLng = latLng.longitude;
+                              }),
+                            ),
                         ],
                       ),
                     ),

@@ -19,6 +19,8 @@
 // ============================================================
 
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
@@ -38,32 +40,60 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   // Possible values: 'pending', 'approved', 'rejected'
   String _status = 'pending';
   bool _loading = true;
-  Timer? _pollTimer;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
+  // Firestore streams can re-emit the same value (e.g. a metadata-only
+  // change), so this guards pushAndRemoveUntil from firing more than once.
+  bool _navigated = false;
 
   @override
   void initState() {
     super.initState();
-    _checkStatus();
+    _listenForApproval();
+  }
 
-    // Check again every 10 seconds, in case the admin approves
-    // while the farmer is still looking at this screen.
-    _pollTimer = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) => _checkStatus(silent: true),
+  // Real-time: the admin's Approve/Reject action in the Web Dashboard
+  // writes straight to users/{uid}, so this picks it up the moment it
+  // happens — no need for the farmer to do anything on this screen.
+  void _listenForApproval() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    _sub = FirebaseFirestore.instance.collection('users').doc(uid).snapshots().listen((snap) {
+      if (!mounted) return;
+      final status = (snap.data()?['approvalStatus'] ?? 'pending').toString();
+      setState(() {
+        _status = status;
+        _loading = false;
+      });
+      _maybeEnterApp(status);
+    });
+  }
+
+  void _maybeEnterApp(String status) {
+    if (_navigated || status != 'approved') return;
+    _navigated = true;
+    _sub?.cancel();
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const FarmerHomeScreen()),
+      (route) => false,
     );
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
+    _sub?.cancel();
     super.dispose();
   }
 
   // ----------------------------------------------------------
-  // Ask the database what the admin has decided so far.
+  // "I-check ang status" — an explicit, one-shot re-fetch of the current
+  // Firestore status, independent of the live listener above.
   // ----------------------------------------------------------
-  Future<void> _checkStatus({bool silent = false}) async {
-    if (!silent) setState(() => _loading = true);
+  Future<void> _checkStatus() async {
+    setState(() => _loading = true);
 
     final status = await _authService.getFarmerApprovalStatus();
 
@@ -72,16 +102,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
       _status = status;
       _loading = false;
     });
-
-    // Approved? Send them into the app.
-    if (status == 'approved') {
-      _pollTimer?.cancel();
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => const FarmerHomeScreen()),
-        (route) => false,
-      );
-    }
+    _maybeEnterApp(status);
   }
 
   @override
@@ -93,7 +114,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
         decoration: const BoxDecoration(
           color: AppTheme.dark,
           image: DecorationImage(
-            image: AssetImage('assets/background.png'),
+            image: AssetImage('assets/images/onboarding_1_farming.png'),
             fit: BoxFit.cover,
           ),
         ),

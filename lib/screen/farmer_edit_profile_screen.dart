@@ -5,8 +5,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../services/cloudinary_service.dart';
+import 'set_farm_location_screen.dart';
 
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
@@ -30,6 +32,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   XFile? _pickedPhoto;
   String? _photoUrl;
+  String? _role;
+  double? _latitude;
+  double? _longitude;
 
   bool _loading = false;
   bool _initialLoading = true;
@@ -53,6 +58,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       if (data != null) {
         _phoneController.text = data['phone']?.toString() ?? '';
         _photoUrl = data['photoUrl']?.toString();
+        _role = data['role']?.toString();
+        _latitude = (data['latitude'] as num?)?.toDouble();
+        _longitude = (data['longitude'] as num?)?.toDouble();
         // Combine barangay/municipality/province into one display string,
         // matching how ProfileTab shows location. Adjust field names here
         // if your schema differs.
@@ -192,6 +200,61 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   void showComingSoon(String feature) => _showMessage('$feature — coming soon.');
 
+  Future<void> _openLocationPicker() async {
+    final picked = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SetFarmLocationScreen(initialLat: _latitude, initialLng: _longitude),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _latitude = picked.latitude;
+      _longitude = picked.longitude;
+    });
+    _showMessage('Farm location saved!');
+  }
+
+  Widget _farmLocationSection() {
+    final hasLocation = _latitude != null && _longitude != null;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F8E9),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _fieldBorder, width: 1.2),
+      ),
+      child: Row(
+        children: [
+          Icon(hasLocation ? Icons.location_on : Icons.location_off_outlined,
+              color: _dark, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Farm Location',
+                    style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                const SizedBox(height: 2),
+                Text(
+                  hasLocation
+                      ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
+                      : 'Not pinned yet — buyers and admin can\'t see your farm on the map.',
+                  style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: _openLocationPicker,
+            child: Text(hasLocation ? 'Update' : 'Set on Map',
+                style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 12.5, color: _dark)),
+          ),
+        ],
+      ),
+    );
+  }
+
   InputDecoration _fieldDecoration(IconData icon) {
     return InputDecoration(
       prefixIcon: Icon(icon, color: _dark, size: 20),
@@ -268,7 +331,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F8E9),
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -319,6 +382,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     style: GoogleFonts.montserrat(fontSize: 14),
                     decoration: _fieldDecoration(Icons.location_on_outlined),
                   ),
+
+                  if (_role == 'farmer') ...[
+                    const SizedBox(height: 14),
+                    _farmLocationSection(),
+                  ],
                   const SizedBox(height: 28),
 
                   ElevatedButton(

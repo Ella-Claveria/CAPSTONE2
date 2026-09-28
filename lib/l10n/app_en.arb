@@ -37,6 +37,7 @@
   "password": "Password",
   "forgotPassword": "Forgot Password?",
   "loginButton": "Login",
+  "loginSubtitle": "Sign in to your AgriTrade+ account",
   "noAccountSignUp": "Don't have an account? ",
   "signUp": "Sign up",
   "createOne": "Create One.",

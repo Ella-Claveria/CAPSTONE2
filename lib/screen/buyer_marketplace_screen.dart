@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../services/message_service.dart';
 import '../services/push_notification_service.dart';
 import 'role_selection_screen.dart';
 import '../widgets/coach_mark.dart';
 import '../widgets/notification_bell.dart';
+import '../widgets/unread_messages_dot.dart';
 import 'buyer_explore_screen.dart';
 import 'chat_list_screen.dart';
 import 'buyer_orders_screen.dart';
@@ -32,7 +32,7 @@ class BuyerMarketplaceScreen extends StatefulWidget {
 
 class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   static const Color _dark = Color(0xFF1B5E20);
-  static const Color _bg = Color(0xFFF7F9F5);
+  static const Color _bg = Colors.white;
 
   late int _navIndex;
 
@@ -43,9 +43,6 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   void initState() {
     super.initState();
     _navIndex = widget.initialIndex; // Properly initializes to index 1 (Messages) when passed from chat
-    // Register this device for push notifications (new messages, order
-    // status updates) so they reach the buyer even when backgrounded.
-    MessageService().registerFcmToken();
     // If the app was launched (cold start) by tapping a push notification,
     // this replays that navigation now that routing has actually finished.
     PushNotificationService.consumePendingNavigation();
@@ -102,7 +99,6 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
       ),
     );
     if (confirm != true) return;
-    await MessageService().unregisterFcmToken();
     await AuthService().logOut();
     if (!context.mounted) return;
     Navigator.pushAndRemoveUntil(
@@ -156,7 +152,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
             ),
             child: ClipOval(
               child: Image.asset(
-                'assets/logo.png',
+                'assets/images/logo.png',
                 width: 36,
                 height: 36,
                 fit: BoxFit.cover,
@@ -201,7 +197,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         child: Row(
           children: [
             _navItem(0, Icons.explore_outlined, Icons.explore, t.navExplore),
-            _navItem(1, Icons.mail_outline, Icons.mail, t.navMessages),
+            _navItem(1, Icons.mail_outline, Icons.mail, t.navMessages, showUnreadDot: true),
             _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag, t.navOrders, key: _ordersTabKey),
             _navItem(3, Icons.map_outlined, Icons.map, t.navMap),
             _navItem(4, Icons.person_outline, Icons.person, t.navProfile),
@@ -211,9 +207,11 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     );
   }
 
-  Widget _navItem(int index, IconData icon, IconData activeIcon, String label, {Key? key}) {
+  Widget _navItem(int index, IconData icon, IconData activeIcon, String label,
+      {Key? key, bool showUnreadDot = false}) {
     final selected = _navIndex == index;
     final color = selected ? _dark : Colors.grey;
+    final iconWidget = Icon(selected ? activeIcon : icon, color: color, size: 24);
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => _navIndex = index),
@@ -222,7 +220,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(selected ? activeIcon : icon, color: color, size: 24),
+            showUnreadDot ? UnreadMessagesDot(child: iconWidget) : iconWidget,
             const SizedBox(height: 3),
             Text(
               label,

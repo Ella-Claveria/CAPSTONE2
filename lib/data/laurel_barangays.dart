@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:geolocator/geolocator.dart';
 
 // ============================================================
 // The 21 barangays of Laurel, Batangas — shared across the
@@ -54,4 +55,41 @@ LaurelBarangayLocation? laurelBarangayLocationFor(String? name) {
     if (loc.name.toLowerCase() == name.trim().toLowerCase()) return loc;
   }
   return null;
+}
+
+// The barangay whose (illustrative) center is closest to a real GPS fix —
+// used to auto-fill the barangay picker from "Use my current location"
+// (buyer registration, and anywhere else a raw lat/lng needs mapping back
+// to one of the 21 names). Plain planar distance is fine at this scale
+// (a few km across); no need for Haversine precision.
+LaurelBarangayLocation nearestLaurelBarangay(double lat, double lng) {
+  var best = kLaurelBarangayLocations.first;
+  var bestDist = _squaredDist(lat, lng, best.lat, best.lng);
+  for (final loc in kLaurelBarangayLocations.skip(1)) {
+    final dist = _squaredDist(lat, lng, loc.lat, loc.lng);
+    if (dist < bestDist) {
+      best = loc;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+double _squaredDist(double lat1, double lng1, double lat2, double lng2) {
+  final dLat = lat1 - lat2;
+  final dLng = lng1 - lng2;
+  return dLat * dLat + dLng * dLng;
+}
+
+// Generous radius around the town center that comfortably covers all 21
+// barangays plus normal GPS drift. nearestLaurelBarangay() alone always
+// returns *something* — the closest barangay, no matter how far away the
+// real fix is — so a farmer's "Use my location" flow needs this separate
+// check to actually reject a fix that isn't in Laurel at all, rather than
+// silently snapping it to whichever barangay happens to be nearest.
+const double kLaurelMaxRadiusMeters = 10000;
+
+bool isWithinLaurel(double lat, double lng) {
+  return Geolocator.distanceBetween(lat, lng, kLaurelCenterLat, kLaurelCenterLng) <=
+      kLaurelMaxRadiusMeters;
 }

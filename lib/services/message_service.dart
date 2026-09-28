@@ -1,9 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 
-/// Handles chat conversations and messages between farmers and buyers,
-/// plus FCM token registration for push notifications.
+/// Handles chat conversations and messages between farmers and buyers.
+/// FCM token registration/cleanup lives in PushNotificationService (see
+/// AuthService.signOut for cleanup, AppRouter/notification_permission_prompt
+/// for registration) — not duplicated here.
 ///
 /// Firestore layout:
 ///   conversations/{conversationId}
@@ -14,13 +15,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 ///     productId, productName   (context of the item that started the chat)
 ///     conversations/{conversationId}/messages/{messageId}
 ///       senderId, text, createdAt
-///
-///   users/{uid}
-///     fcmTokens: [token, token, ...]
 class MessageService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
   CollectionReference<Map<String, dynamic>> get _conversations =>
       _firestore.collection('conversations');
@@ -191,6 +188,37 @@ class MessageService {
     await batch.commit();
   }
 
+  /// Shares the sender's current coordinates as a one-off message — used
+  /// on demand from either side of a conversation (e.g. to coordinate a
+  /// pickup/delivery point), distinct from a farmer's static registered
+  /// farm location.
+  Future<void> sendLocationMessage({
+    required String conversationId,
+    required String otherUserId,
+    required double latitude,
+    required double longitude,
+  }) async {
+    final me = _auth.currentUser!;
+    final convRef = _conversations.doc(conversationId);
+    final msgRef = convRef.collection('messages').doc();
+
+    final batch = _firestore.batch();
+    batch.set(msgRef, {
+      'senderId': me.uid,
+      'type': 'location',
+      'latitude': latitude,
+      'longitude': longitude,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    batch.update(convRef, {
+      'lastMessage': 'Shared their location',
+      'lastMessageTime': FieldValue.serverTimestamp(),
+      'lastSenderId': me.uid,
+      'unreadCount.$otherUserId': FieldValue.increment(1),
+    });
+    await batch.commit();
+  }
+
   Future<void> sendImageMessage({
     required String conversationId,
     required String otherUserId,
@@ -233,44 +261,5 @@ class MessageService {
 
   String otherParticipant(List<dynamic> participants) {
     return participants.firstWhere((id) => id != currentUid) as String;
-  }
-
-  // ---------------------------------------------------------------
-  // Push notifications (FCM)
-  // ---------------------------------------------------------------
-
-  /// Call once after login (e.g. in the home screen's initState) to
-  /// request notification permission and store the device's FCM token
-  /// so the Cloud Function can find it when a message is sent to this user.
-  Future<void> registerFcmToken() async {
-    try {
-      await _messaging.requestPermission(alert: true, badge: true, sound: true);
-      final token = await _messaging.getToken();
-      if (token != null) {
-        await _saveToken(token);
-      }
-      _messaging.onTokenRefresh.listen(_saveToken);
-    } catch (_) {
-      // Notification permission denied or unavailable — chat still works,
-      // it just won't push notify. Fail silently so it never blocks login.
-    }
-  }
-
-  Future<void> _saveToken(String token) async {
-    await _firestore.collection('users').doc(currentUid).set({
-      'fcmTokens': FieldValue.arrayUnion([token]),
-    }, SetOptions(merge: true));
-  }
-
-  /// Call on logout so this device stops receiving pushes for this account.
-  Future<void> unregisterFcmToken() async {
-    try {
-      final token = await _messaging.getToken();
-      if (token != null) {
-        await _firestore.collection('users').doc(currentUid).set({
-          'fcmTokens': FieldValue.arrayRemove([token]),
-        }, SetOptions(merge: true));
-      }
-    } catch (_) {}
   }
 }

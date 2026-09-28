@@ -55,7 +55,7 @@ Future<void> showRoleMismatchDialog(
                 backgroundColor: _lightGreenAccent,
                 child: ClipOval(
                   child: Image.asset(
-                    'assets/logo.png',
+                    'assets/images/logo.png',
                     width: 46,
                     height: 46,
                     fit: BoxFit.cover,

@@ -169,4 +169,12 @@ class ProductService {
   Stream<QuerySnapshot<Map<String, dynamic>>> allProductsStream() {
     return _products.snapshots();
   }
+
+  /// Fire-and-forget view counter — the "interaction" signal for
+  /// ProductVisibilityService's ranking. Never blocks or surfaces errors to
+  /// the viewer, since a missed view-count bump isn't worth interrupting
+  /// anyone's browsing over.
+  void logProductView(String productId) {
+    _products.doc(productId).update({'viewCount': FieldValue.increment(1)}).catchError((_) {});
+  }
 }

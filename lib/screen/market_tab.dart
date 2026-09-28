@@ -106,6 +106,8 @@ class _MarketTabState extends State<MarketTab> {
                     const SizedBox(height: 16),
                     _salesPerformanceCard(docs.isNotEmpty),
                     const SizedBox(height: 16),
+                    _bestSellingProductsCard(docs.isNotEmpty),
+                    const SizedBox(height: 16),
                     _marketObjectivesCard(docs.isNotEmpty),
                   ],
                 ),
@@ -571,6 +573,111 @@ class _MarketTabState extends State<MarketTab> {
     );
   }
 
+  // Ranked by completed-order revenue, this farmer's listings only — the
+  // per-farmer counterpart to the admin dashboard's platform-wide
+  // "Best-Selling Product" card. Hidden entirely for a farmer with zero
+  // listings (nothing to rank yet); once they have listings but no
+  // completed sales, it shows an honest empty state instead of hiding.
+  Widget _bestSellingProductsCard(bool hasProducts) {
+    if (!hasProducts) return const SizedBox.shrink();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: OrderService().farmerOrdersStream(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Shimmer(child: MarketObjectiveCardSkeleton());
+        }
+
+        final orders = (snapshot.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+            .map((doc) => doc.data())
+            .toList();
+        final bestSellers = FarmerRevenueService.bestSellingProducts(orders: orders);
+
+        return Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.emoji_events_outlined, size: 18, color: _dark),
+                  SizedBox(width: 8),
+                  Text(
+                    'Best-Selling Products',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text('By completed-order revenue', style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+              const SizedBox(height: 14),
+              if (bestSellers.isEmpty)
+                Text(
+                  'No completed sales yet — your top products will appear here once orders complete.',
+                  style: TextStyle(fontSize: 12.5, color: Colors.grey[500], height: 1.4),
+                )
+              else
+                ...List.generate(bestSellers.length, (i) {
+                  final p = bestSellers[i];
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: i == bestSellers.length - 1 ? 0 : 12),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 26,
+                          height: 26,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(color: _accent, borderRadius: BorderRadius.circular(8)),
+                          child: Text(
+                            '${i + 1}',
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: _dark),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                p.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
+                              ),
+                              Text(
+                                '${p.quantity.toStringAsFixed(0)} sold',
+                                style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _formatCurrency(p.revenue),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: _dark),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Widget _newFarmerSalesCard() {
     return Container(
       padding: const EdgeInsets.all(18),
@@ -655,10 +762,14 @@ class _MarketTabState extends State<MarketTab> {
                 .map((doc) => Map<String, dynamic>.from(doc.data()))
                 .toList();
 
+        // market_sales mirrors just {productName, quantity, createdAt} for
+        // every completed order platform-wide, written by the
+        // recordMarketSale Cloud Function — querying `orders` directly here
+        // isn't possible, since Firestore rules only let a user read an
+        // order where they're the buyer or seller (see firestore.rules).
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('orders')
-              .where('status', isEqualTo: 'completed')
+              .collection('market_sales')
               .snapshots(),
           builder: (context, ordersSnapshot) {
             if (ordersSnapshot.connectionState == ConnectionState.waiting) {

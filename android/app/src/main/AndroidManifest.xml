@@ -7,7 +7,26 @@
     <application
         android:label="AgriTrade+"
         android:name="${applicationName}"
-        android:icon="@mipmap/launcher_icon">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="AIzaSyC13bvoWl1TDq7cd5yLj7tvKSxMq1rl64E" />
+        <!-- Backstop for any FCM notification-type message that doesn't
+             specify its own android.notification.channelId (the Cloud
+             Function always does, via notifyUser in functions/index.js —
+             this only matters if that's ever missing). Without a default
+             channel declared here, Android has no channel to post a
+             background/terminated-delivered notification to, and many
+             OEMs (Xiaomi, Samsung, etc.) silently drop it instead of using
+             a generic fallback. Must match PushNotificationService's
+             AndroidNotificationChannel id exactly. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="agritrade_transactions" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

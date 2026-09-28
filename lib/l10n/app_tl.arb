@@ -34,6 +34,7 @@
   "password": "Password",
   "forgotPassword": "Nakalimutan ang Password?",
   "loginButton": "Mag-login",
+  "loginSubtitle": "Mag-sign in sa iyong AgriTrade+ account",
   "noAccountSignUp": "Wala ka pang account? ",
   "signUp": "Mag-sign up",
   "createOne": "Gumawa ng Isa.",

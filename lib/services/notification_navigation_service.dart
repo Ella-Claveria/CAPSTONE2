@@ -55,9 +55,152 @@ class NotificationNavigationService {
             .push(MaterialPageRoute(builder: (_) => const PendingApprovalScreen()));
         return;
 
+      case 'moderation_warning':
+        final accountStatus = data['accountStatus']?.toString();
+        if (accountStatus != null && accountStatus.isNotEmpty) {
+          // notifyAccountModeration (suspend/ban) reuses this same type but
+          // carries no reportId/productId — there's no report to fetch, so
+          // it needs its own dialog instead of falling into
+          // _showModerationNotice's "report no longer available" fallback.
+          await _showAccountModerationNotice(context);
+          return;
+        }
+        final reportId = data['reportId']?.toString();
+        final productId = data['productId']?.toString();
+        await _showModerationNotice(context, reportId: reportId, productId: productId);
+        return;
+
       default:
         return;
     }
+  }
+
+  /// Account suspended/banned (notifyAccountModeration) — reads the current
+  /// user doc live rather than trusting the notification payload, since an
+  /// admin may have already reversed the decision by the time this is
+  /// tapped, and only the live doc has the reason text.
+  static Future<void> _showAccountModerationNotice(BuildContext context) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    Map<String, dynamic>? user;
+    try {
+      if (uid != null) {
+        final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        user = snap.data();
+      }
+    } catch (_) {
+      user = null;
+    }
+    if (!context.mounted) return;
+
+    final accountStatus = user?['accountStatus']?.toString();
+    final stillSuspended = accountStatus == 'suspended';
+    final stillBanned = accountStatus == 'banned';
+    final suspensionReason = user?['suspensionReason']?.toString();
+    final banReason = user?['banReason']?.toString();
+    final reason = stillSuspended ? suspensionReason : banReason;
+
+    final String title;
+    final String message;
+    if (stillSuspended) {
+      title = 'Account Suspended';
+      message = 'Your AgriTrade+ account has been temporarily suspended following an Admin review.';
+    } else if (stillBanned) {
+      title = 'Account Deactivated';
+      message = 'Your AgriTrade+ account has been deactivated following an Admin review.';
+    } else {
+      // Cleared back to active since the notification was sent.
+      title = 'Account Status Update';
+      message = 'This has since been resolved — your account is in good standing.';
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(message),
+            if ((stillSuspended || stillBanned) && reason != null && reason.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text('Reason: $reason'),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Shows the farmer what was reviewed and what Admin decided — reason,
+  /// description, the related listing if any, and the outcome — without
+  /// exposing who filed the report. Reads the report (and, for a
+  /// listing-targeted warning, the product) directly rather than trusting
+  /// the notification payload, since Admin may still amend `adminNotes`.
+  static Future<void> _showModerationNotice(
+    BuildContext context, {
+    String? reportId,
+    String? productId,
+  }) async {
+    Map<String, dynamic>? report;
+    Map<String, dynamic>? product;
+    try {
+      if (reportId != null && reportId.isNotEmpty) {
+        final snap = await FirebaseFirestore.instance.collection('reports').doc(reportId).get();
+        report = snap.data();
+      }
+      if (productId != null && productId.isNotEmpty) {
+        final snap = await FirebaseFirestore.instance.collection('products').doc(productId).get();
+        product = snap.data();
+      }
+    } catch (_) {
+      report = null;
+      product = null;
+    }
+    if (!context.mounted) return;
+
+    final reason = (report?['issueType'] ?? report?['reason'])?.toString();
+    final description = report?['description']?.toString();
+    final productName = product?['name']?.toString() ?? report?['productName']?.toString();
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(productName != null ? 'Listing Warning' : 'Account Warning'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (productName != null) ...[
+              Text('Listing: $productName', style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+            ],
+            if (reason != null && reason.isNotEmpty) ...[
+              Text('Reason: $reason'),
+              const SizedBox(height: 6),
+            ],
+            if (description != null && description.isNotEmpty)
+              Text(description)
+            else if (report == null)
+              const Text('This report is no longer available.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   static Future<void> _openOrder(BuildContext context, String orderId) async {

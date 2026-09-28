@@ -1,15 +1,27 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
-import 'dart:convert'; // Added to decode Base64 images
+import 'dart:convert'; // Decodes Base64-embedded verification document images
 
+import '../services/auth_service.dart';
+import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/market_price_helpers.dart';
+import 'admin_dashboard_screen.dart' show AdminThemeScope;
 
+/// Pending Farmer applications only — role == 'farmer' && approvalStatus ==
+/// 'pending'. Approved Farmers have their own dedicated page/nav item, see
+/// farmer_list_view.dart (a fully separate screen — it does not share this
+/// file's dialog or data loaders); this screen's job stays exactly what it
+/// was: the queue of applications still awaiting an admin decision.
 class VerificationQueueView extends StatelessWidget {
   const VerificationQueueView({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+
     return Padding(
       padding: const EdgeInsets.all(24.0),
       child: Column(
@@ -17,51 +29,43 @@ class VerificationQueueView extends StatelessWidget {
         children: [
           Text(
             'Verification Queue',
-            style: TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: Colors.green[800],
-            ),
+            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: c.textPrimary),
           ),
           Text(
             'Review and approve agricultural credentials for new farmers.',
-            style: TextStyle(color: Colors.grey[700]),
+            style: TextStyle(color: c.textSecondary),
           ),
-          SizedBox(height: 24),
+          const SizedBox(height: 24),
 
           Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('verificationDocs')
-                  .snapshots(),
+            // Sourced from users (role == 'farmer' && approvalStatus ==
+            // 'pending') — the same canonical query as
+            // AuthService.getPendingFarmers() and the dashboard's pending
+            // count — NOT from verificationDocs. A farmer whose
+            // verificationDocs record is missing or malformed (an older
+            // registration, an interrupted upload, etc.) still has a real
+            // users/{uid} document, so they still need to show up here for
+            // an admin to act on; querying verificationDocs directly would
+            // silently exclude them, leaving no way to approve them short of
+            // the Firebase Console.
+            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: AuthService().getPendingFarmers(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return Center(child: CircularProgressIndicator());
+                  return const Center(child: CircularProgressIndicator());
                 }
 
                 if (snapshot.hasError) {
-                  return Center(child: Text('Error loading queue.'));
+                  return Center(child: Text('Error loading queue.', style: TextStyle(color: c.textSecondary)));
                 }
 
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Text(
-                      'No pending verifications at this time.',
-                      style: TextStyle(fontSize: 18, color: Colors.grey),
-                    ),
-                  );
-                }
-
-                final docs = snapshot.data!.docs.where((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  return data['status'] == null || data['status'] == 'pending';
-                }).toList();
+                final docs = snapshot.data?.docs ?? [];
 
                 if (docs.isEmpty) {
                   return Center(
                     child: Text(
                       'No pending verifications at this time.',
-                      style: TextStyle(fontSize: 18, color: Colors.grey),
+                      style: TextStyle(fontSize: 18, color: c.textSecondary),
                     ),
                   );
                 }
@@ -69,32 +73,9 @@ class VerificationQueueView extends StatelessWidget {
                 return ListView.builder(
                   itemCount: docs.length,
                   itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    final docId = docs[index].id;
-
-                    // Handling missing fields gracefully
-                    final storedUserId =
-                        data['userId']?.toString().trim() ?? '';
-                    final userId = storedUserId.isNotEmpty
-                        ? storedUserId
-                        : docId;
-                    final storedName =
-                        data['fullName']?.toString().trim() ?? '';
-                    // A real, stable identifier (the account's own uid) rather
-                    // than a synthetic row number that would shuffle as the
-                    // list re-sorts on every update.
-                    final farmerId = userId.length > 8 ? userId.substring(0, 8) : userId;
-                    final document = data['document']?.toString() ?? '';
-
-                    return _farmerApplicationCard(
-                      context,
-                      data,
-                      docId,
-                      userId.toString(),
-                      storedName,
-                      farmerId,
-                      document,
-                    );
+                    final uid = docs[index].id;
+                    final profile = docs[index].data();
+                    return _farmerApplicationCard(context, uid, profile);
                   },
                 );
               },
@@ -107,55 +88,43 @@ class VerificationQueueView extends StatelessWidget {
 
   Widget _farmerApplicationCard(
     BuildContext context,
-    Map<String, dynamic> data,
-    String docId,
-    String userId,
-    String storedName,
-    String farmerId,
-    String document,
+    String uid,
+    Map<String, dynamic> profile,
   ) {
-    // Always listen to the user profile (not just when the name is
-    // missing) — the farmer's barangay only lives on `users/{uid}`, never
-    // on the verification doc itself.
-    final profileStream = userId.isEmpty
-        ? null
-        : FirebaseFirestore.instance.collection('users').doc(userId).snapshots();
+    // Supplementary only — submission date and the document image live on
+    // verificationDocs, but the row (and the Approve/Reject actions below)
+    // must never depend on this document existing.
+    final verifStream =
+        FirebaseFirestore.instance.collection('verificationDocs').doc(uid).snapshots();
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: profileStream,
-      builder: (context, snapshot) {
-        final profile = snapshot.data?.data();
-        final fullName = storedName.isNotEmpty
-            ? storedName
-            : profile?['fullName']?.toString().trim().isNotEmpty == true
-            ? profile!['fullName'].toString().trim()
-            : profile?['name']?.toString().trim().isNotEmpty == true
-            ? profile!['name'].toString().trim()
-            : 'Unknown Farmer';
-        final rawBarangay = profile?['barangay']?.toString().trim();
+      stream: verifStream,
+      builder: (context, verifSnap) {
+        final verif = verifSnap.data?.data();
+
+        final fullName = _firstNonEmpty([verif?['fullName'], profile['fullName'], profile['name']]) ??
+            'Unknown Farmer';
+        final email = (profile['email'] ?? '—').toString();
+        final rawBarangay = profile['barangay']?.toString().trim();
         final barangay = (rawBarangay == null || rawBarangay.isEmpty) ? '—' : rawBarangay;
-        final submittedAt = data['submittedAt'] as Timestamp?;
+        final submittedAt = verif?['submittedAt'] as Timestamp?;
         final dateSubmitted =
             submittedAt != null ? DateFormat('MMM d, y').format(submittedAt.toDate()) : '—';
-        final rawStatus = (data['status'] ?? 'pending').toString();
-        final statusLabel =
-            rawStatus.isEmpty ? 'Pending' : '${rawStatus[0].toUpperCase()}${rawStatus.substring(1)}';
+        final document = (verif?['document'] ?? '').toString();
+        final farmerId = uid.length > 8 ? uid.substring(0, 8) : uid;
 
         return Card(
-          margin: EdgeInsets.only(bottom: 16),
+          margin: const EdgeInsets.only(bottom: 16),
           child: ListTile(
-            contentPadding: EdgeInsets.all(16),
+            contentPadding: const EdgeInsets.all(16),
             leading: CircleAvatar(
               backgroundColor: Colors.green[100],
               child: Icon(Icons.person, color: Colors.green[800]),
             ),
-            title: Text(
-              fullName,
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
+            title: Text(fullName, style: const TextStyle(fontWeight: FontWeight.bold)),
             isThreeLine: true,
             subtitle: Text(
-              'ID: $farmerId  •  Barangay: $barangay\nSubmitted: $dateSubmitted  •  Status: $statusLabel',
+              'ID: $farmerId  •  $email\nBarangay: $barangay  •  Submitted: $dateSubmitted',
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -163,28 +132,25 @@ class VerificationQueueView extends StatelessWidget {
                 IconButton(
                   tooltip: 'View full verification details',
                   icon: Icon(Icons.visibility_outlined, color: Colors.grey[700]),
-                  onPressed: () => showFarmerVerificationDetails(context, uid: userId),
+                  onPressed: () => showFarmerVerificationDetails(context, uid: uid),
                 ),
                 OutlinedButton.icon(
-                  icon: Icon(Icons.image_search, color: Colors.blue),
-                  label: Text('View Doc'),
-                  onPressed: () => _showDocumentDialog(context, document),
+                  icon: const Icon(Icons.image_search, color: Colors.blue),
+                  label: const Text('View Doc'),
+                  onPressed: document.isEmpty ? null : () => _showDocumentDialog(context, document),
                 ),
-                SizedBox(width: 8),
+                const SizedBox(width: 8),
                 ElevatedButton.icon(
-                  icon: Icon(Icons.check),
-                  label: Text('Approve'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: () => approveFarmerAccount(context, docId, userId),
+                  icon: const Icon(Icons.check),
+                  label: const Text('Approve'),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                  onPressed: () => approveFarmerAccount(context, uid, fullName),
                 ),
-                SizedBox(width: 8),
+                const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  icon: Icon(Icons.close, color: Colors.red),
-                  label: Text('Reject', style: TextStyle(color: Colors.red)),
-                  onPressed: () => rejectFarmerAccount(context, docId),
+                  icon: const Icon(Icons.close, color: Colors.red),
+                  label: const Text('Reject', style: TextStyle(color: Colors.red)),
+                  onPressed: () => rejectFarmerAccount(context, uid, fullName),
                 ),
               ],
             ),
@@ -193,10 +159,16 @@ class VerificationQueueView extends StatelessWidget {
       },
     );
   }
-
 }
 
-// Updated to display Base64 images instead of URLs
+String? _firstNonEmpty(List<dynamic> candidates) {
+  for (final c in candidates) {
+    final s = c?.toString().trim();
+    if (s != null && s.isNotEmpty) return s;
+  }
+  return null;
+}
+
 void _showDocumentDialog(BuildContext context, String document) {
   Widget imageWidget;
 
@@ -241,71 +213,217 @@ void _showDocumentDialog(BuildContext context, String document) {
   );
 }
 
-/// Approve a farmer application. `verificationDocId` and `userId` are
-/// always the same value in practice (the verification doc's own id is
-/// the farmer's Firebase Auth uid — see AuthService.saveVerificationDocument
-/// / createPendingVerificationApplication), but both are threaded through
-/// explicitly since the verification doc is the canonical record of *what*
-/// was submitted and reviewed.
-Future<void> approveFarmerAccount(
+/// A confirmation dialog that runs [action] only once the admin confirms,
+/// showing an inline spinner and disabling both buttons for the duration —
+/// shared by approve and reject so neither can be double-submitted or
+/// triggered by an accidental click.
+Future<void> _confirmAndRun(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String confirmLabel,
+  required Color confirmColor,
+  bool withReason = false,
+  required Future<void> Function(String? reason) action,
+}) async {
+  final reasonController = withReason ? TextEditingController() : null;
+  bool loading = false;
+
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) => StatefulBuilder(
+      builder: (dialogContext, setDialogState) => PopScope(
+        canPop: !loading,
+        child: AlertDialog(
+          title: Text(title),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(message),
+              if (withReason) ...[
+                const SizedBox(height: 14),
+                TextField(
+                  controller: reasonController,
+                  maxLines: 2,
+                  enabled: !loading,
+                  decoration: const InputDecoration(
+                    hintText: 'Reason for rejection (optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: loading ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: confirmColor, foregroundColor: Colors.white),
+              onPressed: loading
+                  ? null
+                  : () async {
+                      setDialogState(() => loading = true);
+                      await action(reasonController?.text.trim());
+                      if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+                    },
+              child: loading
+                  ? const SizedBox(
+                      height: 18,
+                      width: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : Text(confirmLabel),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Approve a farmer application. `uid` is the farmer's own Firebase Auth
+/// uid — the same id as their `users/{uid}` document.
+Future<void> approveFarmerAccount(BuildContext context, String uid, String farmerName) {
+  return _confirmAndRun(
+    context,
+    title: 'Approve this Farmer account?',
+    message: 'This farmer will be verified and able to list products and sell on AgriTrade+.',
+    confirmLabel: 'Approve',
+    confirmColor: Colors.green,
+    action: (_) => _setFarmerApproval(context, uid, approved: true, farmerName: farmerName),
+  );
+}
+
+Future<void> rejectFarmerAccount(BuildContext context, String uid, String farmerName) {
+  return _confirmAndRun(
+    context,
+    title: 'Reject this Farmer verification?',
+    message: 'The farmer will be notified that their application was not approved.',
+    confirmLabel: 'Reject',
+    confirmColor: Colors.red,
+    withReason: true,
+    action: (reason) =>
+        _setFarmerApproval(context, uid, approved: false, reason: reason, farmerName: farmerName),
+  );
+}
+
+/// The one place approve/reject actually writes to Firestore. `users/{uid}`
+/// is the canonical record the rest of the app (login routing, the pending
+/// count, security rules) reads — it is always written. `verificationDocs`
+/// is kept in sync too (created if it never existed) purely as the
+/// submission/audit trail; it is never the source of truth for access.
+Future<void> _setFarmerApproval(
   BuildContext context,
-  String verificationDocId,
-  String userId,
-) async {
+  String uid, {
+  required bool approved,
+  required String farmerName,
+  String? reason,
+}) async {
   if (!await ConnectivityService.instance.checkNow()) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
     }
     return;
   }
+
+  final adminUid = FirebaseAuth.instance.currentUser?.uid;
+  final status = approved ? 'approved' : 'rejected';
+
   try {
+    final userUpdate = <String, dynamic>{
+      'approvalStatus': status,
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': adminUid,
+    };
+    if (approved) userUpdate['isVerified'] = true;
+    await FirebaseFirestore.instance.collection('users').doc(uid).update(userUpdate);
+
+    final docUpdate = <String, dynamic>{
+      'status': status,
+      'reviewedAt': FieldValue.serverTimestamp(),
+      'reviewedBy': adminUid,
+    };
+    if (!approved && reason != null && reason.isNotEmpty) {
+      docUpdate['rejectionReason'] = reason;
+    }
     await FirebaseFirestore.instance
         .collection('verificationDocs')
-        .doc(verificationDocId)
-        .update({'status': 'approved'});
-    if (userId.isNotEmpty) {
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
-          .update({'isVerified': true, 'approvalStatus': 'approved'});
-    }
+        .doc(uid)
+        .set(docUpdate, SetOptions(merge: true));
+
+    AuditLogService.log(
+      approved ? AuditAction.approveFarmer : AuditAction.rejectFarmer,
+      approved
+          ? 'Approved farmer $farmerName.'
+          : 'Rejected farmer $farmerName.${reason != null && reason.isNotEmpty ? ' Reason: $reason' : ''}',
+    );
+
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Farmer approved successfully!')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(approved ? 'Farmer approved successfully!' : 'Application rejected.')),
+    );
   } catch (e) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error approving farmer: $e')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating farmer: $e')));
   }
 }
 
-Future<void> rejectFarmerAccount(BuildContext context, String verificationDocId) async {
-  if (!await ConnectivityService.instance.checkNow()) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
-    }
-    return;
-  }
-  try {
-    await FirebaseFirestore.instance
-        .collection('verificationDocs')
-        .doc(verificationDocId)
-        .update({'status': 'rejected'});
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(verificationDocId)
-        .update({'approvalStatus': 'rejected'});
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Application rejected.')));
-  } catch (e) {
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error rejecting application: $e')));
-  }
+/// One-shot (not real-time — this backs a transient dialog, not a live
+/// list) snapshot of a single farmer's marketplace activity, used only by
+/// this screen's own verification detail dialog.
+class _MarketplaceSummary {
+  final int activeProducts;
+  final int archivedProducts;
+  final int completedOrders;
+  final num totalSales;
+  const _MarketplaceSummary({
+    required this.activeProducts,
+    required this.archivedProducts,
+    required this.completedOrders,
+    required this.totalSales,
+  });
 }
 
-/// Opens the full verification detail dialog for one farmer — used both by
-/// the queue's own eye icon and by the Home dashboard's "Recent Verification
-/// Requests" table, so both stay backed by the same live data and the same
-/// approve/reject actions.
+Future<_MarketplaceSummary> _loadMarketplaceSummary(String uid) async {
+  final products =
+      await FirebaseFirestore.instance.collection('products').where('farmerId', isEqualTo: uid).get();
+  var active = 0, archived = 0;
+  for (final p in products.docs) {
+    if ((p.data()['isArchived'] ?? false) == true) {
+      archived++;
+    } else {
+      active++;
+    }
+  }
+
+  final orders =
+      await FirebaseFirestore.instance.collection('orders').where('sellerId', isEqualTo: uid).get();
+  var completedCount = 0;
+  num totalSales = 0;
+  for (final o in orders.docs) {
+    if ((o.data()['status'] ?? '').toString().toLowerCase() != 'completed') continue;
+    completedCount++;
+    final total = o.data()['total'];
+    totalSales += total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0;
+  }
+
+  return _MarketplaceSummary(
+    activeProducts: active,
+    archivedProducts: archived,
+    completedOrders: completedCount,
+    totalSales: totalSales,
+  );
+}
+
+/// Opens the full verification/profile detail dialog for one farmer — used
+/// by the Verification Queue's pending list and the Home dashboard's
+/// "Recent Verification Requests" table, so both stay backed by the same
+/// live data and the same approve/reject actions. The Farmer List page has
+/// its own, separate detail dialog and does not use this one.
 Future<void> showFarmerVerificationDetails(BuildContext context, {required String uid}) {
   return showDialog<void>(
     context: context,
@@ -316,14 +434,6 @@ Future<void> showFarmerVerificationDetails(BuildContext context, {required Strin
 class _FarmerVerificationDetailDialog extends StatelessWidget {
   final String uid;
   const _FarmerVerificationDetailDialog({required this.uid});
-
-  String? _firstNonEmpty(List<dynamic> candidates) {
-    for (final c in candidates) {
-      final s = c?.toString().trim();
-      if (s != null && s.isNotEmpty) return s;
-    }
-    return null;
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -365,34 +475,51 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
 
             final fullName = _firstNonEmpty([verif?['fullName'], user['fullName'], user['name']]) ??
                 'Unknown Farmer';
-            final barangay = _firstNonEmpty([user['barangay']]);
-            final municipality = _firstNonEmpty([user['municipality']]);
-            final province = _firstNonEmpty([user['province']]);
-            final location =
-                [barangay, municipality, province].whereType<String>().join(', ');
-            final approvalStatus = (user['approvalStatus'] ?? verif?['status'] ?? 'pending').toString();
+            final email = (user['email'] ?? '—').toString();
+            final barangay = _firstNonEmpty([user['barangay']]) ?? '—';
+            final municipality = _firstNonEmpty([user['municipality']]) ?? '—';
+            final phone = _firstNonEmpty([user['phone']]) ?? '—';
+            final approvalStatus = (user['approvalStatus'] ?? 'pending').toString();
             final statusLabel = approvalStatus.isEmpty
                 ? 'Pending'
                 : '${approvalStatus[0].toUpperCase()}${approvalStatus.substring(1)}';
             final submittedAt = verif?['submittedAt'] as Timestamp?;
             final dateSubmitted =
                 submittedAt != null ? DateFormat('MMM d, y – h:mm a').format(submittedAt.toDate()) : '—';
+            final reviewedAt = user['reviewedAt'] as Timestamp?;
+            final dateReviewed =
+                reviewedAt != null ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate()) : '—';
+            final reviewedByUid = _firstNonEmpty([user['reviewedBy']]);
+            final reviewedBy = reviewedByUid == null
+                ? '—'
+                : (reviewedByUid.length > 8 ? reviewedByUid.substring(0, 8) : reviewedByUid);
             final document = (verif?['document'] ?? '').toString();
+            final rejectionReason = (verif?['rejectionReason'] ?? '').toString();
 
             return AlertDialog(
               title: Text(fullName),
               content: SizedBox(
-                width: 420,
+                width: 500,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      _sectionLabel('Profile'),
                       _detailRow('Farmer ID', uid),
-                      _detailRow('Barangay', location.isEmpty ? '—' : location),
+                      _detailRow('Email', email),
+                      _detailRow('Barangay', barangay),
+                      _detailRow('Municipality', municipality),
+                      _detailRow('Phone Number', phone),
+                      const SizedBox(height: 10),
+                      _sectionLabel('Verification'),
+                      _detailRow('Status', statusLabel),
                       _detailRow('Date Submitted', dateSubmitted),
-                      _detailRow('Approval Status', statusLabel),
-                      const SizedBox(height: 12),
+                      _detailRow('Reviewed At', dateReviewed),
+                      _detailRow('Reviewed By', reviewedBy),
+                      if (approvalStatus == 'rejected' && rejectionReason.isNotEmpty)
+                        _detailRow('Rejection Reason', rejectionReason),
+                      const SizedBox(height: 8),
                       OutlinedButton.icon(
                         icon: const Icon(Icons.image_search, color: Colors.blue),
                         label: const Text('View Submitted Document'),
@@ -405,6 +532,39 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                           style: TextStyle(color: Colors.grey[600], fontSize: 12),
                         ),
                       ],
+                      const SizedBox(height: 10),
+                      FutureBuilder<_MarketplaceSummary>(
+                        future: _loadMarketplaceSummary(uid),
+                        builder: (context, activitySnap) {
+                          if (activitySnap.connectionState != ConnectionState.done) {
+                            return const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
+                            );
+                          }
+                          if (activitySnap.hasError || !activitySnap.hasData) {
+                            return Text(
+                              'Could not load marketplace activity.',
+                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                            );
+                          }
+                          final a = activitySnap.data!;
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _sectionLabel('Marketplace Summary'),
+                              _detailRow('Active Products', '${a.activeProducts}'),
+                              _detailRow('Archived Products', '${a.archivedProducts}'),
+                              _detailRow('Completed Orders', '${a.completedOrders}'),
+                              _detailRow('Total Sales', formatPeso(a.totalSales)),
+                            ],
+                          );
+                        },
+                      ),
                     ],
                   ),
                 ),
@@ -414,17 +574,17 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                 if (approvalStatus == 'pending') ...[
                   OutlinedButton(
                     style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                    onPressed: () async {
+                    onPressed: () {
                       Navigator.of(context).pop();
-                      await rejectFarmerAccount(context, uid);
+                      rejectFarmerAccount(context, uid, fullName);
                     },
                     child: const Text('Reject'),
                   ),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                    onPressed: () async {
+                    onPressed: () {
                       Navigator.of(context).pop();
-                      await approveFarmerAccount(context, uid, uid);
+                      approveFarmerAccount(context, uid, fullName);
                     },
                     child: const Text('Approve'),
                   ),
@@ -437,6 +597,16 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
     );
   }
 
+  Widget _sectionLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        label,
+        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.grey[600], letterSpacing: 0.4),
+      ),
+    );
+  }
+
   Widget _detailRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -444,7 +614,7 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 120,
+            width: 130,
             child: Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700])),
           ),
           Expanded(child: Text(value)),
