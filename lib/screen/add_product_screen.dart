@@ -525,6 +525,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       return;
     }
     if (_wholesaleEnabled &&
+        wholesaleMinimum != null &&
         isCountBasedUnit(unit) &&
         wholesaleMinimum != wholesaleMinimum.roundToDouble()) {
       _showMessage('Wholesale minimum quantity for $unit must be a whole number.');
