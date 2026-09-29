@@ -823,6 +823,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           productImage: _imageUrl ?? '',
           deliveryAvailable: widget.data['deliveryAvailable'] == true,
           pickupAvailable: widget.data['pickupOnly'] == true,
+          unit: (widget.data['unit'] as String?) ?? unitForProductName(productName),
         ),
       ),
     );
