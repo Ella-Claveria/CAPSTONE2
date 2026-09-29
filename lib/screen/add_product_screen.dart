@@ -152,23 +152,40 @@ class _AddProductScreenState extends State<AddProductScreen> {
   String get _currentUnit => unitForCommodity(_matchedCommodity ?? '');
   bool get _isCountBasedUnit => isCountBasedUnit(_currentUnit);
 
-  PriceRecommendation _computeRecommendation(String commodity) {
+  PriceRecommendation _computeRecommendation(
+    String commodity, {
+    String pricingType = 'retail',
+  }) {
     final now = DateTime.now();
+    final isWholesale = pricingType == 'wholesale';
 
     final listingPrices = <double>[];
     num supplyQuantity = 0;
     for (final doc in _liveProducts) {
       if (widget.productId != null && doc.id == widget.productId) continue;
       final data = doc.data();
-      // Exclude archived/suspended/sold-out listings — an asking price
-      // that isn't actually live shouldn't influence the recommendation.
       if (data['isArchived'] == true || data['isSuspended'] == true) continue;
       final quantity = _numField(data, 'quantity') ?? 0;
       if (quantity <= 0) continue;
-      final matchesCommodity = (data['commodity']?.toString().toLowerCase() == commodity.toLowerCase()) ||
-          PriceRecommendationService.namesLikelyMatch(commodity, (data['name'] ?? '').toString());
+      final matchesCommodity =
+          (data['commodity']?.toString().toLowerCase() == commodity.toLowerCase()) ||
+              PriceRecommendationService.namesLikelyMatch(
+                commodity,
+                (data['name'] ?? '').toString(),
+              );
       if (!matchesCommodity) continue;
-      final price = _numField(data, 'price');
+
+      double? price;
+      if (isWholesale) {
+        final wholesale = _numField(data, 'wholesalePrice');
+        final enabled = data['wholesaleEnabled'] == true ||
+            (data['wholesaleEnabled'] == null && wholesale != null && wholesale > 0);
+        if (!enabled) continue;
+        price = wholesale;
+      } else {
+        price = _numField(data, 'retailPrice') ?? _numField(data, 'price');
+      }
+
       if (price != null && price > 0) {
         listingPrices.add(price);
         supplyQuantity += quantity;
@@ -178,24 +195,47 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final transactions = <({double price, DateTime? date})>[];
     for (final doc in _completedOrders) {
       final data = doc.data();
-      if (!PriceRecommendationService.namesLikelyMatch(commodity, (data['productName'] ?? '').toString())) {
+      if (!PriceRecommendationService.namesLikelyMatch(
+        commodity,
+        (data['productName'] ?? '').toString(),
+      )) {
         continue;
       }
-      final price = _numField(data, 'unitPrice');
+
+      final storedType = (data['pricingType'] ?? 'retail').toString().toLowerCase();
+      if (isWholesale ? storedType != 'wholesale' : storedType == 'wholesale') {
+        continue;
+      }
+
+      final price =
+          _numField(data, 'pricePerUnit') ?? _numField(data, 'unitPrice');
       if (price != null && price > 0) {
-        transactions.add((price: price, date: _dateField(data, 'createdAt')));
+        transactions.add((
+          price: price,
+          date: _dateField(data, 'completedAt') ?? _dateField(data, 'createdAt'),
+        ));
       }
     }
 
+    // General product searches are a useful retail demand signal, but they
+    // do not prove bulk/wholesale intent. Wholesale recommendations therefore
+    // rely on real wholesale listings/transactions unless a dedicated bulk
+    // demand signal is introduced later.
     var searchCount30d = 0;
-    for (final doc in _searchEvents) {
-      final data = doc.data();
-      final query = (data['query'] ?? '').toString();
-      if (query.trim().isEmpty) continue;
-      if (!PriceRecommendationService.namesLikelyMatch(commodity, query)) continue;
-      final date = _dateField(data, 'createdAt');
-      if (date != null && now.difference(date) <= PriceRecommendationService.recentDemandWindow) {
-        searchCount30d++;
+    if (!isWholesale) {
+      for (final doc in _searchEvents) {
+        final data = doc.data();
+        final query = (data['query'] ?? '').toString();
+        if (query.trim().isEmpty) continue;
+        if (!PriceRecommendationService.namesLikelyMatch(commodity, query)) {
+          continue;
+        }
+        final date = _dateField(data, 'createdAt');
+        if (date != null &&
+            now.difference(date) <=
+                PriceRecommendationService.recentDemandWindow) {
+          searchCount30d++;
+        }
       }
     }
 
@@ -203,13 +243,22 @@ class _AddProductScreenState extends State<AddProductScreen> {
     DateTime? referenceEffectiveDate;
     for (final doc in _marketPrices) {
       final data = doc.data();
-      if (!PriceRecommendationService.namesLikelyMatch(commodity, (data['name'] ?? '').toString())) {
+      if (!PriceRecommendationService.namesLikelyMatch(
+        commodity,
+        (data['name'] ?? '').toString(),
+      )) {
         continue;
       }
-      final price = _numField(data, 'baselinePrice');
+
+      // A wholesale reference is used only when the agricultural office
+      // explicitly supplied one. Never derive it by discounting retail.
+      final price = isWholesale
+          ? _numField(data, 'wholesaleBaselinePrice')
+          : _numField(data, 'baselinePrice');
       if (price != null && price > 0) {
         referencePrice = price;
-        referenceEffectiveDate = _dateField(data, 'updatedAt');
+        referenceEffectiveDate =
+            _dateField(data, 'effectiveDate') ?? _dateField(data, 'updatedAt');
         break;
       }
     }
@@ -1066,6 +1115,101 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _basisLine('Weighted toward actual completed sales over asking prices, and outlier-resistant.'),
           if (result.tier == PriceDataTier.limited)
             _basisLine('Limited data so far — treat this as a rough starting point, not a confident market read.'),
+          if (_wholesaleEnabled) ...[
+            const SizedBox(height: 14),
+            Divider(color: Colors.white.withValues(alpha: 0.28)),
+            const SizedBox(height: 10),
+            Builder(
+              builder: (context) {
+                final wholesaleResult =
+                    _computeRecommendation(commodity, pricingType: 'wholesale');
+                if (wholesaleResult.tier == PriceDataTier.insufficient) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'WHOLESALE PRICE RECOMMENDATION',
+                        style: GoogleFonts.montserrat(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Wholesale price recommendation currently unavailable due to limited wholesale market data.',
+                        style: GoogleFonts.montserrat(
+                          color: Colors.white70,
+                          fontSize: 11.5,
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'You can set the wholesale price manually. AgriTrade+ will not create a discount or wholesale reference price automatically.',
+                        style: GoogleFonts.montserrat(
+                          color: Colors.white60,
+                          fontSize: 10.5,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  );
+                }
+
+                final wholesaleSuggested = wholesaleResult.suggestedPrice!;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'WHOLESALE SUGGESTED PRICE',
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white70,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '₱${wholesaleSuggested.toStringAsFixed(2)} / $_currentUnit',
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white,
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      wholesaleResult.referencePrice != null
+                          ? 'Based only on wholesale-specific reference/market data.'
+                          : 'Based on actual wholesale listings and completed wholesale transactions.',
+                      style: GoogleFonts.montserrat(
+                        color: Colors.white60,
+                        fontSize: 10.5,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton(
+                      onPressed: () {
+                        _wholesalePriceController.text =
+                            wholesaleSuggested.toStringAsFixed(2);
+                        _showMessage(
+                          'Wholesale suggested price applied — you can still edit it.',
+                        );
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white54),
+                      ),
+                      child: const Text('Use Wholesale Suggested Price'),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
           const SizedBox(height: 10),
           Text(
             'This is an AI-assisted suggestion only — you always make the final pricing decision.',
