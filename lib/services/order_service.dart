@@ -62,14 +62,6 @@ class OrderService {
           throw StateError('This listing is no longer available.');
         }
 
-        final available =
-            (productSnapshot.data()?['quantity'] as num?)?.toDouble() ?? 0;
-        if (q > available) {
-          throw StateError(
-            'Only ${available.toStringAsFixed(0)} item(s) are available.',
-          );
-        }
-
         // Authoritative unit: the product's own stored 'unit' field wins
         // over whatever the UI passed in (which may be derived from a
         // display string) — falls back to deriving it from the commodity/
@@ -79,6 +71,14 @@ class OrderService {
         final realUnit = ((productData?['unit'] as String?)?.trim().isNotEmpty ?? false)
             ? productData!['unit'] as String
             : unitForProductName((productData?['commodity'] ?? productData?['name'] ?? productName).toString());
+
+        final available =
+            (productSnapshot.data()?['quantity'] as num?)?.toDouble() ?? 0;
+        if (q > available) {
+          throw StateError(
+            'Only ${formatStock(available, realUnit)} available.',
+          );
+        }
 
         final retailPrice = (productData?['retailPrice'] as num?) ??
             (productData?['price'] as num?) ??
