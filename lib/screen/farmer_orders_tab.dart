@@ -105,6 +105,7 @@ class _OrdersTabState extends State<OrdersTab> {
     final buyer = d['buyerName']?.toString() ?? 'Buyer';
     final status = (d['status'] ?? 'pending').toString();
     final pricingType = (d['pricingType'] ?? 'retail').toString();
+    final neededBy = d['neededBy'] as Timestamp?;
     final unit = d['unit']?.toString() ?? '';
     final unitPrice = (d['pricePerUnit'] as num?) ?? (d['unitPrice'] as num?);
     showDialog(
@@ -124,6 +125,10 @@ class _OrdersTabState extends State<OrdersTab> {
             if (unitPrice != null) ...[
               const SizedBox(height: 6),
               Text('Price: ${formatPriceWithUnit(unitPrice, unit)}'),
+            ],
+            if (neededBy != null) ...[
+              const SizedBox(height: 6),
+              Text('Needed by: ${neededBy.toDate().month}/${neededBy.toDate().day}/${neededBy.toDate().year}'),
             ],
           ],
         ),
