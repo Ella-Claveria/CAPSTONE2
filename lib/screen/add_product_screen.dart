@@ -38,7 +38,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final _priceController = TextEditingController();
   final _wholesalePriceController = TextEditingController();
   final _wholesaleMinimumController = TextEditingController(text: '10');
-  final _retailMaximumController = TextEditingController(text: '1');
   final _quantityController = TextEditingController();
   final _descriptionController = TextEditingController();
 
@@ -66,6 +65,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   bool _deliveryAvailable = false;
   bool _pickupOnly = false;
+  bool _wholesaleEnabled = false;
   bool _loading = false;
   bool _isArchived = false;
 
@@ -239,8 +239,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
           (data['wholesalePrice'] as num?)?.toString() ?? '';
       _wholesaleMinimumController.text =
           (data['wholesaleMinimumQuantity'] as num?)?.toString() ?? '10';
-      _retailMaximumController.text =
-          (data['retailMaximumQuantity'] as num?)?.toString() ?? '1';
+      final existingWholesale = (data['wholesalePrice'] as num?)?.toDouble();
+      _wholesaleEnabled = data['wholesaleEnabled'] == true ||
+          (data['wholesaleEnabled'] == null && existingWholesale != null && existingWholesale > 0);
       _quantityController.text = (data['quantity'] as num?)?.toString() ?? '';
       _descriptionController.text = data['description']?.toString() ?? '';
       final category = data['category']?.toString();
@@ -302,7 +303,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _priceController.dispose();
     _wholesalePriceController.dispose();
     _wholesaleMinimumController.dispose();
-    _retailMaximumController.dispose();
     _quantityController.dispose();
     _descriptionController.dispose();
     super.dispose();
@@ -415,7 +415,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final priceText = _priceController.text.trim();
     final wholesalePriceText = _wholesalePriceController.text.trim();
     final wholesaleMinimumText = _wholesaleMinimumController.text.trim();
-    final retailMaximumText = _retailMaximumController.text.trim();
     final quantityText = _quantityController.text.trim();
     final description = _descriptionController.text.trim();
 
@@ -451,29 +450,33 @@ class _AddProductScreenState extends State<AddProductScreen> {
       _showMessage('Available Stock for $unit must be a whole number.');
       return;
     }
-    final wholesalePrice = wholesalePriceText.isEmpty
+    final wholesalePrice = !_wholesaleEnabled || wholesalePriceText.isEmpty
         ? null
         : double.tryParse(wholesalePriceText);
-    final wholesaleMinimum = num.tryParse(wholesaleMinimumText);
-    final retailMaximum = num.tryParse(retailMaximumText);
-    if (retailMaximum == null || retailMaximum < 1) {
-      _showMessage('Please enter a valid retail maximum quantity.');
-      return;
-    }
-    if (wholesalePriceText.isNotEmpty &&
-        (wholesalePrice == null || wholesalePrice <= 0)) {
+    final wholesaleMinimum = !_wholesaleEnabled
+        ? null
+        : num.tryParse(wholesaleMinimumText);
+    if (_wholesaleEnabled && (wholesalePrice == null || wholesalePrice <= 0)) {
       _showMessage('Please enter a valid wholesale price.');
       return;
     }
-    if (wholesalePrice != null &&
-        (wholesaleMinimum == null || wholesaleMinimum < 2)) {
-      _showMessage('Wholesale minimum quantity must be at least 2.');
+    if (_wholesaleEnabled && wholesalePrice! >= price) {
+      _showMessage('Wholesale price must be lower than the retail price.');
       return;
     }
-    if (isCountBasedUnit(unit) &&
-        ((wholesaleMinimum != null && wholesaleMinimum != wholesaleMinimum.roundToDouble()) ||
-            retailMaximum != retailMaximum.roundToDouble())) {
-      _showMessage('Wholesale/retail quantity thresholds for $unit must be whole numbers.');
+    if (_wholesaleEnabled &&
+        (wholesaleMinimum == null || wholesaleMinimum <= 0)) {
+      _showMessage('Please enter a valid wholesale minimum quantity.');
+      return;
+    }
+    if (_wholesaleEnabled &&
+        isCountBasedUnit(unit) &&
+        wholesaleMinimum != wholesaleMinimum.roundToDouble()) {
+      _showMessage('Wholesale minimum quantity for $unit must be a whole number.');
+      return;
+    }
+    if (_wholesaleEnabled && wholesaleMinimum! > quantity) {
+      _showMessage('Wholesale minimum cannot be greater than the available stock.');
       return;
     }
 
@@ -503,9 +506,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
         price: price,
         quantity: quantity,
         description: description,
+        wholesaleEnabled: _wholesaleEnabled,
         wholesalePrice: wholesalePrice,
         wholesaleMinimumQuantity: wholesaleMinimum ?? 1,
-        retailMaximumQuantity: retailMaximum,
         imageUrls: imageUrls,
         deliveryAvailable: _deliveryAvailable,
         pickupOnly: _pickupOnly,
@@ -519,9 +522,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
         price: price,
         quantity: quantity,
         description: description,
+        wholesaleEnabled: _wholesaleEnabled,
         wholesalePrice: wholesalePrice,
         wholesaleMinimumQuantity: wholesaleMinimum ?? 1,
-        retailMaximumQuantity: retailMaximum,
         imageUrls: imageUrls,
         deliveryAvailable: _deliveryAvailable,
         pickupOnly: _pickupOnly,
@@ -975,7 +978,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     // marketplace (Levels 2-4) share this same layout; only which pieces
     // have real data to show differs.
     final suggested = result.suggestedPrice!;
-    final wholesaleSuggestion = suggested * 0.9;
     final isColdStart = result.tier == PriceDataTier.referenceOnly;
 
     return _recoShell(
@@ -984,7 +986,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         children: [
           Row(
             children: [
-              Expanded(child: _statBlock('SUGGESTED PRICE', '₱${suggested.toStringAsFixed(2)} / kg', big: true)),
+              Expanded(child: _statBlock('SUGGESTED PRICE', '₱${suggested.toStringAsFixed(2)} / $_currentUnit', big: true)),
               Container(width: 1, height: 38, color: Colors.white24),
               const SizedBox(width: 14),
               Expanded(
@@ -1001,7 +1003,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               Expanded(
                 child: _statBlock(
                   'REFERENCE PRICE',
-                  result.referencePrice != null ? '₱${result.referencePrice!.toStringAsFixed(2)} / kg' : 'Not set',
+                  result.referencePrice != null ? '₱${result.referencePrice!.toStringAsFixed(2)} / $_currentUnit' : 'Not set',
                 ),
               ),
               Container(width: 1, height: 38, color: Colors.white24),
@@ -1064,11 +1066,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _basisLine('Weighted toward actual completed sales over asking prices, and outlier-resistant.'),
           if (result.tier == PriceDataTier.limited)
             _basisLine('Limited data so far — treat this as a rough starting point, not a confident market read.'),
-          const SizedBox(height: 10),
-          Text(
-            'Suggested wholesale price: ₱${wholesaleSuggestion.toStringAsFixed(2)}/kg (10% volume discount).',
-            style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 11),
-          ),
           const SizedBox(height: 10),
           Text(
             'This is an AI-assisted suggestion only — you always make the final pricing decision.',
@@ -1426,48 +1423,71 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ),
             const SizedBox(height: 12),
 
-            _label('Wholesale Price (Optional)'),
-            TextField(
-              controller: _wholesalePriceController,
-              keyboardType: TextInputType.number,
-              style: GoogleFonts.montserrat(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                'Offer Wholesale',
+                style: GoogleFonts.montserrat(fontSize: 14, fontWeight: FontWeight.w600),
               ),
-              decoration: _inputDecoration(
-                'Leave blank to offer retail only',
-                prefix: Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    '₱',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: _darkGreen,
+              subtitle: Text(
+                'Set a lower bulk price once the buyer reaches your minimum quantity.',
+                style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.grey[600]),
+              ),
+              activeThumbColor: _darkGreen,
+              value: _wholesaleEnabled,
+              onChanged: (value) => setState(() {
+                _wholesaleEnabled = value;
+                if (!value) _wholesalePriceController.clear();
+              }),
+            ),
+            if (_wholesaleEnabled) ...[
+              const SizedBox(height: 4),
+              _label('Wholesale ${pricePerUnitLabel(_currentUnit)}'),
+              TextField(
+                controller: _wholesalePriceController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                style: GoogleFonts.montserrat(fontSize: 15, fontWeight: FontWeight.w600),
+                decoration: _inputDecoration(
+                  '0.00',
+                  prefix: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Text(
+                      '₱',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: _darkGreen,
+                      ),
+                    ),
+                  ),
+                  suffix: Padding(
+                    padding: const EdgeInsets.only(right: 14),
+                    child: Text(
+                      'Php / $_currentUnit',
+                      style: GoogleFonts.montserrat(fontSize: 13, color: Colors.grey[600]),
                     ),
                   ),
                 ),
-                suffix: Padding(
-                  padding: const EdgeInsets.only(right: 14),
-                  child: Text(
-                    'Php / kg',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 13,
-                      color: Colors.grey[600],
+              ),
+              const SizedBox(height: 12),
+              _label('Minimum Wholesale Quantity ($_currentUnit)'),
+              TextField(
+                controller: _wholesaleMinimumController,
+                keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
+                style: GoogleFonts.montserrat(fontSize: 14),
+                decoration: _inputDecoration(
+                  'e.g., 20',
+                  suffix: Padding(
+                    padding: const EdgeInsets.only(right: 14),
+                    child: Text(
+                      _currentUnit,
+                      style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.grey[600]),
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            _label('Wholesale Minimum Quantity ($_currentUnit)'),
-            TextField(
-              controller: _wholesaleMinimumController,
-              keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
-              style: GoogleFonts.montserrat(fontSize: 14),
-              decoration: _inputDecoration('e.g., 10'),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
 
             // ---- Description ----
             _label('Description'),
