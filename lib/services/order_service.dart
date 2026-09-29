@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'connectivity_service.dart';
 import 'market_price_helpers.dart';
+import 'pricing_tier_service.dart';
 import '../data/commodity_master_list.dart';
 
 class OrderService {
@@ -46,8 +47,6 @@ class OrderService {
       }
 
       final q = quantity <= 0 ? 1 : quantity;
-      final price = unitPrice < 0 ? 0 : unitPrice;
-      final total = q * price;
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         final productRef = FirebaseFirestore.instance
@@ -81,6 +80,23 @@ class OrderService {
             ? productData!['unit'] as String
             : unitForProductName((productData?['commodity'] ?? productData?['name'] ?? productName).toString());
 
+        final retailPrice = (productData?['retailPrice'] as num?) ??
+            (productData?['price'] as num?) ??
+            unitPrice;
+        final wholesaleEnabled = productData != null &&
+            PricingTierService.wholesaleAvailable(productData);
+        final wholesalePrice = productData?['wholesalePrice'] as num?;
+        final wholesaleMinimum = productData?['wholesaleMinimumQuantity'] as num?;
+        final quote = PricingTierService.quote(
+          quantity: q,
+          retailPrice: retailPrice,
+          wholesaleEnabled: wholesaleEnabled,
+          wholesalePrice: wholesalePrice,
+          wholesaleMinimumQuantity: wholesaleMinimum,
+        );
+        final price = quote.unitPrice;
+        final total = quote.subtotal;
+
         final orderRef = _orders.doc();
         transaction.update(productRef, {'quantity': available - q});
         transaction.set(orderRef, {
@@ -101,7 +117,11 @@ class OrderService {
           'quantity': q,
           'unit': realUnit,
           'quantityLabel': formatStock(q, realUnit),
+          'pricingType': quote.pricingType,
+          'pricePerUnit': price,
+          // Keep unitPrice for backward compatibility with existing analytics/screens.
           'unitPrice': price,
+          'subtotal': total,
           'total': total,
           'deliveryMethod': deliveryMethod,
           'status': 'pending',
