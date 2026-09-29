@@ -183,6 +183,47 @@ class DashboardAnalyticsService {
     return total;
   }
 
+  static ({
+    int retailOrders,
+    int wholesaleOrders,
+    num retailRevenue,
+    num wholesaleRevenue,
+  }) pricingTypeSummary(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> orders, {
+    DateTimeRange? range,
+  }) {
+    var retailOrders = 0;
+    var wholesaleOrders = 0;
+    num retailRevenue = 0;
+    num wholesaleRevenue = 0;
+
+    for (final doc in orders) {
+      final data = doc.data();
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
+      if (!_inRange(_completionDate(data), range)) continue;
+
+      final type = (data['pricingType'] ?? 'retail').toString().toLowerCase();
+      final raw = data['subtotal'] ?? data['total'];
+      final value = raw is num ? raw : num.tryParse(raw?.toString() ?? '') ?? 0;
+
+      if (type == 'wholesale') {
+        wholesaleOrders++;
+        wholesaleRevenue += value;
+      } else {
+        // Legacy orders pre-dating pricingType are classified as retail.
+        retailOrders++;
+        retailRevenue += value;
+      }
+    }
+
+    return (
+      retailOrders: retailOrders,
+      wholesaleOrders: wholesaleOrders,
+      retailRevenue: retailRevenue,
+      wholesaleRevenue: wholesaleRevenue,
+    );
+  }
+
   static Map<String, num> categoryRevenue(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> products, {
