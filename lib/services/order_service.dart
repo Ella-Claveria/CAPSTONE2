@@ -34,6 +34,7 @@ class OrderService {
     required String buyerContact,
     required String buyerAddress,
     required String deliveryMethod,
+    DateTime? neededBy,
   }) async {
     // An order must never be silently queued for later — if it can't be
     // confirmed against live Firestore data right now, it doesn't happen.
@@ -124,6 +125,7 @@ class OrderService {
           'subtotal': total,
           'total': total,
           'deliveryMethod': deliveryMethod,
+          if (neededBy != null) 'neededBy': Timestamp.fromDate(neededBy),
           'status': 'pending',
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
@@ -147,18 +149,39 @@ class OrderService {
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
 
+    const allowedTransitions = <String, Set<String>>{
+      'pending': {'confirmed'},
+      'confirmed': {'shipped'},
+      'shipped': {'completed'},
+    };
+
     try {
-      await _orders.doc(id).update({
-        'status': status,
-        'updatedAt': FieldValue.serverTimestamp(),
-        // Its own field (rather than reusing updatedAt) so the admin
-        // Demand Heatmap can filter by month/year of actual completion —
-        // updatedAt also moves on the confirm/shipped steps before it, so
-        // it can't stand in for "when did this become completed".
-        if (status == 'completed') 'completedAt': FieldValue.serverTimestamp(),
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final orderRef = _orders.doc(id);
+        final snapshot = await transaction.get(orderRef);
+        if (!snapshot.exists) {
+          throw StateError('This order no longer exists.');
+        }
+
+        final data = snapshot.data()!;
+        final current = (data['status'] ?? 'pending').toString().toLowerCase();
+        final next = status.toLowerCase();
+        final allowed = allowedTransitions[current] ?? const <String>{};
+
+        if (!allowed.contains(next)) {
+          throw StateError('Order cannot move from $current to $next.');
+        }
+
+        transaction.update(orderRef, {
+          'status': next,
+          'updatedAt': FieldValue.serverTimestamp(),
+          if (next == 'completed') 'completedAt': FieldValue.serverTimestamp(),
+        });
       });
       return null;
-    } catch (e) {
+    } on StateError catch (e) {
+      return e.message;
+    } catch (_) {
       return 'Could not update the order. Please try again.';
     }
   }
