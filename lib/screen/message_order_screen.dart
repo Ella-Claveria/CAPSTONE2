@@ -19,6 +19,7 @@ class MessageOrderScreen extends StatefulWidget {
   final String productImage;
   final bool deliveryAvailable;
   final bool pickupAvailable;
+  final String? unit;
 
   const MessageOrderScreen({
     super.key,
@@ -31,6 +32,7 @@ class MessageOrderScreen extends StatefulWidget {
     required this.productImage,
     required this.deliveryAvailable,
     required this.pickupAvailable,
+    this.unit,
   });
 
   @override
@@ -48,7 +50,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
   // The commodity's Unit of Measurement (see commodity_master_list.dart),
   // derived from the product name — used everywhere this screen would
   // otherwise have hardcoded "/kg".
-  String get _unit => unitForProductName(widget.productName);
+  String get _unit => widget.unit ?? unitForProductName(widget.productName);
 
   @override
   void initState() {
