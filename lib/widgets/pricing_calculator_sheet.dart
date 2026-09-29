@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../data/commodity_master_list.dart';
+
 /// Lets the buyer pick a quantity and see the live total (qty × unit
 /// price) for a wholesale or retail pricing option, before continuing to
-/// PlaceOrderScreen. Shown when they tap a price option in chat.
+/// PlaceOrderScreen. Shown when they tap a price option in chat. The
+/// stepper always moves by whole units — fine-grained decimal quantities
+/// for weight-based units are entered afterward on PlaceOrderScreen's own
+/// text field, which already accepts them.
 Future<void> showPricingCalculatorSheet(
   BuildContext context, {
   required String pricingType, // 'retail' or 'wholesale'
@@ -10,6 +15,7 @@ Future<void> showPricingCalculatorSheet(
   required int minimumQuantity,
   required int maximumQuantity, // 0 = no cap
   required void Function(int quantity) onProceed,
+  String unit = kDefaultUnit,
 }) async {
   final isWholesale = pricingType == 'wholesale';
   final lowerBound = isWholesale ? (minimumQuantity < 1 ? 1 : minimumQuantity) : 1;
@@ -39,9 +45,9 @@ Future<void> showPricingCalculatorSheet(
                   const SizedBox(height: 4),
                   Text(
                     isWholesale
-                        ? 'Minimum $minimumQuantity kg for the wholesale rate.'
+                        ? 'Minimum $minimumQuantity $unit for the wholesale rate.'
                         : maximumQuantity > 0
-                            ? 'Up to $maximumQuantity kg at the retail rate.'
+                            ? 'Up to $maximumQuantity $unit at the retail rate.'
                             : 'Retail rate.',
                     style: const TextStyle(fontSize: 12.5, color: Colors.black54),
                   ),
@@ -49,7 +55,7 @@ Future<void> showPricingCalculatorSheet(
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('Quantity (kg)', style: TextStyle(fontWeight: FontWeight.w600)),
+                      Text('Quantity ($unit)', style: const TextStyle(fontWeight: FontWeight.w600)),
                       Row(
                         children: [
                           IconButton(
@@ -87,7 +93,7 @@ Future<void> showPricingCalculatorSheet(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Text(
-                          '₱${unitPrice.toStringAsFixed(2)}/kg × $quantity kg',
+                          '₱${unitPrice.toStringAsFixed(2)}/$unit × $quantity $unit',
                           style: const TextStyle(fontSize: 13, color: Colors.black54),
                         ),
                         Text(

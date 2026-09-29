@@ -3,12 +3,16 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/product_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/price_recommendation_service.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
+import 'supported_products_screen.dart';
 
 class AddProductScreen extends StatefulWidget {
   final String? productId;
@@ -27,6 +31,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
   static const Color _lightGreenAccent = Color(0xFFDCEDC8);
 
   final _nameController = TextEditingController();
+  // Autocomplete requires focusNode and textEditingController to be either
+  // both null or both set — passing only the controller trips its
+  // "textEditingController and focusNode must be provided" assertion.
+  final _nameFocusNode = FocusNode();
   final _priceController = TextEditingController();
   final _wholesalePriceController = TextEditingController();
   final _wholesaleMinimumController = TextEditingController(text: '10');
@@ -39,7 +47,22 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final CloudinaryService _cloudinaryService = CloudinaryService();
 
   String? _category;
-  final List<String> _categories = ['Fruits', 'Vegetables', 'Livestock'];
+  // Derived from the Commodity Master List so this always has every category
+  // the admin's approved commodities actually use (Grains, Root Crops,
+  // Vegetables, Spices, Fruits, Livestock, Fisheries) — never a separately
+  // hand-maintained list that can drift out of sync.
+  final List<String> _categories = kCommodityMasterList.keys.toList();
+
+  // Tracks the category we last auto-filled, so a farmer's own manual pick
+  // is never silently overwritten — see _onNameChanged below.
+  String? _lastAutoDetectedCategory;
+
+  // The official Commodity Master List entry this listing represents (see
+  // commodity_master_list.dart) — optional, separate from the free-text
+  // Product Title/Category above, and used only to drive the AI-Assisted
+  // Price Recommendation below. Never shown to buyers, never restricts
+  // what the farmer can actually list.
+  String? _selectedCommodity;
 
   bool _deliveryAvailable = false;
   bool _pickupOnly = false;
@@ -55,16 +78,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
   bool get _isEditing => widget.productId != null;
 
   // ==========================================================
-  // LIVE MARKET DATA — active listings, completed sales, and the
-  // admin-set baseline price, kept in sync via Firestore streams
-  // and fed into PriceRecommendationService. See _computeRecommendation.
+  // LIVE MARKET DATA — active listings, completed sales, buyer search
+  // activity, and the admin-set reference price, kept in sync via
+  // Firestore streams and fed into PriceRecommendationService. See
+  // _matchedCommodity/_computeRecommendation.
   // ==========================================================
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _liveProducts = [];
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _completedOrders = [];
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _marketPrices = [];
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _searchEvents = [];
   StreamSubscription? _productsSub;
   StreamSubscription? _ordersSub;
   StreamSubscription? _marketPricesSub;
+  StreamSubscription? _searchEventsSub;
 
   void _listenToMarketData() {
     _productsSub = FirebaseFirestore.instance
@@ -86,6 +112,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
         .listen((snap) {
       if (mounted) setState(() => _marketPrices = snap.docs);
     });
+    // Aggregated only — see PriceRecommendation.searchCount's doc comment;
+    // no individual buyer/search record is ever surfaced to the farmer.
+    _searchEventsSub = FirebaseFirestore.instance
+        .collection('searchEvents')
+        .snapshots()
+        .listen((snap) {
+      if (mounted) setState(() => _searchEvents = snap.docs);
+    });
   }
 
   double? _numField(Map<String, dynamic> data, String field) {
@@ -94,48 +128,103 @@ class _AddProductScreenState extends State<AddProductScreen> {
     return num.tryParse(raw?.toString() ?? '')?.toDouble();
   }
 
-  PriceRecommendation? _computeRecommendation(String typedName) {
+  DateTime? _dateField(Map<String, dynamic> data, String field) {
+    final raw = data[field];
+    return raw is Timestamp ? raw.toDate() : null;
+  }
+
+  // The commodity this listing represents, for price-recommendation
+  // purposes only: the explicit dropdown pick wins when set; otherwise
+  // fall back to matching the free-text Product Title against the
+  // official master list (commodity_master_list.dart). Null means this
+  // listing isn't (yet) recognizable as one of the supported commodities
+  // — the price panel shows the "not supported" message in that case,
+  // never a guessed number (client requirement: supported commodities
+  // only).
+  String? get _matchedCommodity =>
+      _selectedCommodity ?? matchSupportedCommodity(_nameController.text.trim());
+
+  // The Unit of Measurement for the currently-selected commodity (see
+  // commodity_master_list.dart's kCommodityUnits) — drives the Available
+  // Stock / Price per Unit labels below and updates immediately whenever
+  // _matchedCommodity changes, since both read straight from this getter
+  // on every rebuild rather than caching a stale value.
+  String get _currentUnit => unitForCommodity(_matchedCommodity ?? '');
+  bool get _isCountBasedUnit => isCountBasedUnit(_currentUnit);
+
+  PriceRecommendation _computeRecommendation(String commodity) {
+    final now = DateTime.now();
+
     final listingPrices = <double>[];
+    num supplyQuantity = 0;
     for (final doc in _liveProducts) {
       if (widget.productId != null && doc.id == widget.productId) continue;
       final data = doc.data();
-      if (!PriceRecommendationService.namesLikelyMatch(
-          typedName, (data['name'] ?? '').toString())) {
-        continue;
-      }
+      // Exclude archived/suspended/sold-out listings — an asking price
+      // that isn't actually live shouldn't influence the recommendation.
+      if (data['isArchived'] == true || data['isSuspended'] == true) continue;
+      final quantity = _numField(data, 'quantity') ?? 0;
+      if (quantity <= 0) continue;
+      final matchesCommodity = (data['commodity']?.toString().toLowerCase() == commodity.toLowerCase()) ||
+          PriceRecommendationService.namesLikelyMatch(commodity, (data['name'] ?? '').toString());
+      if (!matchesCommodity) continue;
       final price = _numField(data, 'price');
-      if (price != null && price > 0) listingPrices.add(price);
+      if (price != null && price > 0) {
+        listingPrices.add(price);
+        supplyQuantity += quantity;
+      }
     }
 
-    final transactionPrices = <double>[];
+    final transactions = <({double price, DateTime? date})>[];
     for (final doc in _completedOrders) {
       final data = doc.data();
-      if (!PriceRecommendationService.namesLikelyMatch(
-          typedName, (data['productName'] ?? '').toString())) {
+      if (!PriceRecommendationService.namesLikelyMatch(commodity, (data['productName'] ?? '').toString())) {
         continue;
       }
       final price = _numField(data, 'unitPrice');
-      if (price != null && price > 0) transactionPrices.add(price);
+      if (price != null && price > 0) {
+        transactions.add((price: price, date: _dateField(data, 'createdAt')));
+      }
     }
 
-    double? baselinePrice;
+    var searchCount30d = 0;
+    for (final doc in _searchEvents) {
+      final data = doc.data();
+      final query = (data['query'] ?? '').toString();
+      if (query.trim().isEmpty) continue;
+      if (!PriceRecommendationService.namesLikelyMatch(commodity, query)) continue;
+      final date = _dateField(data, 'createdAt');
+      if (date != null && now.difference(date) <= PriceRecommendationService.recentDemandWindow) {
+        searchCount30d++;
+      }
+    }
+
+    double? referencePrice;
+    DateTime? referenceEffectiveDate;
     for (final doc in _marketPrices) {
       final data = doc.data();
-      if (!PriceRecommendationService.namesLikelyMatch(
-          typedName, (data['name'] ?? '').toString())) {
+      if (!PriceRecommendationService.namesLikelyMatch(commodity, (data['name'] ?? '').toString())) {
         continue;
       }
       final price = _numField(data, 'baselinePrice');
       if (price != null && price > 0) {
-        baselinePrice = price;
+        referencePrice = price;
+        referenceEffectiveDate = _dateField(data, 'updatedAt');
         break;
       }
     }
 
     return PriceRecommendationService.recommend(
       listingPrices: listingPrices,
-      transactionPrices: transactionPrices,
-      baselinePrice: baselinePrice,
+      transactions: transactions,
+      reference: PriceRecommendationService.referenceInfo(
+        price: referencePrice,
+        effectiveDate: referenceEffectiveDate,
+        now: now,
+      ),
+      supplyQuantity: supplyQuantity > 0 ? supplyQuantity.toDouble() : null,
+      searchCount30d: searchCount30d,
+      now: now,
     );
   }
 
@@ -158,6 +247,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
       if (category != null && _categories.contains(category)) {
         _category = category;
       }
+      final commodity = data['commodity']?.toString();
+      if (commodity != null && kSupportedCommodities.contains(commodity)) {
+        _selectedCommodity = commodity;
+      }
       _deliveryAvailable = data['deliveryAvailable'] == true;
       _pickupOnly = data['pickupOnly'] == true;
       _isArchived = data['isArchived'] == true;
@@ -172,9 +265,30 @@ class _AddProductScreenState extends State<AddProductScreen> {
         if (single != null && single.isNotEmpty) _imageUrl = single;
       }
     }
-    // Rebuild the price suggestion as the user types the product title.
-    _nameController.addListener(() => setState(() {}));
+    // Rebuild the price suggestion as the user types, and auto-detect the
+    // category (see _onNameChanged) — the product name IS the commodity now.
+    _nameController.addListener(_onNameChanged);
     _listenToMarketData();
+  }
+
+  // Product Name now doubles as the commodity picker (it's restricted to
+  // the Commodity Master List — see _save()'s unsupported-product gate), so
+  // as soon as it resolves to a supported commodity, auto-fill Category to
+  // match. Only touches Category while it's still showing our own last
+  // suggestion (or is empty) — a farmer's own manual pick is never
+  // silently overwritten.
+  void _onNameChanged() {
+    final matched = matchSupportedCommodity(_nameController.text.trim());
+    if (matched != null) {
+      final detected = categoryOfCommodity(matched);
+      if (detected != null &&
+          _categories.contains(detected) &&
+          (_category == null || _category == _lastAutoDetectedCategory)) {
+        _category = detected;
+        _lastAutoDetectedCategory = detected;
+      }
+    }
+    setState(() {});
   }
 
   @override
@@ -182,7 +296,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _productsSub?.cancel();
     _ordersSub?.cancel();
     _marketPricesSub?.cancel();
+    _searchEventsSub?.cancel();
     _nameController.dispose();
+    _nameFocusNode.dispose();
     _priceController.dispose();
     _wholesalePriceController.dispose();
     _wholesaleMinimumController.dispose();
@@ -307,25 +423,39 @@ class _AddProductScreenState extends State<AddProductScreen> {
       _showMessage('Please fill in name, price, and quantity.');
       return;
     }
+    // Product Title must resolve to one of AgriTrade+'s supported
+    // commodities (see commodity_master_list.dart) — never a fabricated or
+    // unsupported listing. The autocomplete field below normally already
+    // fills in an exact supported name; this is the hard gate for anyone
+    // who typed past it instead of picking a suggestion.
+    if (matchSupportedCommodity(name) == null) {
+      _showUnsupportedProductDialog();
+      return;
+    }
     if (_category == null) {
       _showMessage('Please choose a category.');
       return;
     }
     final price = double.tryParse(priceText);
-    final quantity = int.tryParse(quantityText);
+    final quantity = num.tryParse(quantityText);
     if (price == null || price <= 0) {
       _showMessage('Please enter a valid price.');
       return;
     }
     if (quantity == null || quantity < 0) {
-      _showMessage('Please enter a valid quantity.');
+      _showMessage('Please enter a valid, non-negative available stock.');
+      return;
+    }
+    final unit = _currentUnit;
+    if (isCountBasedUnit(unit) && quantity != quantity.roundToDouble()) {
+      _showMessage('Available Stock for $unit must be a whole number.');
       return;
     }
     final wholesalePrice = wholesalePriceText.isEmpty
         ? null
         : double.tryParse(wholesalePriceText);
-    final wholesaleMinimum = int.tryParse(wholesaleMinimumText);
-    final retailMaximum = int.tryParse(retailMaximumText);
+    final wholesaleMinimum = num.tryParse(wholesaleMinimumText);
+    final retailMaximum = num.tryParse(retailMaximumText);
     if (retailMaximum == null || retailMaximum < 1) {
       _showMessage('Please enter a valid retail maximum quantity.');
       return;
@@ -338,6 +468,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
     if (wholesalePrice != null &&
         (wholesaleMinimum == null || wholesaleMinimum < 2)) {
       _showMessage('Wholesale minimum quantity must be at least 2.');
+      return;
+    }
+    if (isCountBasedUnit(unit) &&
+        ((wholesaleMinimum != null && wholesaleMinimum != wholesaleMinimum.roundToDouble()) ||
+            retailMaximum != retailMaximum.roundToDouble())) {
+      _showMessage('Wholesale/retail quantity thresholds for $unit must be whole numbers.');
       return;
     }
 
@@ -373,6 +509,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
         imageUrls: imageUrls,
         deliveryAvailable: _deliveryAvailable,
         pickupOnly: _pickupOnly,
+        commodity: _selectedCommodity,
+        unit: unit,
       );
     } else {
       error = await _productService.addProduct(
@@ -387,6 +525,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
         imageUrls: imageUrls,
         deliveryAvailable: _deliveryAvailable,
         pickupOnly: _pickupOnly,
+        commodity: _selectedCommodity,
+        unit: unit,
       );
     }
     if (!mounted) return;
@@ -473,6 +613,111 @@ class _AddProductScreenState extends State<AddProductScreen> {
           message,
           style: GoogleFonts.montserrat(color: Colors.white),
         ),
+      ),
+    );
+  }
+
+  void _openSupportedProducts() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const SupportedProductsScreen()),
+    );
+  }
+
+  // Shown instead of creating the listing when the Product Title doesn't
+  // resolve to any commodity on the Commodity Master List (see _save()).
+  Future<void> _showUnsupportedProductDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Product not currently supported',
+            style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, fontSize: 16)),
+        content: Text(
+          'AgriTrade+ currently supports selected commodities based on the system '
+          'scope and available agricultural data. Please choose a product from the '
+          'Supported Products list.',
+          style: GoogleFonts.montserrat(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _openSupportedProducts();
+            },
+            child: Text('View Supported Products',
+                style: GoogleFonts.montserrat(color: _darkGreen, fontWeight: FontWeight.w600)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: GoogleFonts.montserrat(color: Colors.black54)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Small, always-visible warning (not a modal) that not every product can
+  // be sold on AgriTrade+ — the full explanation lives in Farmer setup (see
+  // register_screen.dart's Supported Products section).
+  Widget _supportedProductsBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.shade300),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 18, color: Colors.amber.shade800),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Not all goods are available to sell. AgriTrade+ currently supports '
+                  'selected commodities only — choose a product from the supported list.',
+                  style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.black87, height: 1.35),
+                ),
+                GestureDetector(
+                  onTap: _openSupportedProducts,
+                  child: Text(
+                    'View Supported Products',
+                    style: GoogleFonts.montserrat(
+                      fontSize: 11.5,
+                      color: _darkGreen,
+                      fontWeight: FontWeight.bold,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Read-only — the unit is controlled entirely by the selected commodity
+  // (see commodity_master_list.dart's kCommodityUnits), never typed by the
+  // farmer, and updates immediately whenever _matchedCommodity changes
+  // since this just reads _currentUnit fresh on every rebuild.
+  Widget _unitOfMeasurementDisplay() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Icon(Icons.straighten, size: 16, color: _midGreen),
+          const SizedBox(width: 6),
+          Text('Unit of Measurement: ', style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.grey[700])),
+          Text(_currentUnit,
+              style: GoogleFonts.montserrat(fontSize: 12.5, fontWeight: FontWeight.bold, color: _darkGreen)),
+        ],
       ),
     );
   }
@@ -661,37 +906,77 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   // ==========================================================
-  // AI-DRIVEN PRICE RECOMMENDATION — computed live from active
-  // listings, completed sales, and the admin baseline price, via
-  // PriceRecommendationService. See _computeRecommendation above.
+  // AI-ASSISTED PRICE RECOMMENDATION — a statistical/rule-based blend of
+  // the admin reference price, recent completed transactions, active
+  // listings, supply, and buyer demand (see PriceRecommendationService) —
+  // NOT a trained machine-learning model, so it's never called that in the
+  // UI. Gated to the official Commodity Master List
+  // (commodity_master_list.dart) per the agricultural client's approved
+  // scope — an unsupported/unrecognized product gets an explicit message
+  // instead of a guessed number. Advisory only: nothing here ever touches
+  // the Price field until the farmer taps "Use Suggested Price" below.
   // ==========================================================
   Widget _priceRecommendation() {
     final typedName = _nameController.text.trim();
+    final commodity = _matchedCommodity;
 
-    if (typedName.isEmpty) {
+    if (typedName.isEmpty && _selectedCommodity == null) {
       return _recoShell(
         child: Text(
-          'Type a product title to see a price suggestion.',
+          'Type a product name above to see a price suggestion.',
           style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12.5),
         ),
       );
     }
 
-    final match = _computeRecommendation(typedName);
-    if (match == null) {
+    if (commodity == null) {
       return _recoShell(
         child: Text(
-          'No market data yet for "$typedName" — no similar active listings, '
-          'past sales, or admin baseline price found.',
+          'AI-assisted price recommendations are only available for AgriTrade+\'s supported '
+          'commodities (see Supported Products above) — "$typedName" isn\'t recognized as one yet.',
           style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12.5),
         ),
       );
     }
 
-    final median = match.median;
-    final wholesaleSuggestion = median * 0.9;
-    final low = match.low;
-    final high = match.high;
+    final result = _computeRecommendation(commodity);
+
+    // No admin reference price AND no marketplace data at all — never a
+    // fabricated number (req: "Do not invent missing data").
+    if (result.tier == PriceDataTier.insufficient) {
+      return _recoShell(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Price recommendation currently unavailable',
+              style: GoogleFonts.montserrat(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Not enough pricing data is available for this commodity yet. Please check again after '
+              'the latest reference price has been provided or more marketplace data becomes available.',
+              style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12, height: 1.4),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'You can still set your own selling price below.',
+              style: GoogleFonts.montserrat(color: Colors.white60, fontSize: 10.5, fontStyle: FontStyle.italic),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // From here on (referenceOnly / limited / full), a suggested price
+    // always exists — referenceOnly's IS the reference price itself, with
+    // a small fixed cushion (PriceRecommendationService.coldStartRangePct)
+    // rather than a guessed spread. Cold start (Level 1) and a maturing
+    // marketplace (Levels 2-4) share this same layout; only which pieces
+    // have real data to show differs.
+    final suggested = result.suggestedPrice!;
+    final wholesaleSuggestion = suggested * 0.9;
+    final isColdStart = result.tier == PriceDataTier.referenceOnly;
 
     return _recoShell(
       child: Column(
@@ -699,93 +984,86 @@ class _AddProductScreenState extends State<AddProductScreen> {
         children: [
           Row(
             children: [
+              Expanded(child: _statBlock('SUGGESTED PRICE', '₱${suggested.toStringAsFixed(2)} / kg', big: true)),
+              Container(width: 1, height: 38, color: Colors.white24),
+              const SizedBox(width: 14),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'SUGGESTED PRICE',
-                      style: GoogleFonts.montserrat(
-                        color: Colors.white70,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '₱${median.toStringAsFixed(2)}/kg',
-                      style: GoogleFonts.montserrat(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+                child: _statBlock(
+                  'SUGGESTED RANGE',
+                  '₱${result.suggestedLow!.toStringAsFixed(2)} – ₱${result.suggestedHigh!.toStringAsFixed(2)}',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _statBlock(
+                  'REFERENCE PRICE',
+                  result.referencePrice != null ? '₱${result.referencePrice!.toStringAsFixed(2)} / kg' : 'Not set',
                 ),
               ),
               Container(width: 1, height: 38, color: Colors.white24),
               const SizedBox(width: 14),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'TYPICAL RANGE',
-                      style: GoogleFonts.montserrat(
-                        color: Colors.white70,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '₱${low.toStringAsFixed(2)} to ₱${high.toStringAsFixed(2)}',
-                      style: GoogleFonts.montserrat(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
+                child: _statBlock(
+                  'MARKETPLACE RANGE',
+                  result.marketplaceLow != null
+                      ? '₱${result.marketplaceLow!.toStringAsFixed(2)} – ₱${result.marketplaceHigh!.toStringAsFixed(2)}'
+                      : 'No active listings yet',
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          Text(
-            'Basis of Recommendation',
-            style: GoogleFonts.montserrat(
-              color: Colors.white,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
+          if (result.referenceEffectiveDate != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Reference price last updated: ${DateFormat('MMM d, y').format(result.referenceEffectiveDate!)}'
+              '${result.referenceIsStale ? ' (may be outdated)' : ''}',
+              style: GoogleFonts.montserrat(color: Colors.white60, fontSize: 10.5),
             ),
+          ],
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'Data Availability: ${result.tier.dataAvailabilityLabel}',
+              style: GoogleFonts.montserrat(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            isColdStart
+                ? 'This recommendation is currently based mainly on the latest reference commodity price. '
+                    'Future recommendations will improve as AgriTrade+ collects more actual marketplace activity.'
+                : 'Based on the latest reference price, recent completed transactions, active listings, and '
+                    'current AgriTrade+ marketplace activity.',
+            style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 11.5, height: 1.4),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Based on:',
+            style: GoogleFonts.montserrat(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 6),
-          _basisLine(
-            match.listingCount > 0 || match.transactionCount > 0
-                ? 'Based on ${match.listingCount} active listing(s) and '
-                    '${match.transactionCount} completed sale(s) for similar products.'
-                : 'Based only on the admin-set baseline price — no matching '
-                    'listings or sales yet.',
-          ),
-          if (match.hasBaseline)
-            _basisLine(
-              'Anchored to the official baseline price '
-              '(₱${match.baselinePrice!.toStringAsFixed(2)}) set by AgriTrade+ admins.',
-            ),
-          _basisLine(
-            'Suggested price is the median, so a single unusually high or low listing won\'t skew it.',
-          ),
-          _basisLine(
-            'Range reflects how much sellers actually vary — tighter when they agree, wider when they don\'t.',
-          ),
-          if (match.limitedData)
-            _basisLine(
-              'Limited data so far — treat this as a rough starting point, '
-              'not a confident market read.',
-            ),
+          if (result.referencePrice != null)
+            _basisLine(result.referenceIsStale
+                ? 'Latest reference commodity price (last updated a while ago)'
+                : 'Latest reference commodity price'),
+          if (result.transactionCount > 0) _basisLine('${result.transactionCount} recent completed transaction(s)'),
+          if (result.listingCount > 0) _basisLine('${result.listingCount} active listing(s)'),
+          if (result.usedSupplyDemand) _basisLine('Current supply and buyer demand'),
+          if (isColdStart)
+            _basisLine('AgriTrade+ does not yet have enough marketplace transaction data for this product.')
+          else
+            _basisLine('Weighted toward actual completed sales over asking prices, and outlier-resistant.'),
+          if (result.tier == PriceDataTier.limited)
+            _basisLine('Limited data so far — treat this as a rough starting point, not a confident market read.'),
           const SizedBox(height: 10),
           Text(
             'Suggested wholesale price: ₱${wholesaleSuggestion.toStringAsFixed(2)}/kg (10% volume discount).',
@@ -793,20 +1071,16 @@ class _AddProductScreenState extends State<AddProductScreen> {
           ),
           const SizedBox(height: 10),
           Text(
-            'This recommendation serves as a pricing guide only.',
-            style: GoogleFonts.montserrat(
-              color: Colors.white60,
-              fontSize: 10.5,
-              fontStyle: FontStyle.italic,
-            ),
+            'This is an AI-assisted suggestion only — you always make the final pricing decision.',
+            style: GoogleFonts.montserrat(color: Colors.white60, fontSize: 10.5, fontStyle: FontStyle.italic),
           ),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
-                _priceController.text = median.toStringAsFixed(2);
-                _showMessage('Suggested price applied.');
+                _priceController.text = suggested.toStringAsFixed(2);
+                _showMessage('Suggested price applied — you can still edit it.');
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
@@ -818,7 +1092,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 ),
               ),
               child: Text(
-                'Apply Suggested Price',
+                'Use Suggested Price',
                 style: GoogleFonts.montserrat(
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
@@ -828,6 +1102,32 @@ class _AddProductScreenState extends State<AddProductScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _statBlock(String label, String value, {bool big = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.montserrat(
+            color: Colors.white70,
+            fontSize: 10,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: GoogleFonts.montserrat(
+            color: Colors.white,
+            fontSize: big ? 18 : 14.5,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ],
     );
   }
 
@@ -851,7 +1151,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
               const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
               const SizedBox(width: 6),
               Text(
-                'AI-Driven Price Recommendation',
+                'AI-Assisted Price Recommendation',
                 style: GoogleFonts.montserrat(
                   color: Colors.white,
                   fontSize: 13.5,
@@ -959,13 +1259,61 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _imageSlot(),
             const SizedBox(height: 20),
 
-            _label('Product Title'),
-            TextField(
-              controller: _nameController,
-              style: GoogleFonts.montserrat(fontSize: 14),
-              decoration: _inputDecoration('e.g., Premium Free-Range Chicken'),
+            _label('Product Name'),
+            Autocomplete<String>(
+              textEditingController: _nameController,
+              focusNode: _nameFocusNode,
+              optionsBuilder: (value) {
+                final query = value.text.trim().toLowerCase();
+                if (query.isEmpty) return kSupportedCommodities;
+                return kSupportedCommodities.where((c) => c.toLowerCase().contains(query));
+              },
+              onSelected: (selection) => setState(() => _selectedCommodity = selection),
+              fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+                return TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  style: GoogleFonts.montserrat(fontSize: 14),
+                  decoration: _inputDecoration('e.g., Eggplant'),
+                );
+              },
+              optionsViewBuilder: (context, onSelected, options) {
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: Material(
+                    elevation: 4,
+                    borderRadius: BorderRadius.circular(14),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220, maxWidth: 340),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        shrinkWrap: true,
+                        itemCount: options.length,
+                        itemBuilder: (context, index) {
+                          final option = options.elementAt(index);
+                          return ListTile(
+                            dense: true,
+                            title: Text(option, style: GoogleFonts.montserrat(fontSize: 13.5)),
+                            subtitle: Text(categoryOfCommodity(option) ?? '',
+                                style: GoogleFonts.montserrat(fontSize: 10.5, color: Colors.grey[600])),
+                            onTap: () => onSelected(option),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Start typing to pick a supported product (e.g., "egg" suggests "Eggplant").',
+              style: GoogleFonts.montserrat(fontSize: 11, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
+            _supportedProductsBanner(),
+            const SizedBox(height: 8),
+            if (_matchedCommodity != null) _unitOfMeasurementDisplay(),
 
             // ---- Category + Quantity side by side ----
             Row(
@@ -1004,7 +1352,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
                               ),
                             )
                             .toList(),
-                        onChanged: (value) => setState(() => _category = value),
+                        onChanged: (value) => setState(() {
+                          _category = value;
+                          // A deliberate manual pick — stop auto-detect from
+                          // overwriting it until the product name changes to
+                          // a different supported commodity.
+                          _lastAutoDetectedCategory = null;
+                        }),
                       ),
                     ],
                   ),
@@ -1014,12 +1368,16 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _label('Quantity/Weight'),
+                      _label('Available Stock ($_currentUnit)'),
                       TextField(
                         controller: _quantityController,
-                        keyboardType: TextInputType.number,
+                        keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
                         style: GoogleFonts.montserrat(fontSize: 14),
-                        decoration: _inputDecoration('e.g., 50 kg'),
+                        decoration: _inputDecoration('e.g., 50', suffix: Padding(
+                          padding: const EdgeInsets.only(right: 14),
+                          child: Text(_currentUnit,
+                              style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.grey[600])),
+                        )),
                       ),
                     ],
                   ),
@@ -1033,10 +1391,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
             const SizedBox(height: 18),
 
             // ---- Price ----
-            _label('Price'),
+            _label(pricePerUnitLabel(_currentUnit)),
             TextField(
               controller: _priceController,
-              keyboardType: TextInputType.number,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
               style: GoogleFonts.montserrat(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
@@ -1057,7 +1415,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 suffix: Padding(
                   padding: const EdgeInsets.only(right: 14),
                   child: Text(
-                    'Php / kg',
+                    'Php / $_currentUnit',
                     style: GoogleFonts.montserrat(
                       fontSize: 13,
                       color: Colors.grey[600],
@@ -1102,12 +1460,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            _label('Wholesale Minimum Quantity'),
+            _label('Wholesale Minimum Quantity ($_currentUnit)'),
             TextField(
               controller: _wholesaleMinimumController,
-              keyboardType: TextInputType.number,
+              keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
               style: GoogleFonts.montserrat(fontSize: 14),
-              decoration: _inputDecoration('e.g., 10 kg'),
+              decoration: _inputDecoration('e.g., 10'),
             ),
             const SizedBox(height: 12),
 

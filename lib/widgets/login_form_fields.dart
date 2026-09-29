@@ -24,6 +24,14 @@ import '../l10n/app_localizations.dart';
 /// manager (Google Password Manager / iCloud Keychain), via the
 /// [AutofillGroup] + autofillHints below — the app itself never stores an
 /// email or password on this device.
+///
+/// The one exception is the admin door (role == 'admin'): that's a web
+/// login on a single shared office machine, and Chrome's native
+/// save-password popup is unreliable inside a Flutter SPA (the page never
+/// truly navigates), so the admin email/password are additionally saved
+/// straight to this device's local storage after a successful login and
+/// pre-filled on the next visit — see [_loadSavedAdminCredentials]/
+/// [_saveAdminCredentials].
 class LoginFormFields extends StatefulWidget {
   // Null means "role-agnostic" login: whoever this account belongs to
   // (farmer or buyer), log them in and route them to the right home screen.
@@ -45,11 +53,43 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
   bool get _isAdmin => widget.role == 'admin';
 
+  static const _adminEmailKey = 'admin_saved_email';
+  static const _adminPasswordKey = 'admin_saved_password';
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isAdmin) _loadSavedAdminCredentials();
+  }
+
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadSavedAdminCredentials() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final email = prefs.getString(_adminEmailKey);
+      final password = prefs.getString(_adminPasswordKey);
+      if (!mounted) return;
+      if (email != null) _emailController.text = email;
+      if (password != null) _passwordController.text = password;
+    } catch (_) {
+      // Non-fatal — fields just stay empty, same as a first-ever visit.
+    }
+  }
+
+  Future<void> _saveAdminCredentials(String email, String password) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_adminEmailKey, email);
+      await prefs.setString(_adminPasswordKey, password);
+    } catch (_) {
+      // Non-fatal — login already succeeded either way.
+    }
   }
 
   Future<void> _login() async {
@@ -103,6 +143,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     if (_isAdmin) {
       if (result.decision == AuthRouteDecision.adminDashboard) {
         AuditLogService.log(AuditAction.loginSuccess, 'Signed in to the Admin Portal.');
+        _saveAdminCredentials(email, password);
       } else {
         // Valid credentials, but this account isn't an admin (or something
         // else blocked routing) — still a failed attempt to reach the

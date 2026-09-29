@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/farmer_revenue_service.dart';
 import '../services/order_service.dart';
 import '../services/product_service.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 import '../widgets/shimmer.dart';
 import '../widgets/skeleton_loaders.dart';
 import 'add_product_screen.dart';
@@ -656,7 +658,7 @@ class _MarketTabState extends State<MarketTab> {
                                 style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.black87),
                               ),
                               Text(
-                                '${p.quantity.toStringAsFixed(0)} sold',
+                                '${formatStock(p.quantity, unitForProductName(p.name))} sold',
                                 style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
                               ),
                             ],
@@ -788,6 +790,8 @@ class _MarketTabState extends State<MarketTab> {
             );
 
             final avgPrice = (insight['marketAverage'] as num?)?.toDouble();
+            final avgCommodity = insight['marketAverageCommodity']?.toString();
+            final avgUnit = insight['marketAverageUnit']?.toString();
             final seasonLabel = insight['season']?.toString() ?? 'Season';
             // A farmer with no listings of their own gets onboarding copy
             // for these rows, even if the wider marketplace already has
@@ -830,9 +834,11 @@ class _MarketTabState extends State<MarketTab> {
                   _objectiveRow(
                     title: 'Current market average',
                     value: avgPrice != null
-                        ? '₱${avgPrice.toStringAsFixed(0)}/kg'
+                        ? formatPriceWithUnit(avgPrice, avgUnit)
                         : 'No active listings yet',
-                    subtitle: 'Average price across listed products',
+                    subtitle: avgCommodity != null
+                        ? 'Average of your active $avgCommodity listings'
+                        : 'Average price across your listed products',
                   ),
                   const SizedBox(height: 10),
                   _objectiveRow(

@@ -8,6 +8,8 @@ import 'package:image_picker/image_picker.dart';
 import '../services/message_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/location_permission_prompt.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 import '../widgets/open_in_maps_button.dart';
 import '../widgets/pricing_calculator_sheet.dart';
 import 'place_order_screen.dart';
@@ -60,6 +62,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
 
   String get _myUid => FirebaseAuth.instance.currentUser!.uid;
+
+  // The commodity's Unit of Measurement (see commodity_master_list.dart),
+  // derived from the product name — used everywhere this screen would
+  // otherwise have hardcoded "/kg".
+  String get _unit => unitForProductName(widget.productName ?? '');
 
   @override
   void initState() {
@@ -331,7 +338,7 @@ class _ChatScreenState extends State<ChatScreen> {
           sellerName: widget.otherUserName,
           productId: widget.productId ?? '',
           productName: widget.productName ?? 'Product',
-          productPrice: '₱${price.toStringAsFixed(2)}/kg',
+          productPrice: formatPriceWithUnit(price, _unit),
           productImage: widget.productImageUrl ?? '',
           deliveryAvailable: false,
           pickupAvailable: false,
@@ -339,6 +346,7 @@ class _ChatScreenState extends State<ChatScreen> {
           minimumQuantity: minimumQuantity,
           maximumQuantity: maximumQuantity,
           initialQuantity: initialQuantity,
+          unit: _unit,
         ),
       ),
     );
@@ -356,6 +364,7 @@ class _ChatScreenState extends State<ChatScreen> {
       unitPrice: price,
       minimumQuantity: minimumQuantity,
       maximumQuantity: maximumQuantity,
+      unit: _unit,
       onProceed: (quantity) => _choosePrice(
         price,
         pricingType,
@@ -722,7 +731,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(height: 8),
             _priceChoice(
-              'Retail (maximum $retailMaximumQuantity)',
+              'Retail (maximum $retailMaximumQuantity $_unit)',
               retailPrice,
               'retail',
               1,
@@ -731,7 +740,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             if (wholesalePrice != null && wholesalePrice > 0)
               _priceChoice(
-                'Wholesale (minimum $minimumQuantity)',
+                'Wholesale (minimum $minimumQuantity $_unit)',
                 wholesalePrice,
                 'wholesale',
                 minimumQuantity,
@@ -828,7 +837,7 @@ class _ChatScreenState extends State<ChatScreen> {
       return Padding(
         padding: const EdgeInsets.only(top: 4),
         child: Text(
-          '$label: ₱${price.toStringAsFixed(2)}/kg',
+          '$label: ${formatPriceWithUnit(price, _unit)}',
           style: const TextStyle(color: Colors.white70, fontSize: 13),
         ),
       );
@@ -840,7 +849,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: OutlinedButton(
           onPressed: () => _openPricingCalculator(
               price, type, minimumQuantity, maximumQuantity),
-          child: Text('$label - ₱${price.toStringAsFixed(2)}/kg'),
+          child: Text('$label - ${formatPriceWithUnit(price, _unit)}'),
         ),
       ),
     );

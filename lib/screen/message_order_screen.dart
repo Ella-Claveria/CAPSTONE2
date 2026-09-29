@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/cloudinary_service.dart';
 import '../services/message_service.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 import '../widgets/pricing_calculator_sheet.dart';
 import 'buyer_marketplace_screen.dart';
 import 'place_order_screen.dart';
@@ -43,6 +45,11 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
   late final String _conversationId;
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+
+  // The commodity's Unit of Measurement (see commodity_master_list.dart),
+  // derived from the product name — used everywhere this screen would
+  // otherwise have hardcoded "/kg".
+  String get _unit => unitForProductName(widget.productName);
 
   @override
   void initState() {
@@ -377,6 +384,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
           productImage: widget.productImage,
           deliveryAvailable: widget.deliveryAvailable,
           pickupAvailable: widget.pickupAvailable,
+          unit: _unit,
         ),
       ),
     );
@@ -402,7 +410,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
           sellerName: widget.farmerName,
           productId: widget.productId,
           productName: widget.productName,
-          productPrice: '₱${price.toStringAsFixed(2)}/kg',
+          productPrice: formatPriceWithUnit(price, _unit),
           productImage: widget.productImage,
           deliveryAvailable: widget.deliveryAvailable,
           pickupAvailable: widget.pickupAvailable,
@@ -410,6 +418,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
           minimumQuantity: minimumQuantity,
           maximumQuantity: maximumQuantity,
           initialQuantity: initialQuantity,
+          unit: _unit,
         ),
       ),
     );
@@ -427,6 +436,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
       unitPrice: price,
       minimumQuantity: minimumQuantity,
       maximumQuantity: maximumQuantity,
+      unit: _unit,
       onProceed: (quantity) => _choosePrice(
         price,
         pricingType,
@@ -468,7 +478,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
             const SizedBox(height: 8),
             if (isMe)
               Text(
-                'Retail: ₱${retailPrice.toStringAsFixed(2)}/kg (maximum $retailMaximumQuantity)',
+                'Retail: ${formatPriceWithUnit(retailPrice, _unit)} (maximum $retailMaximumQuantity $_unit)',
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
               )
             else
@@ -480,13 +490,13 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
                   retailMaximumQuantity,
                 ),
                 child: Text(
-                  'Retail (maximum $retailMaximumQuantity) - ₱${retailPrice.toStringAsFixed(2)}/kg',
+                  'Retail (maximum $retailMaximumQuantity $_unit) - ${formatPriceWithUnit(retailPrice, _unit)}',
                 ),
               ),
             if (wholesalePrice != null && wholesalePrice > 0)
               if (isMe)
                 Text(
-                  'Wholesale (Bulk Orders): ₱${wholesalePrice.toStringAsFixed(2)}/kg (minimum $minimumQuantity)',
+                  'Wholesale (Bulk Orders): ${formatPriceWithUnit(wholesalePrice, _unit)} (minimum $minimumQuantity $_unit)',
                   style: const TextStyle(color: Colors.white70, fontSize: 13),
                 )
               else
@@ -498,7 +508,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
                     0,
                   ),
                   child: Text(
-                    'Wholesale (Bulk Orders) - ₱${wholesalePrice.toStringAsFixed(2)}/kg (min $minimumQuantity)',
+                    'Wholesale (Bulk Orders) - ${formatPriceWithUnit(wholesalePrice, _unit)} (min $minimumQuantity $_unit)',
                   ),
                 ),
           ],

@@ -8,6 +8,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/cart_service.dart';
 import '../services/message_service.dart';
 import '../services/product_service.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 import 'message_order_screen.dart';
 import 'buyer_market_view.dart';
 
@@ -121,8 +123,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final data = widget.data;
     final name = data['name']?.toString() ?? 'Unnamed';
     final category = data['category']?.toString() ?? '';
-    final price = data['price'] ?? 0;
-    final available = (data['quantity'] as num?)?.toInt() ?? 0;
+    final price = (data['price'] as num?) ?? 0;
+    final available = (data['quantity'] as num?) ?? 0;
+    final unit = (data['unit'] as String?) ?? unitForProductName(name);
     final description = data['description']?.toString() ?? '';
     final farmerName = data['farmerName']?.toString() ?? 'Farmer';
     final farmerId = data['farmerId']?.toString();
@@ -224,7 +227,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(
-                          '₱$price',
+                          formatPeso(price),
                           style: const TextStyle(
                             fontSize: 30,
                             fontWeight: FontWeight.bold,
@@ -233,7 +236,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         ),
                         const SizedBox(width: 12),
                         Text(
-                          'per kilo',
+                          'per $unit',
                           style: TextStyle(
                             fontSize: 13,
                             color: Colors.grey[600],
@@ -400,7 +403,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         Expanded(
                           child: infoRow(
                             Icons.inventory_2,
-                            available > 0 ? '$available kilos available' : 'Out of stock',
+                            available > 0 ? '${formatStock(available, unit)} available' : 'Out of stock',
                           ),
                         ),
                         if (available <= 0)
@@ -759,7 +762,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           productId: widget.productId,
           farmerName: farmerName,
           productName: productName,
-          productPrice: '₱${widget.data['price'] ?? 0}/kilo',
+          productPrice: formatPriceWithUnit(
+            (widget.data['price'] as num?) ?? 0,
+            (widget.data['unit'] as String?) ?? unitForProductName(productName),
+          ),
           productImage: _imageUrl ?? '',
           deliveryAvailable: widget.data['deliveryAvailable'] == true,
           pickupAvailable: widget.data['pickupOnly'] == true,

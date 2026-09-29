@@ -42,12 +42,7 @@ class _PickLocationScreenState extends State<PickLocationScreen> {
   Future<void> _useMyLocation() async {
     setState(() => _locating = true);
     try {
-      final granted = await maybeRequestLocationPermission(
-        context,
-        title: 'Set your location',
-        message: 'AgriTrade+ uses your current GPS position to place your location on the map. '
-            'You can still drag the map to fine-tune it afterward.',
-      );
+      final granted = await requestBuyerLocationPermission(context);
       if (!granted) return;
 
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();

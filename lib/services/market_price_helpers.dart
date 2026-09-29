@@ -1,9 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
-/// Shared formatting + aggregation helpers for the admin Analytics
-/// Dashboard and Price Management screens, so both read live Firestore
-/// data the same way instead of drifting apart.
+import '../data/commodity_master_list.dart';
+
+/// Shared formatting + aggregation helpers so every screen — admin Price
+/// Management, the marketplace, product detail, orders, inventory, and
+/// analytics — displays price/stock/unit the same way instead of each
+/// hardcoding its own "/kg" or "kilo" string.
 
 final NumberFormat _pesoFormat = NumberFormat.currency(
   locale: 'en_PH',
@@ -12,6 +15,39 @@ final NumberFormat _pesoFormat = NumberFormat.currency(
 );
 
 String formatPeso(num value) => _pesoFormat.format(value);
+
+/// "₱72.50/kg", "₱210.00/kg liveweight", "₱35,000.00/head" — a price
+/// combined with its commodity's configured unit. Falls back to
+/// [kDefaultUnit] only when [unit] is genuinely unset (older records
+/// predating the Unit field), never silently assuming every commodity is
+/// sold per kilo.
+String formatPriceWithUnit(num price, String? unit) {
+  final label = (unit == null || unit.trim().isEmpty) ? kDefaultUnit : unit.trim();
+  return '${formatPeso(price)}/$label';
+}
+
+/// "Price per kg", "Price per piece", "Price per head" — always the
+/// singular form of the unit, for field labels (never pluralized, unlike
+/// [formatStock]).
+String pricePerUnitLabel(String? unit) {
+  final label = (unit == null || unit.trim().isEmpty) ? kDefaultUnit : unit.trim();
+  return 'Price per $label';
+}
+
+/// "50 kg", "100 pieces", "3 heads", "120 kg liveweight" — a stock/order
+/// quantity combined with its unit, pluralized for count-based units when
+/// the quantity isn't exactly 1 (weight-based units like "kg"/"kg
+/// liveweight" are never pluralized).
+String formatStock(num quantity, String? unit) {
+  final label = (unit == null || unit.trim().isEmpty) ? kDefaultUnit : unit.trim();
+  final qtyText = quantity == quantity.roundToDouble()
+      ? quantity.toStringAsFixed(0)
+      : quantity.toStringAsFixed(2);
+  if (isCountBasedUnit(label) && quantity != 1) {
+    return '$qtyText ${label}s';
+  }
+  return '$qtyText $label';
+}
 
 String timeAgo(Timestamp? ts) {
   if (ts == null) return 'just now';
@@ -23,9 +59,15 @@ String timeAgo(Timestamp? ts) {
   return DateFormat('MMM d, y').format(ts.toDate());
 }
 
-/// Average listed price of live products whose name or category contains
-/// [commodityKey] (case-insensitive). Returns null when nothing matches,
-/// so callers can show an explicit "no data" state instead of a fake 0.
+/// Average asking price of ACTIVE Farmer listings whose commodity/name/
+/// category matches [commodityKey] (case-insensitive) — never the admin's
+/// imported/entered reference price, which is a separate, independent
+/// figure (see market_prices.baselinePrice). "Active" excludes archived,
+/// suspended, and sold-out (quantity <= 0) listings, since an asking price
+/// that isn't actually for sale right now shouldn't count toward what the
+/// market is currently charging. Returns null when nothing matches, so
+/// callers can show an explicit "No active listings" state instead of a
+/// fake 0 or a silent fallback to the reference price.
 double? computeLiveAverage(
   List<QueryDocumentSnapshot<Map<String, dynamic>>> products,
   String commodityKey,
@@ -36,9 +78,18 @@ double? computeLiveAverage(
   final matches = <double>[];
   for (final doc in products) {
     final data = doc.data();
+    if (data['isArchived'] == true || data['isSuspended'] == true) continue;
+
+    final rawQuantity = data['quantity'];
+    final quantity = rawQuantity is num
+        ? rawQuantity.toDouble()
+        : num.tryParse(rawQuantity?.toString() ?? '')?.toDouble();
+    if (quantity == null || quantity <= 0) continue;
+
+    final commodity = (data['commodity'] ?? '').toString().toLowerCase();
     final name = (data['name'] ?? '').toString().toLowerCase();
     final category = (data['category'] ?? '').toString().toLowerCase();
-    if (!name.contains(key) && !category.contains(key)) continue;
+    if (commodity != key && !name.contains(key) && !category.contains(key)) continue;
 
     final raw = data['price'];
     final price = raw is num

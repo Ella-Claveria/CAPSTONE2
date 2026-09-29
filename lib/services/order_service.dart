@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'connectivity_service.dart';
+import 'market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 
 class OrderService {
   final _orders = FirebaseFirestore.instance.collection('orders');
@@ -26,7 +28,6 @@ class OrderService {
     required String productName,
     required String imageUrl,
     required num quantity,
-    required String unit,
     required num unitPrice,
     required String buyerName,
     required String buyerContact,
@@ -70,6 +71,16 @@ class OrderService {
           );
         }
 
+        // Authoritative unit: the product's own stored 'unit' field wins
+        // over whatever the UI passed in (which may be derived from a
+        // display string) — falls back to deriving it from the commodity/
+        // name for older listings that predate the Unit field, never
+        // trusting a possibly-stale caller value for what actually
+        // controls inventory-deduction and order-quantity semantics.
+        final realUnit = ((productData?['unit'] as String?)?.trim().isNotEmpty ?? false)
+            ? productData!['unit'] as String
+            : unitForProductName((productData?['commodity'] ?? productData?['name'] ?? productName).toString());
+
         final orderRef = _orders.doc();
         transaction.update(productRef, {'quantity': available - q});
         transaction.set(orderRef, {
@@ -88,8 +99,8 @@ class OrderService {
           'category': productData?['category'],
           'imageUrl': imageUrl,
           'quantity': q,
-          'unit': unit,
-          'quantityLabel': '$q $unit',
+          'unit': realUnit,
+          'quantityLabel': formatStock(q, realUnit),
           'unitPrice': price,
           'total': total,
           'deliveryMethod': deliveryMethod,
@@ -120,6 +131,11 @@ class OrderService {
       await _orders.doc(id).update({
         'status': status,
         'updatedAt': FieldValue.serverTimestamp(),
+        // Its own field (rather than reusing updatedAt) so the admin
+        // Demand Heatmap can filter by month/year of actual completion —
+        // updatedAt also moves on the confirm/shipped steps before it, so
+        // it can't stand in for "when did this become completed".
+        if (status == 'completed') 'completedAt': FieldValue.serverTimestamp(),
       });
       return null;
     } catch (e) {

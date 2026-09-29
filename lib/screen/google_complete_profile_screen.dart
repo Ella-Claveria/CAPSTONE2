@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -14,6 +15,9 @@ import '../widgets/barangay_location_field.dart';
 import '../widgets/my_location_field.dart';
 import '../widgets/permission_rationale_dialog.dart';
 import 'auth_route_handler.dart';
+import 'privacy_policy_screen.dart';
+import 'supported_products_screen.dart';
+import 'terms_and_conditions_screen.dart';
 
 /// Shown right after a brand-new "Continue with Google" sign-in — the
 /// Google account is already authenticated with Firebase at this point
@@ -62,6 +66,9 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
   bool _loading = false;
   bool _triedSubmit = false;
 
+  bool _agreedToTerms = false;
+  bool _supportedProductsAcknowledged = false;
+
   bool get _isFarmer => _selectedRole == 'farmer';
 
   @override
@@ -75,9 +82,11 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
     if (_isFarmer) {
       if (_selectedBarangay == null) return false;
       if (_certFile == null) return false;
+      if (!_supportedProductsAcknowledged) return false;
     } else {
       if (_pickedLat == null || _pickedLng == null) return false;
     }
+    if (!_agreedToTerms) return false;
     return true;
   }
 
@@ -160,6 +169,7 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
       fullName: _fullNameController.text.trim(),
       email: widget.email,
       role: _selectedRole,
+      supportedProductsAcknowledged: _isFarmer && _supportedProductsAcknowledged,
     );
     if (!mounted) return;
     if (profileError != null) {
@@ -203,13 +213,7 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
       // permission used later in the marketplace — a no-op prompt-wise if
       // MyLocationField's "Use my location" already granted it above.
       if (mounted) {
-        await maybeRequestLocationPermission(
-          context,
-          title: 'Find farms near you',
-          message: "AgriTrade+ uses your location to show how far nearby "
-              "farms are and sort them by distance. You can skip this and "
-              "still browse everything.",
-        );
+        await requestBuyerLocationPermission(context);
       }
     }
 
@@ -218,6 +222,202 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
     if (!mounted) return;
     setState(() => _loading = false);
     await applyAuthRouteResult(context, result);
+  }
+
+  // ==========================================================
+  // Farmer supported-product awareness — see register_screen.dart's
+  // identical section for the full rationale; kept in sync wording-wise
+  // since both screens are "Farmer setup," just reached via different
+  // sign-up methods (password vs Google).
+  // ==========================================================
+  Widget _supportedProductsSection() {
+    final showError = _triedSubmit && !_supportedProductsAcknowledged;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.20),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: showError ? Colors.red : AppTheme.mid, width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.eco_outlined, color: AppTheme.dark, size: 18),
+              const SizedBox(width: 6),
+              Text('Supported Products in AgriTrade+',
+                  style: AppTheme.body(color: AppTheme.dark, size: 13.5).copyWith(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'AgriTrade+ currently supports selected agricultural commodities based on '
+            'the products identified with the agricultural office. Only supported '
+            'products can be posted in the marketplace.',
+            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Please review the supported products before continuing.',
+            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.w600),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SupportedProductsScreen()),
+              ),
+              style: TextButton.styleFrom(
+                foregroundColor: AppTheme.dark,
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('View Supported Products', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+            ),
+          ),
+          const SizedBox(height: 4),
+          InkWell(
+            onTap: () => setState(() => _supportedProductsAcknowledged = !_supportedProductsAcknowledged),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Checkbox(
+                  value: _supportedProductsAcknowledged,
+                  onChanged: (v) => setState(() => _supportedProductsAcknowledged = v ?? false),
+                  activeColor: AppTheme.dark,
+                  visualDensity: VisualDensity.compact,
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(
+                      'I understand that AgriTrade+ currently supports only selected '
+                      'agricultural commodities and that I can only post products '
+                      'included in the Supported Products list.',
+                      style: AppTheme.body(color: Colors.black87, size: 12).copyWith(height: 1.4),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (showError)
+            const Padding(
+              padding: EdgeInsets.only(left: 12),
+              child: Text('Please confirm you understand the supported products scope.',
+                  style: TextStyle(color: Colors.red, fontSize: 11.5)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _publicLocationPreview() {
+    if (_selectedBarangay == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16, top: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.mid.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.visibility_outlined, color: AppTheme.mid, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Public Location Preview',
+                    style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text('Buyers will see:', style: AppTheme.body(color: Colors.black54, size: 11.5)),
+                const SizedBox(height: 2),
+                Text('$_selectedBarangay, Laurel, Batangas',
+                    style: AppTheme.body(color: AppTheme.dark, size: 13).copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text('Your exact coordinates will not be displayed publicly.',
+                    style: AppTheme.body(color: Colors.black45, size: 11)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _consentCheckbox() {
+    final showError = _triedSubmit && !_agreedToTerms;
+    return Padding(
+      padding: const EdgeInsets.only(top: 14),
+      child: InkWell(
+        onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: _agreedToTerms,
+              onChanged: (v) => setState(() => _agreedToTerms = v ?? false),
+              activeColor: AppTheme.dark,
+              visualDensity: VisualDensity.compact,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    RichText(
+                      text: TextSpan(
+                        style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+                        children: [
+                          const TextSpan(text: 'I agree to the '),
+                          TextSpan(
+                            text: 'Terms & Conditions',
+                            style: AppTheme.body(color: AppTheme.dark, size: 12.5)
+                                .copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const TermsAndConditionsScreen()),
+                                  ),
+                          ),
+                          const TextSpan(text: ' and '),
+                          TextSpan(
+                            text: 'Privacy Policy',
+                            style: AppTheme.body(color: AppTheme.dark, size: 12.5)
+                                .copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
+                                  ),
+                          ),
+                          const TextSpan(text: '.'),
+                        ],
+                      ),
+                    ),
+                    if (showError)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Text('Please accept the Terms & Conditions and Privacy Policy to continue.',
+                            style: TextStyle(color: Colors.red, fontSize: 11.5)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -319,6 +519,7 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         ),
                       ],
                       const SizedBox(height: 14),
+                      if (_isFarmer) _supportedProductsSection(),
                       if (_isFarmer)
                         BarangayLocationField(
                           value: _selectedBarangay,
@@ -343,6 +544,7 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                             _pickedLng = latLng.longitude;
                           }),
                         ),
+                      if (_isFarmer) _publicLocationPreview(),
                       if (_isFarmer) ...[
                         Text('Agricultural Certification', style: AppTheme.label()),
                         const SizedBox(height: 8),
@@ -400,6 +602,7 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                               style: TextStyle(color: Colors.red, fontSize: 11.5)),
                         ],
                       ],
+                      _consentCheckbox(),
                     ],
                   ),
                 ),

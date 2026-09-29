@@ -5,32 +5,56 @@ import 'package:intl/intl.dart';
 import '../data/laurel_barangays.dart';
 import 'farmer_revenue_service.dart';
 
-/// A buyer's location, resolved for demand analytics: a current buyer sets
-/// a free map pin (MyLocationField, anywhere in the Philippines — see
-/// register_screen.dart), while a legacy account (registered before that)
-/// only has a Laurel barangay name. Either way this resolves to one real,
-/// plottable point plus a human-readable area label: the nearest Laurel
-/// barangay when the point is actually within Laurel (isWithinLaurel), a
-/// single 'Outside Laurel, Batangas' bucket otherwise, or the legacy
-/// barangay name itself (anchored to its illustrative center) for an
-/// account with no pin at all. A buyer with neither resolves to null —
-/// excluded, never padded with a guess.
+/// A buyer's location, resolved for demand analytics — the buyer's own
+/// saved pin (MyLocationField, anywhere in the Philippines — see
+/// register_screen.dart's "the location of the buyer is the one they
+/// entered in registration"), never the farmer's, product's, or seller's.
+///
+/// A legacy account (registered before the free map pin existed) only has
+/// a Laurel barangay name instead of coordinates. Either way this resolves
+/// to one real, plottable point plus a human-readable "Barangay,
+/// Municipality" label:
+/// - within Laurel (isWithinLaurel): the nearest Laurel barangay, "name,
+///   Laurel" — cheap and always available offline, no geocoding needed.
+/// - outside Laurel, with barangay/municipality/province already on the
+///   user doc (a legacy account, or one GeocodingService has already
+///   resolved and cached — see admin_dashboard_screen.dart): that real
+///   saved area, verbatim. Never a generic "Outside Laurel" bucket — a
+///   buyer in Tanauan reads as Tanauan, one in Lipa reads as Lipa.
+/// - outside Laurel with a pin but nothing resolved yet: an honest
+///   coordinate-based placeholder (never a guess) until the background
+///   reverse-geocode lands and this resolves to a real place name.
+/// A buyer with no pin and no legacy barangay resolves to null — excluded,
+/// never padded with a guess.
 ({String area, double lat, double lng})? _resolveBuyerArea(Map<String, dynamic>? user) {
   if (user == null) return null;
   final lat = (user['latitude'] as num?)?.toDouble();
   final lng = (user['longitude'] as num?)?.toDouble();
+
   if (lat != null && lng != null) {
     if (isWithinLaurel(lat, lng)) {
-      return (area: nearestLaurelBarangay(lat, lng).name, lat: lat, lng: lng);
+      return (area: '${nearestLaurelBarangay(lat, lng).name}, Laurel', lat: lat, lng: lng);
     }
-    return (area: 'Outside Laurel, Batangas', lat: lat, lng: lng);
+    final barangay = (user['barangay'] ?? '').toString().trim();
+    final municipality = (user['municipality'] ?? '').toString().trim();
+    final province = (user['province'] ?? '').toString().trim();
+    final label = [barangay, municipality.isNotEmpty ? municipality : province]
+        .where((s) => s.isNotEmpty)
+        .join(', ');
+    if (label.isNotEmpty) return (area: label, lat: lat, lng: lng);
+    return (
+      area: 'Unresolved area (${lat.toStringAsFixed(2)}, ${lng.toStringAsFixed(2)})',
+      lat: lat,
+      lng: lng,
+    );
   }
+
   final barangay = (user['barangay'] ?? '').toString().trim();
-  if (barangay.isNotEmpty) {
-    final loc = laurelBarangayLocationFor(barangay);
-    if (loc != null) return (area: barangay, lat: loc.lat, lng: loc.lng);
-  }
-  return null;
+  if (barangay.isEmpty) return null;
+  final loc = laurelBarangayLocationFor(barangay);
+  if (loc == null) return null;
+  final municipality = (user['municipality'] ?? '').toString().trim();
+  return (area: '$barangay, ${municipality.isNotEmpty ? municipality : 'Laurel'}', lat: loc.lat, lng: loc.lng);
 }
 
 /// Single source of truth for every number the Analytics Dashboard shows.
@@ -51,6 +75,17 @@ class DashboardAnalyticsService {
   const DashboardAnalyticsService._();
 
   static DateTime? _timestampToDate(dynamic value) => value is Timestamp ? value.toDate() : null;
+
+  /// When an order actually became 'completed' — its own completedAt when
+  /// present (stamped by OrderService.updateStatus going forward), falling
+  /// back to updatedAt (the last status write, which for an order that has
+  /// never been touched again since really did complete it) for orders
+  /// completed before completedAt existed, then createdAt as a last
+  /// resort. Never null for a real order.
+  static DateTime? _completionDate(Map<String, dynamic> data) =>
+      _timestampToDate(data['completedAt']) ??
+      _timestampToDate(data['updatedAt']) ??
+      _timestampToDate(data['createdAt']);
 
   static bool _inRange(DateTime? date, DateTimeRange? range) {
     if (range == null) return true;
@@ -319,6 +354,106 @@ class DashboardAnalyticsService {
     return points;
   }
 
+  /// The first-of-month boundaries [month]/[year] resolves to: `start`
+  /// (inclusive) and `end` (exclusive, the first day of the *next* month)
+  /// — the exact `completedAt >= start && completedAt < end` window the
+  /// admin Demand Heatmap's Month/Year filter uses everywhere below.
+  static ({DateTime start, DateTime end}) monthWindow(int year, int month) {
+    final start = DateTime(year, month, 1);
+    final end = month == 12 ? DateTime(year + 1, 1, 1) : DateTime(year, month + 1, 1);
+    return (start: start, end: end);
+  }
+
+  /// Every calendar year with at least one completed order, plus [now]'s
+  /// year (so a brand-new platform with zero completed orders yet still
+  /// has a selectable current year) — the Demand Heatmap's Year filter
+  /// options. Real data only, no padded range of arbitrary past years.
+  static List<int> yearsWithCompletedOrders(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> completedOrders,
+    DateTime now,
+  ) {
+    final years = <int>{now.year};
+    for (final doc in completedOrders) {
+      final date = _completionDate(doc.data());
+      if (date != null) years.add(date.year);
+    }
+    return years.toList()..sort((a, b) => b.compareTo(a));
+  }
+
+  /// Buyer demand per area for one calendar month — the admin Demand
+  /// Heatmap's "Highest Demand Areas" list. Unlike [demandByBuyerBarangay]
+  /// (createdAt-windowed, used by the Analytics Dashboard's own 30-day
+  /// trend card), this filters by *completion* date
+  /// (_completionDate/completedAt) for exactly the selected month/year, per
+  /// area (see _resolveBuyerArea) — every completed purchase counts, not
+  /// just one per unique buyer, so an area with a few repeat buyers
+  /// correctly outranks one with many one-time buyers.
+  static List<({String area, int orderCount, num revenue, double lat, double lng})> demandByBuyerAreaForMonth(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> completedOrders,
+    Map<String, Map<String, dynamic>> usersByUid, {
+    required int year,
+    required int month,
+  }) {
+    final window = monthWindow(year, month);
+
+    final counts = <String, int>{};
+    final revenue = <String, num>{};
+    final anchor = <String, ({double lat, double lng})>{};
+    for (final doc in completedOrders) {
+      final data = doc.data();
+      final date = _completionDate(data);
+      if (date == null || date.isBefore(window.start) || !date.isBefore(window.end)) continue;
+
+      final buyerId = (data['buyerId'] ?? '').toString();
+      final resolved = _resolveBuyerArea(usersByUid[buyerId]);
+      if (resolved == null) continue;
+
+      counts[resolved.area] = (counts[resolved.area] ?? 0) + 1;
+      final total = data['total'];
+      final value = total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0;
+      revenue[resolved.area] = (revenue[resolved.area] ?? 0) + value;
+      anchor[resolved.area] = (lat: resolved.lat, lng: resolved.lng);
+    }
+
+    final entries = counts.entries
+        .map((e) => (
+              area: e.key,
+              orderCount: e.value,
+              revenue: revenue[e.key] ?? 0,
+              lat: anchor[e.key]!.lat,
+              lng: anchor[e.key]!.lng,
+            ))
+        .toList()
+      ..sort((a, b) => b.orderCount.compareTo(a.orderCount));
+    return entries;
+  }
+
+  /// One point per completed order in [year]/[month], at the buyer's real
+  /// resolved location (see _resolveBuyerArea) — the Demand Heatmap map
+  /// layer's month/year-filtered counterpart to [buyerDemandPoints]. Every
+  /// completed order contributes its own point (never deduplicated per
+  /// buyer), so several purchases from the same or nearby buyers correctly
+  /// blend into stronger heat than a single distant one.
+  static List<({double lat, double lng})> buyerDemandPointsForMonth(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> completedOrders,
+    Map<String, Map<String, dynamic>> usersByUid, {
+    required int year,
+    required int month,
+  }) {
+    final window = monthWindow(year, month);
+    final points = <({double lat, double lng})>[];
+    for (final doc in completedOrders) {
+      final data = doc.data();
+      final date = _completionDate(data);
+      if (date == null || date.isBefore(window.start) || !date.isBefore(window.end)) continue;
+      final buyerId = (data['buyerId'] ?? '').toString();
+      final resolved = _resolveBuyerArea(usersByUid[buyerId]);
+      if (resolved == null) continue;
+      points.add((lat: resolved.lat, lng: resolved.lng));
+    }
+    return points;
+  }
+
   /// New farmer/buyer registrations per month, oldest-first. No [range]
   /// reproduces the live dashboard's fixed last-6-months window exactly
   /// (month-only labels, matching today); a [range] generates the actual
@@ -435,6 +570,31 @@ class DashboardAnalyticsService {
       final value = totalFor((d) => d.year == m.year && d.month == m.month);
       return (label: DateFormat('MMM y').format(m), value: value);
     }).toList();
+  }
+
+  /// Top buyer search terms logged in [year]/[month] (searchEvents.createdAt)
+  /// — the Demand Heatmap's "Top Buyer Searches" panel, refreshed on the
+  /// same Month/Year filter as the rest of the page (a search record with
+  /// no createdAt, which shouldn't happen going forward, is excluded
+  /// rather than guessed into a month).
+  static List<MapEntry<String, int>> topSearchQueriesForMonth(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> searchDocs, {
+    required int year,
+    required int month,
+    int limit = 8,
+  }) {
+    final window = monthWindow(year, month);
+    final counts = <String, int>{};
+    for (final doc in searchDocs) {
+      final data = doc.data();
+      final date = _timestampToDate(data['createdAt']);
+      if (date == null || date.isBefore(window.start) || !date.isBefore(window.end)) continue;
+      final query = (data['query'] ?? '').toString().trim().toLowerCase();
+      if (query.isEmpty) continue;
+      counts[query] = (counts[query] ?? 0) + 1;
+    }
+    final entries = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    return entries.take(limit).toList();
   }
 
   /// Most recent verification requests. No [range]/default [limit] of 5

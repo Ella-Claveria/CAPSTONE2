@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
@@ -17,6 +18,9 @@ import '../widgets/my_location_field.dart';
 import '../widgets/permission_rationale_dialog.dart';
 import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
+import 'privacy_policy_screen.dart';
+import 'supported_products_screen.dart';
+import 'terms_and_conditions_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   // Which role the toggle at the top starts on. Defaults to buyer; the
@@ -57,6 +61,12 @@ class _RegisterScreenState extends State<RegisterScreen>
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   bool _triedSubmit = false; // becomes true once they tap Sign Up
+
+  // Registration consent (Terms & Conditions / Privacy Policy) — required
+  // for both roles, never pre-checked. Farmer-only supported-product
+  // acknowledgment is separate, since it's specific to Farmer setup.
+  bool _agreedToTerms = false;
+  bool _supportedProductsAcknowledged = false;
 
   late String _selectedRole = widget.initialRole;
 
@@ -191,9 +201,11 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (_isFarmer) {
       if (_selectedBarangay == null) return false;
       if (_certFile == null) return false;
+      if (!_supportedProductsAcknowledged) return false;
     } else {
       if (_pickedLat == null || _pickedLng == null) return false;
     }
+    if (!_agreedToTerms) return false;
     return true;
   }
 
@@ -228,6 +240,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       email: _emailController.text.trim(),
       password: _passwordController.text,
       role: _selectedRole,
+      supportedProductsAcknowledged: _isFarmer && _supportedProductsAcknowledged,
     );
 
     if (!mounted) return;
@@ -286,13 +299,7 @@ class _RegisterScreenState extends State<RegisterScreen>
       // permission used later in the marketplace — a no-op prompt-wise if
       // MyLocationField's "Use my location" already granted it above.
       if (mounted) {
-        await maybeRequestLocationPermission(
-          context,
-          title: 'Find farms near you',
-          message: "AgriTrade+ uses your location to show how far nearby "
-              "farms are and sort them by distance. You can skip this and "
-              "still browse everything.",
-        );
+        await requestBuyerLocationPermission(context);
       }
     }
 
@@ -515,6 +522,215 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   // ==========================================================
+  // Farmer supported-product awareness — shown during Farmer setup, before
+  // registration completes, so a farmer knows the marketplace scope before
+  // they ever try to list something. The acknowledgment checkbox below is
+  // required and never pre-checked; its state is stored on the account via
+  // AuthService.signUp's supportedProductsAcknowledged field.
+  // ==========================================================
+  Widget _supportedProductsSection() {
+    final showError = _triedSubmit && !_supportedProductsAcknowledged;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.accent.withValues(alpha: 0.20),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: showError ? Colors.red : AppTheme.mid, width: 1.2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.eco_outlined, color: AppTheme.dark, size: 18),
+              const SizedBox(width: 6),
+              Text('Supported Products in AgriTrade+',
+                  style: AppTheme.body(color: AppTheme.dark, size: 13.5).copyWith(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'AgriTrade+ currently supports selected agricultural commodities based on '
+            'the products identified with the agricultural office. Only supported '
+            'products can be posted in the marketplace.',
+            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Please review the supported products before continuing.',
+            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.w600),
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SupportedProductsScreen()),
+              ),
+              style: TextButton.styleFrom(
+                foregroundColor: AppTheme.dark,
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('View Supported Products', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+            ),
+          ),
+          const SizedBox(height: 4),
+          InkWell(
+            onTap: () => setState(() => _supportedProductsAcknowledged = !_supportedProductsAcknowledged),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Checkbox(
+                  value: _supportedProductsAcknowledged,
+                  onChanged: (v) => setState(() => _supportedProductsAcknowledged = v ?? false),
+                  activeColor: AppTheme.dark,
+                  visualDensity: VisualDensity.compact,
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(
+                      'I understand that AgriTrade+ currently supports only selected '
+                      'agricultural commodities and that I can only post products '
+                      'included in the Supported Products list.',
+                      style: AppTheme.body(color: Colors.black87, size: 12).copyWith(height: 1.4),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (showError)
+            const Padding(
+              padding: EdgeInsets.only(left: 12),
+              child: Text('Please confirm you understand the supported products scope.',
+                  style: TextStyle(color: Colors.red, fontSize: 11.5)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================================
+  // Farmer public location preview — shown once a barangay is selected, so
+  // the farmer sees exactly what buyers will see before they finish
+  // registering. Uses the real selected barangay (never a dummy value);
+  // municipality/province are fixed since farmer registration is scoped to
+  // Laurel, Batangas (see _laurelNotice above).
+  // ==========================================================
+  Widget _publicLocationPreview() {
+    if (_selectedBarangay == null) return const SizedBox.shrink();
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.mid.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.visibility_outlined, color: AppTheme.mid, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Public Location Preview',
+                    style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 2),
+                Text('Buyers will see:', style: AppTheme.body(color: Colors.black54, size: 11.5)),
+                const SizedBox(height: 2),
+                Text('$_selectedBarangay, Laurel, Batangas',
+                    style: AppTheme.body(color: AppTheme.dark, size: 13).copyWith(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text('Your exact coordinates will not be displayed publicly.',
+                    style: AppTheme.body(color: Colors.black45, size: 11)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================================
+  // Registration consent — required for both roles, never pre-checked.
+  // Terms & Privacy each open their own screen so they're independently
+  // readable before the user agrees.
+  // ==========================================================
+  Widget _consentCheckbox() {
+    final showError = _triedSubmit && !_agreedToTerms;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: InkWell(
+        onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: _agreedToTerms,
+              onChanged: (v) => setState(() => _agreedToTerms = v ?? false),
+              activeColor: AppTheme.dark,
+              visualDensity: VisualDensity.compact,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    RichText(
+                      text: TextSpan(
+                        style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+                        children: [
+                          const TextSpan(text: 'I agree to the '),
+                          TextSpan(
+                            text: 'Terms & Conditions',
+                            style: AppTheme.body(color: AppTheme.dark, size: 12.5)
+                                .copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const TermsAndConditionsScreen()),
+                                  ),
+                          ),
+                          const TextSpan(text: ' and '),
+                          TextSpan(
+                            text: 'Privacy Policy',
+                            style: AppTheme.body(color: AppTheme.dark, size: 12.5)
+                                .copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                            recognizer: TapGestureRecognizer()
+                              ..onTap = () => Navigator.push(
+                                    context,
+                                    MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
+                                  ),
+                          ),
+                          const TextSpan(text: '.'),
+                        ],
+                      ),
+                    ),
+                    if (showError)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 4),
+                        child: Text('Please accept the Terms & Conditions and Privacy Policy to continue.',
+                            style: TextStyle(color: Colors.red, fontSize: 11.5)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==========================================================
   // Certificate attach box
   // ==========================================================
   Widget _buildCertificatePicker() {
@@ -730,6 +946,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                           if (_isFarmer) ...[
                             _laurelNotice(),
                             const SizedBox(height: 14),
+                            _supportedProductsSection(),
                             BarangayLocationField(
                               value: _selectedBarangay,
                               errorText: _triedSubmit && _selectedBarangay == null
@@ -741,6 +958,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                 _pickedLng = lng;
                               },
                             ),
+                            _publicLocationPreview(),
                             _buildCertificatePicker(),
                           ] else
                             MyLocationField(
@@ -754,6 +972,8 @@ class _RegisterScreenState extends State<RegisterScreen>
                                 _pickedLng = latLng.longitude;
                               }),
                             ),
+                          const SizedBox(height: 4),
+                          _consentCheckbox(),
                         ],
                       ),
                     ),

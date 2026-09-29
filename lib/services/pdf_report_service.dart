@@ -63,13 +63,19 @@ class PdfReportService {
   static Future<Uint8List> buildDemandReport({
     required List<({String barangay, int orderCount, num revenue})> demand,
     required List<MapEntry<String, int>> topSearches,
+    String? periodLabel,
   }) async {
     final doc = pw.Document();
     doc.addPage(
       pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         build: (context) => [
-          _header('Market Demand Report', 'Completed orders by buyer location'),
+          _header(
+            'Market Demand Report',
+            periodLabel == null
+                ? 'Completed orders by buyer location'
+                : 'Completed orders by buyer location — $periodLabel',
+          ),
           pw.Text('Demand by Area', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
           pw.SizedBox(height: 8),
           _table(

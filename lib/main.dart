@@ -7,12 +7,18 @@ import 'l10n/app_localizations.dart';
 import 'l10n/locale_controller.dart';
 import 'widgets/connectivity_banner.dart';
 import 'services/notification_permission_prompt.dart';
+import 'services/session_timeout_service.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   // Tells Flutter to get itself ready before we run any setup code.
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Starts watching for a 15-minute-plus background idle period — see
+  // SessionTimeoutService for why this is the only thing that should ever
+  // force a signed-in user back to login (a normal close/reopen must not).
+  SessionTimeoutService.instance.start(rootNavigatorKey);
 
   // Draws the first frame immediately (the branded loading screen) instead
   // of waiting on Firebase.initializeApp() first — AppBootstrap does that

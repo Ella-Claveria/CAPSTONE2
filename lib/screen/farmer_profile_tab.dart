@@ -3,6 +3,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/auth_service.dart';
 import '../services/product_service.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
 import 'farmer_edit_profile_screen.dart';
@@ -358,8 +360,9 @@ class _ProfileTabState extends State<ProfileTab> {
     final name = data['name']?.toString() ?? 'Unnamed product';
     final price = (data['price'] as num?)?.toDouble();
     final quantity = data['quantity'];
+    final unit = (data['unit'] as String?) ?? unitForProductName(name);
     final isArchived = data['isArchived'] == true;
-    final isOutOfStock = !isArchived && ((quantity as num?)?.toInt() ?? 0) <= 0;
+    final isOutOfStock = !isArchived && ((quantity as num?)?.toDouble() ?? 0) <= 0;
 
     final imageUrls =
         (data['imageUrls'] as List?)?.map((e) => e.toString()).toList() ?? [];
@@ -367,9 +370,10 @@ class _ProfileTabState extends State<ProfileTab> {
         ? imageUrls.first
         : data['imageUrl']?.toString();
 
+    final stockText = quantity is num ? 'Available Stock: ${formatStock(quantity, unit)}' : '';
     final subtitle = price != null
-        ? '₱${price.toStringAsFixed(2)}/kg${quantity != null ? ' · Qty: $quantity' : ''}'
-        : (quantity != null ? 'Qty: $quantity' : '');
+        ? '${formatPriceWithUnit(price, unit)}${stockText.isEmpty ? '' : ' · $stockText'}'
+        : stockText;
 
     return Column(
       children: [
@@ -444,7 +448,7 @@ class _ProfileTabState extends State<ProfileTab> {
                   );
                   break;
                 case 'quantity':
-                  _showUpdateQuantityDialog(context, id, name, quantity);
+                  _showUpdateQuantityDialog(context, id, name, quantity, unit);
                   break;
                 case 'archive':
                   _setArchived(context, id, !isArchived);
@@ -522,20 +526,26 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
+  // Farmers can always manually correct Available Stock (independent of
+  // order-driven deduction) — whole numbers only for count-based units
+  // (piece/head), decimals allowed for weight-based ones (kg/kg liveweight).
   Future<void> _showUpdateQuantityDialog(
     BuildContext context,
     String id,
     String name,
     dynamic currentQuantity,
+    String unit,
   ) async {
+    final countBased = isCountBasedUnit(unit);
+    final current = (currentQuantity as num?) ?? 0;
     final controller = TextEditingController(
-      text: (currentQuantity as num?)?.toInt().toString() ?? '0',
+      text: countBased ? current.toStringAsFixed(0) : current.toString(),
     );
-    final newQuantity = await showDialog<int>(
+    final newQuantity = await showDialog<num>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Update Quantity'),
+        title: const Text('Update Available Stock'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -545,10 +555,10 @@ class _ProfileTabState extends State<ProfileTab> {
             TextField(
               controller: controller,
               autofocus: true,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Available quantity',
-                border: OutlineInputBorder(),
+              keyboardType: TextInputType.numberWithOptions(decimal: !countBased),
+              decoration: InputDecoration(
+                labelText: 'Available Stock ($unit)',
+                border: const OutlineInputBorder(),
               ),
             ),
           ],
@@ -560,9 +570,13 @@ class _ProfileTabState extends State<ProfileTab> {
           ),
           TextButton(
             onPressed: () {
-              final parsed = int.tryParse(controller.text.trim());
+              final parsed = num.tryParse(controller.text.trim());
               if (parsed == null || parsed < 0) {
                 _snack(dialogContext, 'Please enter a valid, non-negative quantity.');
+                return;
+              }
+              if (countBased && parsed != parsed.roundToDouble()) {
+                _snack(dialogContext, 'Available Stock for $unit must be a whole number.');
                 return;
               }
               Navigator.pop(dialogContext, parsed);
@@ -576,7 +590,7 @@ class _ProfileTabState extends State<ProfileTab> {
     if (newQuantity == null) return;
     final error = await _productService.updateQuantity(id, newQuantity);
     if (!context.mounted) return;
-    _snack(context, error ?? 'Quantity updated to $newQuantity.');
+    _snack(context, error ?? 'Available Stock updated to ${formatStock(newQuantity, unit)}.');
   }
 
   Widget _productReviews(String productId) {

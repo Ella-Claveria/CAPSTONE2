@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../data/commodity_master_list.dart';
+
 enum FarmerRevenueView { weekly, monthly }
 
 class FarmerRevenueService {
@@ -218,17 +220,34 @@ class FarmerRevenueService {
     required List<Map<String, dynamic>> orders,
     required DateTime now,
   }) {
-    // ---- 1. Current Market Average — active (non-archived) listings with
-    // a valid price and a recorded quantity/unit only.
-    final activePrices = products
-        .where((product) =>
-            product['isArchived'] != true && product['quantity'] != null)
-        .map((product) => _asNum(product['price']).toDouble())
-        .where((price) => price > 0)
-        .toList();
-    final double? marketAverage = activePrices.isEmpty
+    // ---- 1. Current Market Average — scoped to the farmer's own
+    // most-listed commodity (by active listing count), never blended
+    // across different commodities/units (a per-kg vegetable and a
+    // per-head animal averaged together would be meaningless).
+    final activePricesByCommodity = <String, List<double>>{};
+    for (final product in products) {
+      if (product['isArchived'] == true || product['quantity'] == null) continue;
+      final price = _asNum(product['price']).toDouble();
+      if (price <= 0) continue;
+      final rawName = (product['commodity'] ?? product['name'] ?? '').toString().trim();
+      if (rawName.isEmpty) continue;
+      final commodity = matchSupportedCommodity(rawName) ?? rawName;
+      activePricesByCommodity.putIfAbsent(commodity, () => []).add(price);
+    }
+    String? topCommodity;
+    var topCount = 0;
+    activePricesByCommodity.forEach((commodity, prices) {
+      if (prices.length > topCount) {
+        topCount = prices.length;
+        topCommodity = commodity;
+      }
+    });
+    final double? marketAverage = topCommodity == null
         ? null
-        : activePrices.reduce((a, b) => a + b) / activePrices.length;
+        : activePricesByCommodity[topCommodity]!.reduce((a, b) => a + b) /
+            activePricesByCommodity[topCommodity]!.length;
+    final String? marketAverageCommodity = topCommodity;
+    final String? marketAverageUnit = topCommodity == null ? null : unitForCommodity(topCommodity!);
 
     final completedOrders = orders.where((order) {
       final status = (order['status'] ?? '').toString().toLowerCase();
@@ -285,6 +304,8 @@ class FarmerRevenueService {
     return {
       'season': currentSeason,
       'marketAverage': marketAverage,
+      'marketAverageCommodity': marketAverageCommodity,
+      'marketAverageUnit': marketAverageUnit,
       'seasonalPick': seasonalPick,
       'marketPick': marketPick,
       'suggestion': suggestion,

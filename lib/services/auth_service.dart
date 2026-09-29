@@ -54,6 +54,11 @@ class AuthService {
     required String email,
     required String password,
     required String role,
+    // Registration's consent checkbox already gates whether this method is
+    // ever called (see RegisterScreen._isFormValid) — recorded here purely
+    // as an audit trail of what the user agreed to. supportedProductsAcknowledged
+    // is Farmer-only (see RegisterScreen's Supported Products section).
+    bool supportedProductsAcknowledged = false,
   }) async {
     try {
       final cred = await _auth.createUserWithEmailAndPassword(
@@ -77,6 +82,10 @@ class AuthService {
         // (see VerificationQueueView._approveFarmer).
         'isVerified': role != 'farmer',
         'createdAt': FieldValue.serverTimestamp(),
+        'termsAccepted': true,
+        'termsAcceptedAt': FieldValue.serverTimestamp(),
+        if (role == 'farmer') 'supportedProductsAcknowledged': supportedProductsAcknowledged,
+        if (role == 'farmer') 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
       });
       return null;
     } on FirebaseAuthException catch (e) {
@@ -248,6 +257,7 @@ class AuthService {
     required String fullName,
     required String email,
     required String role,
+    bool supportedProductsAcknowledged = false,
   }) async {
     try {
       await _auth.currentUser?.updateDisplayName(fullName.trim());
@@ -260,6 +270,10 @@ class AuthService {
         'isVerified': role != 'farmer',
         'authProvider': 'google',
         'createdAt': FieldValue.serverTimestamp(),
+        'termsAccepted': true,
+        'termsAcceptedAt': FieldValue.serverTimestamp(),
+        if (role == 'farmer') 'supportedProductsAcknowledged': supportedProductsAcknowledged,
+        if (role == 'farmer') 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       return null;
     } catch (e) {

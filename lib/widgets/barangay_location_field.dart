@@ -47,21 +47,15 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
   void _maybeRequestOnOpen() {
     if (_dropdownPromptShown) return;
     _dropdownPromptShown = true;
-    maybeRequestLocationPermission(
-      context,
-      title: 'Find your barangay',
-      message: "AgriTrade+ uses your location to help confirm you're in Laurel, Batangas.",
-    );
+    requestFarmerLocationPermission(context);
   }
 
   Future<void> _useMyLocation() async {
     setState(() => _locating = true);
     try {
-      final granted = await maybeRequestLocationPermission(
+      final granted = await requestFarmerLocationPermission(
         context,
-        title: 'Find your barangay',
-        message: "AgriTrade+ uses your current GPS position to find your barangay "
-            "automatically. You can still pick it manually instead.",
+        blockedFeature: 'Automatically detecting your barangay',
       );
       if (!granted) return;
 

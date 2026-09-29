@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../data/commodity_master_list.dart';
 import '../services/product_service.dart';
 import '../services/product_visibility_service.dart';
 import '../services/image_helper.dart';
+import '../services/market_price_helpers.dart';
 import 'product_detail_screen.dart';
 
 class BuyerExploreScreen extends StatefulWidget {
@@ -19,16 +21,17 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   static const Color _dark = Color(0xFF1B5E20);
 
   String _selectedCategory = 'All Postings';
-  final List<String> _categories = const [
-    'All Postings',
-    'Vegetables',
-    'Livestock',
-    'Fruits',
-  ];
+  // Derived from the Commodity Master List so every category a farmer can
+  // now pick on Add Product (Grains, Root Crops, Vegetables, Spices,
+  // Fruits, Livestock, Fisheries) also has a matching buyer-side filter —
+  // not a separately hand-maintained list that can fall out of sync.
+  final List<String> _categories = ['All Postings', ...kCommodityMasterList.keys];
 
   final ProductService _productService = ProductService();
   final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   String _searchQuery = '';
+  bool _searchFocused = false;
   Timer? _searchLogDebounce;
 
   String _selectedBarangay = 'All Locations';
@@ -48,6 +51,11 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   @override
   void initState() {
     super.initState();
+    _searchFocusNode.addListener(() {
+      if (!mounted) return;
+      setState(() => _searchFocused = _searchFocusNode.hasFocus);
+    });
+
     _usersSub = FirebaseFirestore.instance.collection('users').snapshots().listen((snap) {
       if (!mounted) return;
       setState(() {
@@ -104,6 +112,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
     _searchEventsSub?.cancel();
     _searchLogDebounce?.cancel();
     _searchController.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -144,16 +153,20 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSearchBar(),
-        if (_searchQuery.isEmpty) _buildTrendingSearches(),
-        _buildCategoryChips(),
-        _buildLocationChips(),
-        const SizedBox(height: 4),
-        Expanded(child: _buildProductGrid()),
-      ],
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => _searchFocusNode.unfocus(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSearchBar(),
+          if (_searchFocused) _buildSuggestedSearches(),
+          _buildCategoryChips(),
+          _buildLocationChips(),
+          const SizedBox(height: 4),
+          Expanded(child: _buildProductGrid()),
+        ],
+      ),
     );
   }
 
@@ -170,6 +183,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
         ),
         child: TextField(
           controller: _searchController,
+          focusNode: _searchFocusNode,
           textAlignVertical: TextAlignVertical.center,
           style: const TextStyle(fontSize: 13.5, color: Colors.black87),
           decoration: InputDecoration(
@@ -234,48 +248,77 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
     );
   }
 
-  void _applyTrendingSearch(String query) {
+  void _applySuggestedSearch(String query) {
     _searchController.text = query;
     _searchController.selection = TextSelection.fromPosition(
       TextPosition(offset: query.length),
     );
     setState(() => _searchQuery = query);
+    _searchFocusNode.unfocus();
   }
 
-  Widget _buildTrendingSearches() {
-    if (_trendingSearches.isEmpty) return const SizedBox.shrink();
-    return SizedBox(
-      height: 34,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-        itemCount: _trendingSearches.length + 1,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          if (index == 0) {
-            return Padding(
-              padding: const EdgeInsets.only(right: 2),
+  // Trending terms narrowed to whatever's already typed, so this doubles as
+  // an autocomplete list once the buyer starts typing instead of only
+  // working as a pre-typing suggestion tray.
+  List<String> get _visibleSuggestions {
+    if (_searchQuery.isEmpty) return _trendingSearches;
+    final q = _searchQuery.toLowerCase();
+    return _trendingSearches.where((t) => t != q && t.contains(q)).toList();
+  }
+
+  // A dropdown-style panel anchored right under the search bar, shown only
+  // while that field is focused — built from searchEvents logged by every
+  // buyer (see _searchEventsSub in initState), not just this one.
+  Widget _buildSuggestedSearches() {
+    final suggestions = _visibleSuggestions;
+    if (suggestions.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 4)),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(Icons.trending_up, size: 15, color: Colors.grey[600]),
-                  const SizedBox(width: 4),
-                  Text('Trending:',
+                  const SizedBox(width: 6),
+                  Text('Suggested searches',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
                 ],
               ),
-            );
-          }
-          final term = _trendingSearches[index - 1];
-          return ActionChip(
-            label: Text(term),
-            labelStyle: TextStyle(fontSize: 12, color: _dark),
-            backgroundColor: Colors.white,
-            side: BorderSide(color: _dark.withValues(alpha: 0.3)),
-            visualDensity: VisualDensity.compact,
-            onPressed: () => _applyTrendingSearch(term),
-          );
-        },
+            ),
+            for (final term in suggestions)
+              InkWell(
+                onTap: () => _applySuggestedSearch(term),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  child: Row(
+                    children: [
+                      Icon(Icons.search, size: 16, color: Colors.grey[400]),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(term,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13.5, color: Colors.black87))),
+                      Icon(Icons.north_west, size: 14, color: Colors.grey[400]),
+                    ],
+                  ),
+                ),
+              ),
+            const SizedBox(height: 4),
+          ],
+        ),
       ),
     );
   }
@@ -465,8 +508,9 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
     final name = data['name'] ?? 'Unnamed Product';
     final category = data['category'] ?? 'General';
     final farmer = data['farmerName'] ?? 'Local Farmer';
-    final price = data['price'] ?? 0;
-    final quantity = data['quantity'] ?? 0;
+    final price = (data['price'] as num?) ?? 0;
+    final quantity = (data['quantity'] as num?) ?? 0;
+    final unit = (data['unit'] as String?) ?? unitForProductName(name.toString());
     final rating = (data['rating'] as num?)?.toDouble();
     final reviewCount = data['reviewCount'];
 
@@ -516,10 +560,10 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                         ],
                       ),
                     const Spacer(),
-                    Text("₱$price",
+                    Text(formatPriceWithUnit(price, unit),
                         style: const TextStyle(color: _dark, fontWeight: FontWeight.bold, fontSize: 16)),
                     const SizedBox(height: 1),
-                    Text("$quantity left", style: TextStyle(color: Colors.grey[600], fontSize: 11)),
+                    Text("${formatStock(quantity, unit)} left", style: TextStyle(color: Colors.grey[600], fontSize: 11)),
                     const SizedBox(height: 6),
                     Divider(height: 1, thickness: 0.5, color: Colors.grey[200]),
                     const SizedBox(height: 5),

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../services/order_service.dart';
+import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 
 class PlaceOrderScreen extends StatefulWidget {
   final String sellerId;
@@ -16,6 +18,11 @@ class PlaceOrderScreen extends StatefulWidget {
   final int minimumQuantity;
   final int maximumQuantity;
   final int? initialQuantity;
+  // The commodity's Unit of Measurement (see commodity_master_list.dart) —
+  // drives the Quantity field's label/validation and the order actually
+  // created. Defaults to deriving it from productName when a caller
+  // doesn't pass one explicitly.
+  final String? unit;
 
   const PlaceOrderScreen({
     super.key,
@@ -31,6 +38,7 @@ class PlaceOrderScreen extends StatefulWidget {
     this.minimumQuantity = 1,
     this.maximumQuantity = 0,
     this.initialQuantity,
+    this.unit,
   });
 
   @override
@@ -74,18 +82,17 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   bool get _canChooseDelivery =>
       widget.pickupAvailable || widget.deliveryAvailable;
 
+  // The commodity's real Unit of Measurement (see commodity_master_list.dart)
+  // — explicit widget.unit wins when a caller passes it, otherwise derived
+  // from the product name so this never depends on parsing a display string.
+  String get _unit => widget.unit ?? unitForProductName(widget.productName);
+  bool get _isCountBasedUnit => isCountBasedUnit(_unit);
+
   num _extractUnitPrice(String raw) {
     final normalized = raw.replaceAll(',', '');
     final match = RegExp(r'([0-9]+(?:\.[0-9]+)?)').firstMatch(normalized);
     if (match == null) return 0;
     return num.tryParse(match.group(1) ?? '') ?? 0;
-  }
-
-  String _extractUnitLabel(String raw) {
-    final slash = raw.indexOf('/');
-    if (slash == -1 || slash == raw.length - 1) return 'item';
-    final tail = raw.substring(slash + 1).trim();
-    return tail.isEmpty ? 'item' : tail;
   }
 
   Future<void> _submit() async {
@@ -122,7 +129,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
         );
         return;
       }
-      final available = (data['quantity'] as num?)?.toInt() ?? 0;
+      final available = (data['quantity'] as num?) ?? 0;
       if (qty > available) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -130,7 +137,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
             content: Text(
               available <= 0
                   ? 'This item is out of stock.'
-                  : 'Only $available available right now. Lower your quantity.',
+                  : 'Only ${formatStock(available, _unit)} available right now. Lower your quantity.',
             ),
           ),
         );
@@ -143,7 +150,6 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
 
     setState(() => _submitting = true);
     final unitPrice = _extractUnitPrice(widget.productPrice);
-    final unit = _extractUnitLabel(widget.productPrice);
 
     final err = await _orderService.createOrder(
       sellerId: widget.sellerId,
@@ -152,7 +158,6 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       productName: widget.productName,
       imageUrl: widget.productImage,
       quantity: qty,
-      unit: unit,
       unitPrice: unitPrice,
       buyerName: _nameController.text.trim(),
       buyerContact: _contactController.text.trim(),
@@ -299,17 +304,20 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
               const SizedBox(height: 10),
               TextFormField(
                 controller: _quantityController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Quantity'),
+                keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
+                decoration: InputDecoration(labelText: 'Ordered Quantity ($_unit)'),
                 validator: (value) {
                   final q = num.tryParse((value ?? '').trim());
                   if (q == null || q <= 0) return 'Enter valid quantity';
+                  if (_isCountBasedUnit && q != q.roundToDouble()) {
+                    return 'Quantity for $_unit must be a whole number';
+                  }
                   if (q < widget.minimumQuantity) {
-                    return 'Minimum for ${widget.pricingType} is ${widget.minimumQuantity}';
+                    return 'Minimum for ${widget.pricingType} is ${widget.minimumQuantity} $_unit';
                   }
                   if (widget.maximumQuantity > 0 &&
                       q > widget.maximumQuantity) {
-                    return 'Maximum for ${widget.pricingType} is ${widget.maximumQuantity}';
+                    return 'Maximum for ${widget.pricingType} is ${widget.maximumQuantity} $_unit';
                   }
                   return null;
                 },

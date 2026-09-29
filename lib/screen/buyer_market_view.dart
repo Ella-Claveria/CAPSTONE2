@@ -55,13 +55,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
       // Explain why before the OS prompt appears, instead of surprising
       // them with a permission dialog the moment they open the map.
       if (!mounted) return;
-      final granted = await maybeRequestLocationPermission(
-        context,
-        title: 'See farms near you',
-        message: "AgriTrade+ uses your location to show how far nearby "
-            "farms are and sort them by distance. You can skip this and "
-            "still browse everything.",
-      );
+      final granted = await requestBuyerLocationPermission(context);
       if (!granted) {
         if (!mounted) return;
         setState(() => _locationNotice =

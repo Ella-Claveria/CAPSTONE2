@@ -10,14 +10,26 @@ class ProductService {
     required String name,
     required String category,
     required double price,
-    required int quantity,
+    required num quantity,
     required String description,
     double? wholesalePrice,
-    int wholesaleMinimumQuantity = 1,
-    int retailMaximumQuantity = 1,
+    num wholesaleMinimumQuantity = 1,
+    num retailMaximumQuantity = 1,
     List<String> imageUrls = const [],
     bool deliveryAvailable = false,
     bool pickupOnly = false,
+    // The official AgriTrade+ Commodity Master List entry this listing
+    // represents (see commodity_master_list.dart), if the farmer picked
+    // one — optional, and separate from 'name'/'category': it exists only
+    // to drive the AI-Assisted Price Recommendation's matching, never
+    // shown to buyers or used to restrict what a farmer can list.
+    String? commodity,
+    // The commodity's configured unit of measurement (see
+    // commodity_master_list.dart's kCommodityUnits) — e.g. 'kg', 'piece',
+    // 'head', 'kg liveweight'. Saved alongside the listing so every screen
+    // that later displays this product's stock/price shows the same unit,
+    // instead of each one re-deriving it independently.
+    String? unit,
   }) async {
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
@@ -30,6 +42,8 @@ class ProductService {
         'farmerName': user.displayName ?? 'Farmer',
         'name': name,
         'category': category,
+        if (commodity != null && commodity.isNotEmpty) 'commodity': commodity,
+        if (unit != null && unit.isNotEmpty) 'unit': unit,
         'price': price,
         'wholesalePrice': wholesalePrice,
         'wholesaleMinimumQuantity': wholesaleMinimumQuantity,
@@ -62,14 +76,19 @@ class ProductService {
     required String name,
     required String category,
     required double price,
-    required int quantity,
+    required num quantity,
     required String description,
     double? wholesalePrice,
-    int wholesaleMinimumQuantity = 1,
-    int retailMaximumQuantity = 1,
+    num wholesaleMinimumQuantity = 1,
+    num retailMaximumQuantity = 1,
     List<String> imageUrls = const [],
     bool deliveryAvailable = false,
     bool pickupOnly = false,
+    // See addProduct's commodity param — null/empty clears it (a farmer
+    // can un-pick a commodity when editing).
+    String? commodity,
+    // See addProduct's unit param.
+    String? unit,
   }) async {
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
@@ -78,6 +97,8 @@ class ProductService {
       await _products.doc(id).update({
         'name': name,
         'category': category,
+        'commodity': (commodity != null && commodity.isNotEmpty) ? commodity : FieldValue.delete(),
+        'unit': (unit != null && unit.isNotEmpty) ? unit : FieldValue.delete(),
         'price': price,
         'wholesalePrice': wholesalePrice,
         'wholesaleMinimumQuantity': wholesaleMinimumQuantity,
@@ -145,7 +166,7 @@ class ProductService {
   /// restocking or correcting inventory without opening the full edit form.
   /// This manually-set value becomes the available stock for future orders,
   /// same as if it came from the full edit form.
-  Future<String?> updateQuantity(String id, int quantity) async {
+  Future<String?> updateQuantity(String id, num quantity) async {
     if (quantity < 0) return 'Quantity cannot be negative.';
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;

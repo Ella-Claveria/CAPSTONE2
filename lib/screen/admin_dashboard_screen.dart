@@ -10,6 +10,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:intl/intl.dart';
+import '../data/commodity_master_list.dart';
 import 'verification_queue_view.dart';
 import 'farmer_list_view.dart';
 import 'moderation_queue_view.dart';
@@ -23,6 +25,7 @@ import '../widgets/change_password_dialog.dart';
 import '../services/pdf_report_service.dart';
 import '../services/audit_log_service.dart';
 import '../services/dashboard_analytics_service.dart';
+import '../services/geocoding_service.dart';
 import '../widgets/chart_capture_boundary.dart';
 import 'admin_analytics_widgets.dart';
 import 'audit_log_view.dart';
@@ -1855,35 +1858,15 @@ class _AdminSalesChartCardState extends State<_AdminSalesChartCard> {
 }
 
 // ============================================================
-// DEMAND HEATMAP
-// ============================================================
-
-List<MapEntry<String, int>> _topSearchQueries(
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> searchDocs,
-) {
-  final counts = <String, int>{};
-  for (final doc in searchDocs) {
-    final query = (doc.data()['query'] ?? '').toString().trim().toLowerCase();
-    if (query.isEmpty) continue;
-    counts[query] = (counts[query] ?? 0) + 1;
-  }
-  final entries = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-  return entries.take(8).toList();
-}
-
-// ============================================================
-// ============================================================
 // DEMAND HEATMAP — a smooth, blended density layer (ride-hailing-app
 // style) instead of separate per-barangay circles.
 //
-// Weighted by real completed-order counts per farmer's barangay (see
-// _computeBarangayDemand) plus a small deterministic baseline standing
-// in for buyer search interest: buyer accounts don't carry a
-// barangay/location field in this app (only farmers do — see
-// register_screen.dart), so there is no real geodata to place
-// searchEvents documents on the map by. As completed orders accumulate
-// in a barangay, the real signal (weighted x4 over the baseline)
-// increasingly dominates it.
+// Every point is one completed order, plotted at its BUYER's own saved
+// location (the pin they set at registration — see
+// DashboardAnalyticsService._resolveBuyerArea), filtered to the currently
+// selected Month/Year. Buyers naturally cluster by proximity, so several
+// nearby (or repeat) buyers blend into visibly stronger heat with no
+// separate weighting scheme needed — see _buildDemandPoints below.
 // ============================================================
 
 // Muted/light Google Maps style: strips POI business/attraction/worship
@@ -2009,8 +1992,20 @@ class _DemandHeatmapView extends StatefulWidget {
   State<_DemandHeatmapView> createState() => _DemandHeatmapViewState();
 }
 
+const List<String> _monthNames = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
 class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
   static const _center = LatLng(kLaurelCenterLat, kLaurelCenterLng);
+
+  // Defaults to the current month/year on first open — everything below
+  // (the map, Highest Demand Areas, Top Buyer Searches) refreshes together
+  // whenever either changes (see build()'s use of these two).
+  final DateTime _now = DateTime.now();
+  late int _selectedYear = _now.year;
+  late int _selectedMonth = _now.month;
 
   // Survives the fullscreen toggle: fed as initialCameraPosition to
   // whichever _HeatmapMap is on screen, and kept up to date by both the
@@ -2021,8 +2016,30 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
   // this is what makes the *camera position* itself carry over.)
   CameraPosition _camera = const CameraPosition(target: _center, zoom: 12.5);
 
+  // Which month/year the camera was last auto-framed for — null on first
+  // build so even the very first render frames on real data if there is
+  // any, not just Laurel's fixed center. Deliberately NOT reset by every
+  // Firestore snapshot update (only by an actual Month/Year change, below
+  // in build()) so the admin's own manual panning within one selection is
+  // never yanked back.
+  int? _framedMonth;
+  int? _framedYear;
+
   void _onCameraIdle(CameraPosition position) {
     _camera = position;
+  }
+
+  static LatLng _centerOf(List<({double lat, double lng})> points) {
+    if (points.isEmpty) return _center;
+    var minLat = points.first.lat, maxLat = points.first.lat;
+    var minLng = points.first.lng, maxLng = points.first.lng;
+    for (final p in points) {
+      if (p.lat < minLat) minLat = p.lat;
+      if (p.lat > maxLat) maxLat = p.lat;
+      if (p.lng < minLng) minLng = p.lng;
+      if (p.lng > maxLng) maxLng = p.lng;
+    }
+    return LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
   }
 
   Future<void> _openFullscreen(
@@ -2065,16 +2082,75 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
 
   Future<void> _exportReport(
     BuildContext context,
-    List<({String barangay, int orderCount, num revenue})> demand,
+    List<({String area, int orderCount, num revenue, double lat, double lng})> demand,
     List<MapEntry<String, int>> topSearches,
   ) async {
+    final periodLabel = '${_monthNames[_selectedMonth - 1]} $_selectedYear';
     final bytes = await PdfReportService.buildDemandReport(
-      demand: demand,
+      demand: demand.map((d) => (barangay: d.area, orderCount: d.orderCount, revenue: d.revenue)).toList(),
       topSearches: topSearches,
+      periodLabel: periodLabel,
     );
     if (!context.mounted) return;
     await PdfReportService.share(bytes, 'agritrade_demand_report.pdf');
-    AuditLogService.log(AuditAction.exportReport, 'Exported the Demand Heatmap report (PDF).');
+    AuditLogService.log(AuditAction.exportReport, 'Exported the Demand Heatmap report ($periodLabel, PDF).');
+  }
+
+  Widget _monthYearSelector(AdminPalette c, List<int> years) {
+    InputDecoration pillDecoration() => InputDecoration(
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          filled: true,
+          fillColor: c.surfaceAlt,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: c.border),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: c.border),
+          ),
+        );
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 150,
+          child: DropdownButtonFormField<int>(
+            initialValue: _selectedMonth,
+            decoration: pillDecoration(),
+            dropdownColor: c.surface,
+            style: TextStyle(color: c.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+            icon: Icon(Icons.expand_more, color: c.textSecondary, size: 18),
+            items: List.generate(
+              12,
+              (i) => DropdownMenuItem(value: i + 1, child: Text(_monthNames[i])),
+            ),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _selectedMonth = value);
+            },
+          ),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: 100,
+          child: DropdownButtonFormField<int>(
+            initialValue: years.contains(_selectedYear) ? _selectedYear : years.first,
+            decoration: pillDecoration(),
+            dropdownColor: c.surface,
+            style: TextStyle(color: c.textPrimary, fontSize: 13, fontWeight: FontWeight.w600),
+            icon: Icon(Icons.expand_more, color: c.textSecondary, size: 18),
+            items: years.map((y) => DropdownMenuItem(value: y, child: Text('$y'))).toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _selectedYear = value);
+            },
+          ),
+        ),
+      ],
+    );
   }
 
   @override
@@ -2106,22 +2182,66 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                 final usersByUid = <String, Map<String, dynamic>>{
                   for (final doc in usersSnap.data!.docs) doc.id: doc.data(),
                 };
-                // allTime: this map shows the accumulated geography of
-                // demand, not a 30-day trend (unlike the Analytics
-                // Dashboard's "Demand by Barangay" card, which shares this
-                // same buyer-location basis but deliberately windows to
-                // the last 30 days for a recent-trend read).
-                final rankedDemand = DashboardAnalyticsService.demandByBuyerBarangay(
+
+                // Every buyer behind a completed order, outside Laurel,
+                // with no saved barangay/municipality/province yet —
+                // resolved once in the background and cached on their own
+                // doc (see GeocodingService), regardless of which month is
+                // currently selected, so switching months never re-fires
+                // this for a buyer already resolved.
+                for (final doc in ordersSnap.data!.docs) {
+                  final buyerId = (doc.data()['buyerId'] ?? '').toString();
+                  if (buyerId.isEmpty) continue;
+                  final buyer = usersByUid[buyerId];
+                  if (buyer == null) continue;
+                  final lat = (buyer['latitude'] as num?)?.toDouble();
+                  final lng = (buyer['longitude'] as num?)?.toDouble();
+                  if (lat == null || lng == null || isWithinLaurel(lat, lng)) continue;
+                  final alreadyResolved = (buyer['barangay'] ?? '').toString().trim().isNotEmpty ||
+                      (buyer['municipality'] ?? '').toString().trim().isNotEmpty ||
+                      (buyer['province'] ?? '').toString().trim().isNotEmpty;
+                  GeocodingService.resolveAndCacheIfNeeded(
+                    uid: buyerId,
+                    lat: lat,
+                    lng: lng,
+                    alreadyResolved: alreadyResolved,
+                  );
+                }
+
+                final years = DashboardAnalyticsService.yearsWithCompletedOrders(
+                  ordersSnap.data!.docs,
+                  _now,
+                );
+                final rankedDemand = DashboardAnalyticsService.demandByBuyerAreaForMonth(
                   ordersSnap.data!.docs,
                   usersByUid,
-                  DateTime.now(),
-                  allTime: true,
+                  year: _selectedYear,
+                  month: _selectedMonth,
                 );
-                final buyerPoints = DashboardAnalyticsService.buyerDemandPoints(
+                final buyerPoints = DashboardAnalyticsService.buyerDemandPointsForMonth(
                   ordersSnap.data!.docs,
                   usersByUid,
+                  year: _selectedYear,
+                  month: _selectedMonth,
                 );
-                final topSearches = _topSearchQueries(searchSnap.data!.docs);
+                // The Month/Year selection just changed (or this is the
+                // first build) — snap the camera to where this period's
+                // real buyer demand actually is instead of leaving it
+                // wherever a previous period's data happened to be (or a
+                // fixed Laurel-only default), so a period with demand
+                // entirely outside Laurel is visible without the admin
+                // having to hunt for it by panning.
+                if (_framedMonth != _selectedMonth || _framedYear != _selectedYear) {
+                  _camera = CameraPosition(target: _centerOf(buyerPoints), zoom: _zoomTownLevel);
+                  _framedMonth = _selectedMonth;
+                  _framedYear = _selectedYear;
+                }
+                final topSearches = DashboardAnalyticsService.topSearchQueriesForMonth(
+                  searchSnap.data!.docs,
+                  year: _selectedYear,
+                  month: _selectedMonth,
+                );
+                final periodLabel = '${_monthNames[_selectedMonth - 1]} $_selectedYear';
                 final activeProducts = productsSnap.data!.docs
                     .where((d) => d.data()['isArchived'] != true)
                     .map((d) => d.data())
@@ -2143,20 +2263,26 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                           Text('Market Demand Forecast',
                               style: TextStyle(
                                   fontSize: 24, fontWeight: FontWeight.bold, color: c.textPrimary)),
-                          AdminQuickActionButton(
-                            icon: Icons.download,
-                            label: 'Export Report',
-                            filled: true,
-                            onPressed: () => _exportReport(context, rankedDemand, topSearches),
+                          Row(
+                            children: [
+                              _monthYearSelector(c, years),
+                              const SizedBox(width: 12),
+                              AdminQuickActionButton(
+                                icon: Icons.download,
+                                label: 'Export Report',
+                                filled: true,
+                                onPressed: () => _exportReport(context, rankedDemand, topSearches),
+                              ),
+                            ],
                           ),
                         ],
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'Heat intensity reflects real completed orders by buyer location — an order only '
-                        'counts once its buyer has set a location. Positions use each buyer\'s real map pin; '
-                        'the ranked list groups them by their nearest Laurel barangay when they\'re actually '
-                        'within Laurel, or "Outside Laurel, Batangas" otherwise.',
+                        'Heat intensity reflects real completed purchases by BUYER location for $periodLabel — '
+                        'never the farmer\'s, product\'s, or seller\'s. Positions use each buyer\'s real map pin '
+                        '(set at registration); the ranked list groups them by their actual saved area, in Laurel '
+                        'or anywhere else.',
                         style: TextStyle(color: c.textSecondary, fontSize: 12.5),
                       ),
                       const SizedBox(height: 16),
@@ -2193,13 +2319,14 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                 children: [
                                   Expanded(
                                     child: _DemandSidePanel(
-                                      title: 'Highest Demand Barangays',
+                                      title: 'Highest Demand Areas',
                                       icon: Icons.local_fire_department_outlined,
-                                      emptyText: 'No completed orders yet.',
+                                      emptyText: 'No completed buyer purchases for $periodLabel.',
                                       rows: rankedDemand
                                           .where((d) => d.orderCount > 0)
                                           .take(6)
-                                          .map((d) => '${d.barangay} — ${d.orderCount} order(s)')
+                                          .map((d) =>
+                                              '${d.area} — ${d.orderCount} completed order${d.orderCount == 1 ? '' : 's'}')
                                           .toList(),
                                     ),
                                   ),
@@ -2208,7 +2335,7 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                     child: _DemandSidePanel(
                                       title: 'Top Buyer Searches',
                                       icon: Icons.search,
-                                      emptyText: 'No search activity logged yet.',
+                                      emptyText: 'No search activity logged for $periodLabel.',
                                       rows: topSearches
                                           .map((e) => '${e.key} — ${e.value} search(es)')
                                           .toList(),
@@ -2789,10 +2916,270 @@ class _DemandSidePanel extends StatelessWidget {
 
 // ============================================================
 // PRICE MANAGEMENT — bound to the `market_prices` collection.
-// "Live Market Average" is computed on the fly from current
-// `products` listings; "Baseline Price" is what the admin sets
-// here and is meant to feed the price-recommendation system.
+// "Current Market Average" is computed on the fly from active Farmer
+// `products` listings only; "Admin Reference Price" is what the
+// admin sets here (manually or via file import) and is meant to
+// feed the price-recommendation system.
 // ============================================================
+
+// A single cell's value, normalized from either .xlsx (typed CellValue) or
+// .csv (plain string) into one shape the row-validation logic below can
+// read without caring which format it came from. [nativeDate] is only ever
+// set for a genuine Excel date cell (DateCellValue/DateTimeCellValue) — CSV
+// and text-formatted date cells fall back to string parsing instead.
+class _Cell {
+  final String text;
+  final DateTime? nativeDate;
+  const _Cell(this.text, {this.nativeDate});
+  bool get isBlank => text.trim().isEmpty;
+}
+
+// excel v4's CellValue is a sealed class with typed subclasses per cell
+// kind (text/int/double/date/bool/formula) instead of raw Dart values —
+// this extracts the real display text for every one of them in one place.
+String _cellPlainText(CellValue? value) {
+  return switch (value) {
+    null => '',
+    TextCellValue v => v.value.toString().trim(),
+    IntCellValue v => v.value.toString(),
+    DoubleCellValue v => v.value.toString(),
+    DateCellValue v => v.asDateTimeLocal().toIso8601String(),
+    DateTimeCellValue v => v.asDateTimeLocal().toIso8601String(),
+    BoolCellValue v => v.value.toString(),
+    FormulaCellValue v => v.formula,
+    _ => value.toString(),
+  };
+}
+
+// Combines a price with its commodity's configured unit (e.g. "kg",
+// "piece", "kg liveweight") instead of assuming everything is per
+// kilogram — falls back to "kg" only when the record genuinely has no
+// unit configured (older records predating the Unit field).
+String _formatPriceWithUnit(num price, String? unit) {
+  final label = (unit == null || unit.trim().isEmpty) ? 'kg' : unit.trim();
+  return '${formatPeso(price)}/$label';
+}
+
+DateTime? _cellNativeDate(CellValue? value) {
+  if (value is DateCellValue) return value.asDateTimeLocal();
+  if (value is DateTimeCellValue) return value.asDateTimeLocal();
+  return null;
+}
+
+// A tolerant reader, not a full RFC 4180 CSV parser, since commodity names/
+// prices/dates never need embedded commas or quoted fields.
+List<List<_Cell>> _csvCellRows(String content) {
+  final rows = <List<_Cell>>[];
+  for (final rawLine in content.split(RegExp(r'\r\n|\r|\n'))) {
+    final line = rawLine.trim();
+    if (line.isEmpty) continue;
+    rows.add(line
+        .split(',')
+        .map((cell) => _Cell(cell.trim().replaceAll(RegExp(r'^"|"$'), '')))
+        .toList());
+  }
+  return rows;
+}
+
+List<List<_Cell>> _xlsxCellRows(Uint8List bytes) {
+  final workbook = Excel.decodeBytes(bytes);
+  if (workbook.tables.isEmpty) return [];
+  final sheet = workbook.tables[workbook.tables.keys.first]!;
+  return sheet.rows.map((row) {
+    return row.map((cell) {
+      final value = cell?.value;
+      return _Cell(_cellPlainText(value), nativeDate: _cellNativeDate(value));
+    }).toList();
+  }).toList();
+}
+
+String _normalizeHeader(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+Map<String, int> _headerIndex(List<_Cell> headerRow) {
+  final index = <String, int>{};
+  for (var i = 0; i < headerRow.length; i++) {
+    final norm = _normalizeHeader(headerRow[i].text);
+    if (norm.isNotEmpty) index.putIfAbsent(norm, () => i);
+  }
+  return index;
+}
+
+int? _resolveColumn(Map<String, int> normalizedHeaderIndex, List<String> aliases) {
+  for (final alias in aliases) {
+    final idx = normalizedHeaderIndex[alias];
+    if (idx != null) return idx;
+  }
+  return null;
+}
+
+// Accepts ISO/native Excel dates first, then a handful of common
+// spreadsheet date formats admins are likely to have typed by hand.
+DateTime? _parseDateText(String text) {
+  final t = text.trim();
+  if (t.isEmpty) return null;
+  final iso = DateTime.tryParse(t);
+  if (iso != null) return iso;
+  for (final pattern in ['M/d/yyyy', 'MM/dd/yyyy', 'yyyy/MM/dd', 'MMM d, yyyy', 'MMMM d, yyyy', 'd MMM yyyy', 'MM-dd-yyyy']) {
+    try {
+      return DateFormat(pattern).parseStrict(t);
+    } catch (_) {}
+  }
+  return null;
+}
+
+// One row from an imported price file, already validated. [error] is null
+// exactly when the row is importable; every rejection reason is a plain,
+// specific sentence — never just "invalid" — so the preview dialog (and
+// the "Show clear errors" requirement) has something real to display.
+class _PriceImportRow {
+  final int rowNumber;
+  final String rawName;
+  final String? matchedCommodity;
+  final String? category;
+  final double? referencePrice;
+  final DateTime? effectiveDate;
+  final double? minimumPrice;
+  final double? maximumPrice;
+  final String? unit;
+  final String? source;
+  final bool isTestData;
+  final String? error;
+
+  const _PriceImportRow({
+    required this.rowNumber,
+    required this.rawName,
+    this.matchedCommodity,
+    this.category,
+    this.referencePrice,
+    this.effectiveDate,
+    this.minimumPrice,
+    this.maximumPrice,
+    this.unit,
+    this.source,
+    this.isTestData = false,
+    this.error,
+  });
+
+  bool get isValid => error == null;
+  String get displayName => matchedCommodity ?? rawName;
+}
+
+class _PriceImportParseResult {
+  final String? headerError;
+  final List<_PriceImportRow> rows;
+  const _PriceImportParseResult({this.headerError, this.rows = const []});
+}
+
+// The new supported layout: CommodityID, Category, CommodityName, Unit,
+// ReferencePrice, MinimumPrice, MaximumPrice, EffectiveDate, Source,
+// IsTestData — matched by header name (case/spacing-insensitive), not
+// fixed column position, with a couple of legacy aliases ("name", "price")
+// so the header-based error below is clear even for an old-format file
+// instead of the old blanket "No valid rows found."
+_PriceImportParseResult _buildImportRows(List<List<_Cell>> rawRows) {
+  if (rawRows.isEmpty) {
+    return const _PriceImportParseResult(headerError: 'This file appears to be empty.');
+  }
+
+  final index = _headerIndex(rawRows.first);
+  final nameCol = _resolveColumn(index, const ['commodityname', 'commodity', 'name', 'productname', 'product']);
+  final priceCol = _resolveColumn(index, const ['referenceprice', 'baselineprice', 'price']);
+  final dateCol = _resolveColumn(index, const ['effectivedate', 'date']);
+
+  final missing = <String>[];
+  if (nameCol == null) missing.add('CommodityName');
+  if (priceCol == null) missing.add('ReferencePrice');
+  if (dateCol == null) missing.add('EffectiveDate');
+  if (missing.isNotEmpty) {
+    return _PriceImportParseResult(
+      headerError: 'This file is missing required column(s): ${missing.join(', ')}. Expected headers: '
+          'CommodityID, Category, CommodityName, Unit, ReferencePrice, MinimumPrice, MaximumPrice, '
+          'EffectiveDate, Source, IsTestData (CommodityName, ReferencePrice, and EffectiveDate are required).',
+    );
+  }
+
+  final unitCol = _resolveColumn(index, const ['unit']);
+  final minCol = _resolveColumn(index, const ['minimumprice', 'minprice']);
+  final maxCol = _resolveColumn(index, const ['maximumprice', 'maxprice']);
+  final sourceCol = _resolveColumn(index, const ['source']);
+  final testCol = _resolveColumn(index, const ['istestdata', 'testdata']);
+
+  _Cell cellAt(List<_Cell> cells, int? col) => (col != null && col < cells.length) ? cells[col] : const _Cell('');
+
+  final results = <_PriceImportRow>[];
+  final seenCommodities = <String>{};
+  var rowNumber = 1;
+
+  for (final cells in rawRows.skip(1)) {
+    rowNumber++;
+    if (cells.every((c) => c.isBlank)) continue; // blank rows are skipped, not flagged invalid
+
+    final rawName = cellAt(cells, nameCol).text;
+    final priceText = cellAt(cells, priceCol).text;
+    final dateCell = cellAt(cells, dateCol);
+    final unit = cellAt(cells, unitCol).text;
+    final source = cellAt(cells, sourceCol).text;
+    final testText = cellAt(cells, testCol).text;
+
+    String? error;
+    String? matched;
+    double? price;
+    DateTime? effectiveDate;
+
+    if (rawName.isEmpty) {
+      error = 'Missing commodity name';
+    } else {
+      matched = matchSupportedCommodity(rawName);
+      if (matched == null) error = 'Not a supported AgriTrade+ commodity';
+    }
+
+    if (error == null) {
+      if (priceText.isEmpty) {
+        error = 'Missing reference price';
+      } else {
+        price = double.tryParse(priceText.replaceAll(',', ''));
+        if (price == null) {
+          error = 'Invalid reference price';
+        } else if (price <= 0) {
+          error = 'Reference price must be greater than zero';
+        }
+      }
+    }
+
+    if (error == null) {
+      if (dateCell.isBlank) {
+        error = 'Missing effective date';
+      } else {
+        effectiveDate = dateCell.nativeDate ?? _parseDateText(dateCell.text);
+        if (effectiveDate == null) error = 'Invalid effective date';
+      }
+    }
+
+    if (error == null && matched != null) {
+      final key = matched.toLowerCase();
+      if (!seenCommodities.add(key)) {
+        error = 'Duplicate commodity in this file — only the first occurrence is imported';
+      }
+    }
+
+    results.add(_PriceImportRow(
+      rowNumber: rowNumber,
+      rawName: rawName,
+      matchedCommodity: matched,
+      category: matched != null ? categoryOfCommodity(matched) : null,
+      referencePrice: price,
+      effectiveDate: effectiveDate,
+      minimumPrice: double.tryParse(cellAt(cells, minCol).text.replaceAll(',', '')),
+      maximumPrice: double.tryParse(cellAt(cells, maxCol).text.replaceAll(',', '')),
+      unit: unit.isEmpty ? null : unit,
+      source: source.isEmpty ? null : source,
+      isTestData: const ['true', '1', 'yes'].contains(testText.toLowerCase()),
+      error: error,
+    ));
+  }
+
+  return _PriceImportParseResult(rows: results);
+}
 
 class _PriceManagementView extends StatelessWidget {
   const _PriceManagementView();
@@ -2802,6 +3189,7 @@ class _PriceManagementView extends StatelessWidget {
     String? commodityId,
     String? name,
     double? price,
+    String? unit,
   }) async {
     final saved = await showDialog<bool>(
       context: context,
@@ -2809,51 +3197,14 @@ class _PriceManagementView extends StatelessWidget {
         commodityId: commodityId,
         initialName: name,
         initialPrice: price,
+        initialUnit: unit,
       ),
     );
     if (saved == true && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Baseline price saved.')),
+        const SnackBar(content: Text('Admin reference price saved.')),
       );
     }
-  }
-
-  // Splits raw file content into rows of plain-string cells — a tolerant
-  // "name,price" reader, not a full RFC 4180 CSV parser, since commodity
-  // names/prices never need embedded commas or quoted fields.
-  List<List<String>> _csvRows(String content) {
-    final rows = <List<String>>[];
-    for (final rawLine in content.split(RegExp(r'\r\n|\r|\n'))) {
-      final line = rawLine.trim();
-      if (line.isEmpty) continue;
-      rows.add(line.split(',').map((cell) => cell.trim().replaceAll(RegExp(r'^"|"$'), '')).toList());
-    }
-    return rows;
-  }
-
-  // Reads the first sheet of an .xlsx workbook into the same plain-string
-  // row shape as _csvRows, so both formats share one validation path below.
-  List<List<String>> _xlsxRows(Uint8List bytes) {
-    final workbook = Excel.decodeBytes(bytes);
-    if (workbook.tables.isEmpty) return [];
-    final sheet = workbook.tables[workbook.tables.keys.first]!;
-    return sheet.rows
-        .map((row) => row.map((cell) => cell?.value?.toString().trim() ?? '').toList())
-        .toList();
-  }
-
-  // A header row (e.g. "name,price") is skipped automatically because its
-  // second column won't parse as a number.
-  List<({String name, double price})> _extractPriceRows(List<List<String>> rawRows) {
-    final rows = <({String name, double price})>[];
-    for (final cells in rawRows) {
-      if (cells.length < 2) continue;
-      final name = cells[0].trim();
-      final price = double.tryParse(cells[1].trim());
-      if (name.isEmpty || price == null || price <= 0) continue;
-      rows.add((name: name, price: price));
-    }
-    return rows;
   }
 
   Future<void> _importPricesCsv(BuildContext context) async {
@@ -2876,11 +3227,11 @@ class _PriceManagementView extends StatelessWidget {
       return;
     }
 
-    final List<List<String>> rawRows;
+    final List<List<_Cell>> rawRows;
     try {
       rawRows = (file.extension ?? '').toLowerCase() == 'xlsx'
-          ? _xlsxRows(bytes)
-          : _csvRows(utf8.decode(bytes, allowMalformed: true));
+          ? _xlsxCellRows(bytes)
+          : _csvCellRows(utf8.decode(bytes, allowMalformed: true));
     } catch (_) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -2890,32 +3241,34 @@ class _PriceManagementView extends StatelessWidget {
       return;
     }
 
-    final rows = _extractPriceRows(rawRows);
-    if (rows.isEmpty) {
+    final parsed = _buildImportRows(rawRows);
+    if (parsed.headerError != null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(parsed.headerError!)));
+      }
+      return;
+    }
+    if (parsed.rows.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('No valid rows found. Expected two columns: name, price.')),
+          const SnackBar(content: Text('No rows found in this file — it may only contain a header row.')),
         );
       }
       return;
     }
 
     if (!context.mounted) return;
-    final confirm = await showDialog<bool>(
+    // Preview first — every row (valid and invalid) is shown before
+    // anything touches Firestore; the admin explicitly confirms which
+    // rows to import (only the valid ones ever get written).
+    final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Import commodity prices?'),
-        content: Text(
-          'Found ${rows.length} valid row(s). Existing commodities with matching names will have '
-          'their baseline price updated; new ones will be created.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Import')),
-        ],
-      ),
+      builder: (_) => _PriceImportPreviewDialog(rows: parsed.rows, fileName: file.name),
     );
-    if (confirm != true) return;
+    if (confirmed != true) return;
+
+    final validRows = parsed.rows.where((r) => r.isValid).toList();
+    if (validRows.isEmpty) return;
 
     if (!context.mounted) return;
     if (!await ConnectivityService.instance.checkNow()) {
@@ -2930,28 +3283,39 @@ class _PriceManagementView extends StatelessWidget {
         FirebaseAuth.instance.currentUser?.uid ??
         'admin';
     final batch = firestore.batch();
-    for (final row in rows) {
-      final docId = row.name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    for (final row in validRows) {
+      // Keyed by the matched, canonical commodity name — never the file's
+      // own CommodityID — so an existing commodity is always updated in
+      // place instead of creating a duplicate.
+      final commodity = row.matchedCommodity!;
+      final docId = commodity.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '_');
       final docRef = firestore.collection('market_prices').doc(docId);
       final existing = await docRef.get();
       batch.set(docRef, {
-        'name': row.name,
-        'baselinePrice': row.price,
+        'name': commodity,
+        'category': row.category,
+        'baselinePrice': row.referencePrice,
         'previousBaselinePrice': existing.data()?['baselinePrice'],
+        'effectiveDate': Timestamp.fromDate(row.effectiveDate!),
+        if (row.unit != null) 'unit': row.unit,
+        if (row.source != null) 'source': row.source,
+        'isTestData': row.isTestData,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': updatedBy,
       }, SetOptions(merge: true));
     }
     await batch.commit();
 
+    final skipped = parsed.rows.length - validRows.length;
     AuditLogService.log(
       AuditAction.importBaselinePrices,
-      'Imported ${rows.length} commodity price(s) from ${file.name}.',
+      'Imported ${validRows.length} commodity price(s) from ${file.name}'
+      '${skipped > 0 ? ' ($skipped row(s) skipped as invalid)' : ''}.',
     );
 
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Imported ${rows.length} commodity price(s).')),
+        SnackBar(content: Text('Imported ${validRows.length} commodity price(s).')),
       );
     }
   }
@@ -2960,8 +3324,8 @@ class _PriceManagementView extends StatelessWidget {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Remove baseline price?'),
-        content: Text('This removes the official baseline for "$name". This cannot be undone.'),
+        title: const Text('Remove admin reference price?'),
+        content: Text('This removes the official admin reference price for "$name". This cannot be undone.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
           TextButton(
@@ -2979,21 +3343,25 @@ class _PriceManagementView extends StatelessWidget {
       return;
     }
     await FirebaseFirestore.instance.collection('market_prices').doc(commodityId).delete();
-    AuditLogService.log(AuditAction.deleteBaselinePrice, 'Removed the baseline price for "$name".');
+    AuditLogService.log(AuditAction.deleteBaselinePrice, 'Removed the admin reference price for "$name".');
   }
 
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
+    // The whole page (header/buttons + table) scrolls as one unit — the
+    // sidebar and top header outside this widget stay fixed. No nested
+    // vertical scroll region for the table itself, so the browser's normal
+    // scrollbar reaches every row and the action buttons at the bottom.
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Current Market Average Management',
+              Text('Commodity Price Management',
                   style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: c.textPrimary)),
               Row(
                 children: [
@@ -3022,100 +3390,233 @@ class _PriceManagementView extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 20),
-          Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance.collection('market_prices').orderBy('name').snapshots(),
-              builder: (context, pricesSnap) {
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance.collection('products').snapshots(),
-                  builder: (context, productsSnap) {
-                    if (pricesSnap.hasError || productsSnap.hasError) {
-                      return const AdminStreamError();
-                    }
-                    if (!pricesSnap.hasData || !productsSnap.hasData) {
-                      return const AdminLoadingSpinner();
-                    }
+          StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance.collection('market_prices').orderBy('name').snapshots(),
+            builder: (context, pricesSnap) {
+              return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance.collection('products').snapshots(),
+                builder: (context, productsSnap) {
+                  if (pricesSnap.hasError || productsSnap.hasError) {
+                    return const AdminStreamError();
+                  }
+                  if (!pricesSnap.hasData || !productsSnap.hasData) {
+                    return const AdminLoadingSpinner();
+                  }
 
-                    final priceDocs = pricesSnap.data!.docs;
-                    final products = productsSnap.data!.docs;
+                  final priceDocs = pricesSnap.data!.docs;
+                  final products = productsSnap.data!.docs;
 
-                    return Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: c.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: c.border),
-                      ),
-                      child: priceDocs.isEmpty
-                          ? const AdminEmptyState(
-                              icon: Icons.price_change_outlined,
-                              title: 'No baseline prices set yet',
-                              subtitle: 'Set official commodity prices to power AI price recommendations.',
-                            )
-                          : SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: DataTable(
-                                headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
-                                dataRowColor: WidgetStateProperty.all(Colors.transparent),
-                                columnSpacing: 32,
-                                horizontalMargin: 12,
-                                headingTextStyle: TextStyle(
-                                    color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
-                                dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
-                                columns: const [
-                                  DataColumn(label: Text('Commodity')),
-                                  DataColumn(label: Text('Live Market Average')),
-                                  DataColumn(label: Text('Baseline Price')),
-                                  DataColumn(label: Text('Last Updated')),
-                                  DataColumn(label: Text('Actions')),
-                                ],
-                                rows: priceDocs.map((doc) {
-                                  final data = doc.data();
-                                  final name = (data['name'] ?? doc.id).toString();
-                                  final baseline = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
-                                  final liveAverage = computeLiveAverage(products, name);
+                  return Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: c.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: c.border),
+                    ),
+                    // Sized to fit its content naturally (no fixed/bounded
+                    // height here) — the page-level scroll above is what
+                    // reveals rows past the viewport, not a clipped box.
+                    child: priceDocs.isEmpty
+                        ? const AdminEmptyState(
+                            icon: Icons.price_change_outlined,
+                            title: 'No admin reference prices set yet',
+                            subtitle: 'Set official commodity prices to power AI price recommendations.',
+                          )
+                        : SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: DataTable(
+                              headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
+                              dataRowColor: WidgetStateProperty.all(Colors.transparent),
+                              columnSpacing: 32,
+                              horizontalMargin: 12,
+                              headingTextStyle: TextStyle(
+                                  color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                              dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
+                              columns: const [
+                                DataColumn(label: Text('Commodity')),
+                                DataColumn(label: Text('Category')),
+                                DataColumn(label: Text('Current Market Average')),
+                                DataColumn(label: Text('Admin Reference Price')),
+                                DataColumn(label: Text('Unit')),
+                                DataColumn(label: Text('Effective Date')),
+                                DataColumn(label: Text('Source')),
+                                DataColumn(label: Text('Actions')),
+                              ],
+                              rows: priceDocs.map((doc) {
+                                final data = doc.data();
+                                final name = (data['name'] ?? doc.id).toString();
+                                final baseline = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
+                                // Current Market Average comes ONLY from
+                                // active Farmer listings — never the admin's
+                                // reference price (see computeLiveAverage).
+                                final liveAverage = computeLiveAverage(products, name);
+                                final category = (data['category'] ?? categoryOfCommodity(name))?.toString();
+                                final unit = (data['unit'] ?? '').toString();
+                                final effectiveDate = data['effectiveDate'] as Timestamp?;
+                                final source = (data['source'] ?? '').toString();
 
-                                  return DataRow(cells: [
-                                    DataCell(Text(name)),
-                                    DataCell(Text(
-                                      liveAverage != null ? formatPeso(liveAverage) : 'No listings yet',
-                                      style: TextStyle(color: c.textSecondary),
-                                    )),
-                                    DataCell(Text(formatPeso(baseline),
-                                        style: const TextStyle(fontWeight: FontWeight.w600))),
-                                    DataCell(Text(timeAgo(data['updatedAt'] as Timestamp?))),
-                                    DataCell(Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        IconButton(
-                                          tooltip: 'Update baseline',
-                                          icon: Icon(Icons.edit_outlined, size: 18, color: c.textSecondary),
-                                          onPressed: () => _openBaselineDialog(
-                                            context,
-                                            commodityId: doc.id,
-                                            name: name,
-                                            price: baseline,
-                                          ),
+                                return DataRow(cells: [
+                                  DataCell(Text(name)),
+                                  DataCell(Text(category ?? '—', style: TextStyle(color: c.textSecondary))),
+                                  DataCell(Text(
+                                    liveAverage != null
+                                        ? _formatPriceWithUnit(liveAverage, unit)
+                                        : 'No active listings',
+                                    style: TextStyle(color: c.textSecondary),
+                                  )),
+                                  DataCell(Text(_formatPriceWithUnit(baseline, unit),
+                                      style: const TextStyle(fontWeight: FontWeight.w600))),
+                                  DataCell(Text(unit.isEmpty ? 'kg' : unit, style: TextStyle(color: c.textSecondary))),
+                                  DataCell(Text(
+                                    effectiveDate != null ? DateFormat('MMM d, y').format(effectiveDate.toDate()) : '—',
+                                    style: TextStyle(color: c.textSecondary),
+                                  )),
+                                  DataCell(Text(source.isEmpty ? '—' : source, style: TextStyle(color: c.textSecondary))),
+                                  DataCell(Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        tooltip: 'Update reference price',
+                                        icon: Icon(Icons.edit_outlined, size: 18, color: c.textSecondary),
+                                        onPressed: () => _openBaselineDialog(
+                                          context,
+                                          commodityId: doc.id,
+                                          name: name,
+                                          price: baseline,
+                                          unit: unit,
                                         ),
-                                        IconButton(
-                                          tooltip: 'Remove baseline',
-                                          icon: Icon(Icons.delete_outline, size: 18, color: c.red),
-                                          onPressed: () => _deleteBaseline(context, doc.id, name),
-                                        ),
-                                      ],
-                                    )),
-                                  ]);
-                                }).toList(),
-                              ),
+                                      ),
+                                      IconButton(
+                                        tooltip: 'Remove reference price',
+                                        icon: Icon(Icons.delete_outline, size: 18, color: c.red),
+                                        onPressed: () => _deleteBaseline(context, doc.id, name),
+                                      ),
+                                    ],
+                                  )),
+                                ]);
+                              }).toList(),
                             ),
-                    );
-                  },
-                );
-              },
-            ),
+                          ),
+                  );
+                },
+              );
+            },
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Shown after a price file is read and validated, before anything is
+// written — the admin sees every row (valid and invalid, with a specific
+// reason for each rejection) and must explicitly confirm before
+// "Import Valid Rows" writes anything to Firestore.
+class _PriceImportPreviewDialog extends StatelessWidget {
+  final List<_PriceImportRow> rows;
+  final String fileName;
+
+  const _PriceImportPreviewDialog({required this.rows, required this.fileName});
+
+  Widget _summaryChip(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+      child: Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 12.5)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final validCount = rows.where((r) => r.isValid).length;
+    final invalidCount = rows.length - validCount;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: 800, maxHeight: screenHeight * 0.82),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Import Preview', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(fileName, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _summaryChip('Valid rows: $validCount', Colors.green),
+                  const SizedBox(width: 8),
+                  _summaryChip('Invalid rows: $invalidCount', invalidCount > 0 ? Colors.red : Colors.grey),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      columnSpacing: 28,
+                      columns: const [
+                        DataColumn(label: Text('Commodity')),
+                        DataColumn(label: Text('Reference Price')),
+                        DataColumn(label: Text('Effective Date')),
+                        DataColumn(label: Text('Status')),
+                      ],
+                      rows: rows.map((row) {
+                        final statusText = row.isValid
+                            ? 'Valid'
+                            : row.error == 'Not a supported AgriTrade+ commodity'
+                                ? 'Unsupported'
+                                : 'Invalid';
+                        final statusCell = Text(
+                          statusText,
+                          style: TextStyle(
+                            color: row.isValid ? Colors.green : Colors.red,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        );
+                        return DataRow(cells: [
+                          DataCell(Text(row.displayName)),
+                          DataCell(Text(
+                            row.referencePrice != null ? _formatPriceWithUnit(row.referencePrice!, row.unit) : '—',
+                          )),
+                          DataCell(Text(
+                            row.effectiveDate != null ? DateFormat('MMM d, y').format(row.effectiveDate!) : '—',
+                          )),
+                          DataCell(row.isValid ? statusCell : Tooltip(message: row.error!, child: statusCell)),
+                        ]);
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ),
+              if (invalidCount > 0) ...[
+                const SizedBox(height: 8),
+                Text(
+                  "Hover an invalid row's status for the reason. Only valid rows will be imported.",
+                  style: TextStyle(fontSize: 11.5, color: Colors.grey[600]),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: validCount > 0 ? () => Navigator.of(context).pop(true) : null,
+                    child: Text(validCount > 0 ? 'Import Valid Rows ($validCount)' : 'Import Valid Rows'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -3125,8 +3626,9 @@ class _BaselinePriceDialog extends StatefulWidget {
   final String? commodityId;
   final String? initialName;
   final double? initialPrice;
+  final String? initialUnit;
 
-  const _BaselinePriceDialog({this.commodityId, this.initialName, this.initialPrice});
+  const _BaselinePriceDialog({this.commodityId, this.initialName, this.initialPrice, this.initialUnit});
 
   @override
   State<_BaselinePriceDialog> createState() => _BaselinePriceDialogState();
@@ -3137,6 +3639,8 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
       TextEditingController(text: widget.initialName ?? '');
   late final TextEditingController _priceController =
       TextEditingController(text: widget.initialPrice != null ? widget.initialPrice!.toStringAsFixed(2) : '');
+  late final TextEditingController _unitController =
+      TextEditingController(text: (widget.initialUnit == null || widget.initialUnit!.isEmpty) ? 'kg' : widget.initialUnit);
 
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _products = [];
   bool _loadingProducts = true;
@@ -3162,12 +3666,14 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
   void dispose() {
     _nameController.dispose();
     _priceController.dispose();
+    _unitController.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
     final name = _nameController.text.trim();
     final price = double.tryParse(_priceController.text.trim());
+    final unit = _unitController.text.trim();
 
     if (name.isEmpty) {
       setState(() => _error = 'Enter a commodity name.');
@@ -3197,7 +3703,9 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
       final oldPrice = existing.data()?['baselinePrice'];
       await docRef.set({
         'name': name,
+        'category': categoryOfCommodity(name),
         'baselinePrice': price,
+        'unit': unit.isEmpty ? 'kg' : unit,
         'previousBaselinePrice': oldPrice,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': FirebaseAuth.instance.currentUser?.email ??
@@ -3230,7 +3738,7 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
         : computeLiveAverage(_products, _nameController.text);
 
     return AlertDialog(
-      title: Text(widget.commodityId == null ? 'Set Baseline Price' : 'Update Baseline Price'),
+      title: Text(widget.commodityId == null ? 'Set Admin Reference Price' : 'Update Admin Reference Price'),
       content: SizedBox(
         width: 360,
         child: Column(
@@ -3247,18 +3755,27 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
             TextField(
               controller: _priceController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Baseline price (₱)'),
+              decoration: const InputDecoration(labelText: 'Admin reference price (₱)'),
               onChanged: (_) => setState(() {}),
             ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _unitController,
+              decoration: const InputDecoration(
+                labelText: 'Unit',
+                hintText: 'e.g. kg, piece, kg liveweight',
+              ),
+            ),
             const SizedBox(height: 10),
-            // "Test price calculation": shows what the live listings say,
-            // right next to the baseline the admin is about to commit.
+            // Shows what active Farmer listings say right now, right next
+            // to the reference price the admin is about to commit — the
+            // two are always kept visibly separate (never averaged together).
             Text(
               _loadingProducts
-                  ? 'Checking live listings…'
+                  ? 'Checking active listings…'
                   : liveAverage != null
-                      ? 'Live market average right now: ${formatPeso(liveAverage)}'
-                      : 'No live listings match this name yet.',
+                      ? 'Current market average right now: ${formatPeso(liveAverage)}'
+                      : 'No active listings match this name yet.',
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),
             if (_error != null) ...[

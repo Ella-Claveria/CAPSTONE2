@@ -34,18 +34,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   static const List<_OnboardingItem> _items = [
     _OnboardingItem(
       image: 'assets/images/onboarding_1_farming.png',
-      title: 'Discover Fresh Produce',
-      description: 'Find fresh products directly from verified local farmers.',
+      title: 'Fresh Products, Direct Trading',
+      description: 'Buy and sell selected agricultural products directly through AgriTrade+.',
     ),
     _OnboardingItem(
       image: 'assets/images/onboarding_2_connection.png',
-      title: 'Support Local Farmers',
-      description: 'Connect with local farmers and livestock raisers in your community.',
+      title: 'Smart and Convenient Marketplace',
+      description: 'Discover products, connect with farmers and buyers, and manage your transactions in one place.',
     ),
     _OnboardingItem(
       image: 'assets/images/onboarding_3_marketplace.png',
-      title: 'Trade with Confidence',
-      description: 'List products, place orders, and receive important transaction updates in one place.',
+      title: 'Stay Connected',
+      description: 'Manage orders, messages, and important transaction updates through AgriTrade+.',
     ),
   ];
 

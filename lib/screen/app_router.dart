@@ -9,6 +9,7 @@ import 'auth_route_handler.dart';
 import '../services/auth_routing_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/push_notification_service.dart';
+import '../services/session_timeout_service.dart';
 import '../widgets/branded_loading_screen.dart';
 import '../widgets/no_internet_screen.dart';
 
@@ -92,6 +93,13 @@ class _AppRouterState extends State<AppRouter> {
 
   Future<void> _route() async {
     if (mounted && _offline) setState(() => _offline = false);
+
+    // Covers the app having been killed outright while backgrounded for
+    // 15+ minutes — SessionTimeoutService's own lifecycle observer only
+    // catches a timeout on resume while the process survived; this cold
+    // start is the other half of the same rule. A no-op otherwise.
+    await SessionTimeoutService.instance.signOutIfIdleTooLong();
+    if (!mounted) return;
 
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {

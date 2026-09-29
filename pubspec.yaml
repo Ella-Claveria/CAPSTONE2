@@ -26,6 +26,7 @@ dependencies:
   intl: 0.20.2
   connectivity_plus: ^6.1.0
   url_launcher: ^6.3.1
+  http: ^1.2.0
   google_maps_flutter: ^2.5.3
   geolocator: ^13.0.1
   shared_preferences: ^2.5.3

@@ -2,6 +2,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
 import '../services/market_price_helpers.dart';
+import '../data/commodity_master_list.dart';
 import 'admin_dashboard_screen.dart' show AdminThemeScope, AdminPalette, AdminEmptyState;
 
 // ============================================================
@@ -229,7 +230,8 @@ class AdminTopProductsCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text('${p.quantity.toStringAsFixed(0)} kg sold', style: TextStyle(color: c.textSecondary, fontSize: 11)),
+                Text('${formatStock(p.quantity, unitForProductName(p.name))} sold',
+                    style: TextStyle(color: c.textSecondary, fontSize: 11)),
               ],
             ),
           ),

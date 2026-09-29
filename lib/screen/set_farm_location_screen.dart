@@ -42,11 +42,9 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
   Future<void> _useMyLocation() async {
     setState(() => _locating = true);
     try {
-      final granted = await maybeRequestLocationPermission(
+      final granted = await requestFarmerLocationPermission(
         context,
-        title: 'Pin your farm location',
-        message: 'AgriTrade+ uses your current GPS position to place your '
-            'farm on the map. You can still drag the map to fine-tune it afterward.',
+        blockedFeature: 'Pinning your exact farm location',
       );
       if (!granted) return;
 
