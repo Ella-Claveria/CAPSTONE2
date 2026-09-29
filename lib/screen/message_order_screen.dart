@@ -6,7 +6,6 @@ import '../services/cloudinary_service.dart';
 import '../services/message_service.dart';
 import '../services/market_price_helpers.dart';
 import '../data/commodity_master_list.dart';
-import '../widgets/pricing_calculator_sheet.dart';
 import 'buyer_marketplace_screen.dart';
 import 'place_order_screen.dart';
 
@@ -395,66 +394,12 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
     );
   }
 
-  Future<void> _choosePrice(
-    num price,
-    String pricingType,
-    int minimumQuantity,
-    int maximumQuantity, {
-    int? initialQuantity,
-  }) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PlaceOrderScreen(
-          sellerId: widget.farmerId,
-          sellerName: widget.farmerName,
-          productId: widget.productId,
-          productName: widget.productName,
-          productPrice: formatPriceWithUnit(price, _unit),
-          productImage: widget.productImage,
-          deliveryAvailable: widget.deliveryAvailable,
-          pickupAvailable: widget.pickupAvailable,
-          pricingType: pricingType,
-          minimumQuantity: minimumQuantity,
-          maximumQuantity: maximumQuantity,
-          initialQuantity: initialQuantity,
-          unit: _unit,
-        ),
-      ),
-    );
-  }
-
-  void _openPricingCalculator(
-    num price,
-    String pricingType,
-    int minimumQuantity,
-    int maximumQuantity,
-  ) {
-    showPricingCalculatorSheet(
-      context,
-      pricingType: pricingType,
-      unitPrice: price,
-      minimumQuantity: minimumQuantity,
-      maximumQuantity: maximumQuantity,
-      unit: _unit,
-      onProceed: (quantity) => _choosePrice(
-        price,
-        pricingType,
-        minimumQuantity,
-        maximumQuantity,
-        initialQuantity: quantity,
-      ),
-    );
-  }
-
   Widget _pricingOptionsMessage(Map<String, dynamic> data) {
     final isMe = data['senderId'] == FirebaseAuth.instance.currentUser?.uid;
     final retailPrice = (data['retailPrice'] as num?)?.toDouble() ?? 0;
     final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
     final minimumQuantity =
         (data['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1;
-    final retailMaximumQuantity =
-        (data['retailMaximumQuantity'] as num?)?.toInt() ?? 1;
 
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
@@ -469,48 +414,39 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Choose an order type',
+              'Product pricing',
               style: TextStyle(
                 color: isMe ? Colors.white : Colors.black87,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 8),
-            if (isMe)
+            Text(
+              'Retail: ${formatPriceWithUnit(retailPrice, _unit)}',
+              style: TextStyle(
+                color: isMe ? Colors.white70 : Colors.black87,
+                fontSize: 13,
+              ),
+            ),
+            if (wholesalePrice != null && wholesalePrice > 0) ...[
+              const SizedBox(height: 4),
               Text(
-                'Retail: ${formatPriceWithUnit(retailPrice, _unit)} (maximum $retailMaximumQuantity $_unit)',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-              )
-            else
-              OutlinedButton(
-                onPressed: () => _openPricingCalculator(
-                  retailPrice,
-                  'retail',
-                  1,
-                  retailMaximumQuantity,
-                ),
-                child: Text(
-                  'Retail (maximum $retailMaximumQuantity $_unit) - ${formatPriceWithUnit(retailPrice, _unit)}',
+                'Wholesale: ${formatPriceWithUnit(wholesalePrice, _unit)} '
+                '(minimum $minimumQuantity $_unit)',
+                style: TextStyle(
+                  color: isMe ? Colors.white70 : Colors.black87,
+                  fontSize: 13,
                 ),
               ),
-            if (wholesalePrice != null && wholesalePrice > 0)
-              if (isMe)
-                Text(
-                  'Wholesale (Bulk Orders): ${formatPriceWithUnit(wholesalePrice, _unit)} (minimum $minimumQuantity $_unit)',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                )
-              else
-                OutlinedButton(
-                  onPressed: () => _openPricingCalculator(
-                    wholesalePrice,
-                    'wholesale',
-                    minimumQuantity,
-                    0,
-                  ),
-                  child: Text(
-                    'Wholesale (Bulk Orders) - ${formatPriceWithUnit(wholesalePrice, _unit)} (min $minimumQuantity $_unit)',
-                  ),
-                ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'The order price is applied automatically from the quantity you enter at checkout.',
+              style: TextStyle(
+                color: isMe ? Colors.white60 : Colors.black54,
+                fontSize: 11.5,
+              ),
+            ),
           ],
         ),
       ),
