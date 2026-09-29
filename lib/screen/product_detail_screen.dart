@@ -5,7 +5,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import '../services/cart_service.dart';
 import '../services/message_service.dart';
 import '../services/product_service.dart';
 import '../services/market_price_helpers.dart';
@@ -33,14 +32,12 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   static const Color _accent = Color(0xFFDCEDC8);
   static const Color _bg = Colors.white;
 
-  int count = 0;
   Uint8List? _imageBytes;
   String? _imageUrl;
 
   @override
   void initState() {
     super.initState();
-    count = CartService.instance.countFor(widget.productId);
     ProductService().logProductView(widget.productId);
 
     final b64 = widget.data['imageBase64']?.toString();
@@ -114,9 +111,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   Future<void> _refreshData() async {
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    setState(() {
-      count = CartService.instance.countFor(widget.productId);
-    });
+    setState(() {});
   }
 
   @override
@@ -796,7 +791,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         productId: widget.productId,
         productName: productName,
         productImageUrl: _imageUrl ?? '',
-        retailPrice: (widget.data['price'] as num?) ?? 0,
+        retailPrice: (widget.data['retailPrice'] as num?) ?? (widget.data['price'] as num?) ?? 0,
         wholesalePrice: widget.data['wholesalePrice'] as num?,
         wholesaleMinimumQuantity:
             (widget.data['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1,
@@ -822,7 +817,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           farmerName: farmerName,
           productName: productName,
           productPrice: formatPriceWithUnit(
-            (widget.data['price'] as num?) ?? 0,
+            (widget.data['retailPrice'] as num?) ?? (widget.data['price'] as num?) ?? 0,
             (widget.data['unit'] as String?) ?? unitForProductName(productName),
           ),
           productImage: _imageUrl ?? '',
