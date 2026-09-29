@@ -802,6 +802,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             (widget.data['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1,
         retailMaximumQuantity:
             (widget.data['retailMaximumQuantity'] as num?)?.toInt() ?? 1,
+        unit: (widget.data['unit'] as String?) ?? unitForProductName(productName),
         deliveryAvailable: widget.data['deliveryAvailable'] == true,
         pickupOnly: widget.data['pickupOnly'] == true,
       );
