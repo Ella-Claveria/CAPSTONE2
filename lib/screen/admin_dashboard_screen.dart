@@ -3436,8 +3436,8 @@ class _PriceManagementView extends StatelessWidget {
                               columns: const [
                                 DataColumn(label: Text('Commodity')),
                                 DataColumn(label: Text('Category')),
-                                DataColumn(label: Text('Current Retail Market Average')),
-                                DataColumn(label: Text('Current Wholesale Market Average')),
+                                DataColumn(label: Text('Current Market Average (Retail)')),
+                                DataColumn(label: Text('Current Market Average (Wholesale)')),
                                 DataColumn(label: Text('Admin Reference Price')),
                                 DataColumn(label: Text('Unit')),
                                 DataColumn(label: Text('Effective Date')),
