@@ -375,13 +375,6 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                   if (_isCountBasedUnit && q != q.roundToDouble()) {
                     return 'Quantity for $_unit must be a whole number';
                   }
-                  if (q < widget.minimumQuantity) {
-                    return 'Minimum for ${widget.pricingType} is ${widget.minimumQuantity} $_unit';
-                  }
-                  if (widget.maximumQuantity > 0 &&
-                      q > widget.maximumQuantity) {
-                    return 'Maximum for ${widget.pricingType} is ${widget.maximumQuantity} $_unit';
-                  }
                   return null;
                 },
               ),
