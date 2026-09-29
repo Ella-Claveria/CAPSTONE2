@@ -508,7 +508,10 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
     final name = data['name'] ?? 'Unnamed Product';
     final category = data['category'] ?? 'General';
     final farmer = data['farmerName'] ?? 'Local Farmer';
-    final price = (data['price'] as num?) ?? 0;
+    final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
+    final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
+    final wholesaleEnabled = data['wholesaleEnabled'] == true ||
+        (data['wholesaleEnabled'] == null && wholesalePrice != null && wholesalePrice > 0);
     final quantity = (data['quantity'] as num?) ?? 0;
     final unit = (data['unit'] as String?) ?? unitForProductName(name.toString());
     final rating = (data['rating'] as num?)?.toDouble();
@@ -562,6 +565,20 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                     const Spacer(),
                     Text(formatPriceWithUnit(price, unit),
                         style: const TextStyle(color: _dark, fontWeight: FontWeight.bold, fontSize: 16)),
+                    if (wholesaleEnabled) ...[
+                      const SizedBox(height: 2),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFE8F5E9),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'Wholesale available',
+                          style: TextStyle(fontSize: 9.5, color: _dark, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 1),
                     Text("${formatStock(quantity, unit)} left", style: TextStyle(color: Colors.grey[600], fontSize: 11)),
                     const SizedBox(height: 6),
