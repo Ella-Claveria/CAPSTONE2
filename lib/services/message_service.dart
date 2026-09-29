@@ -43,7 +43,8 @@ class MessageService {
     num? wholesalePrice,
     int wholesaleMinimumQuantity = 1,
     int retailMaximumQuantity =
-        1, // Pass retail maximum quantity through conversation metadata
+        1, // Legacy metadata retained for older conversations.
+    String unit = 'kg',
     bool deliveryAvailable = false,
     bool pickupOnly = false,
   }) async {
@@ -85,7 +86,8 @@ class MessageService {
       'productId': productId,
       'productName': productName,
       'productImageUrl': productImageUrl,
-      'productPrice': '₱${retailPrice ?? 0}/kilo',
+      'productPrice': '₱${retailPrice ?? 0}/$unit',
+      'unit': unit,
       'deliveryAvailable': deliveryAvailable,
       'pickupOnly': pickupOnly,
       'farmerImage': productImageUrl,
