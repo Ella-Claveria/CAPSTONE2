@@ -59,6 +59,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
 
   bool _submitting = false;
   late String _deliveryMethod;
+  DateTime? _neededBy;
   Map<String, dynamic>? _liveProduct;
   bool _loadingProduct = true;
 
@@ -211,6 +212,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       buyerContact: _contactController.text.trim(),
       buyerAddress: _addressController.text.trim(),
       deliveryMethod: _canChooseDelivery ? _deliveryMethod : 'unspecified',
+      neededBy: _neededBy,
     );
 
     if (!mounted) return;
@@ -377,6 +379,33 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                   }
                   return null;
                 },
+              ),
+              const SizedBox(height: 10),
+              InkWell(
+                onTap: () async {
+                  final now = DateTime.now();
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _neededBy ?? now,
+                    firstDate: DateTime(now.year, now.month, now.day),
+                    lastDate: now.add(const Duration(days: 90)),
+                  );
+                  if (picked != null && mounted) {
+                    setState(() => _neededBy = picked);
+                  }
+                },
+                borderRadius: BorderRadius.circular(12),
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Needed by (Optional)',
+                    suffixIcon: Icon(Icons.calendar_today_outlined),
+                  ),
+                  child: Text(
+                    _neededBy == null
+                        ? 'No specific date'
+                        : '${_neededBy!.month}/${_neededBy!.day}/${_neededBy!.year}',
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
               if (!_loadingProduct) ...[
