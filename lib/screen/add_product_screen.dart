@@ -174,6 +174,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 (data['name'] ?? '').toString(),
               );
       if (!matchesCommodity) continue;
+      final listingUnit = (data['unit'] ?? '').toString().trim();
+      if (listingUnit.isNotEmpty && listingUnit != _currentUnit) continue;
 
       double? price;
       if (isWholesale) {
@@ -204,6 +206,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
       final storedType = (data['pricingType'] ?? 'retail').toString().toLowerCase();
       if (isWholesale ? storedType != 'wholesale' : storedType == 'wholesale') {
+        continue;
+      }
+      final transactionUnit = (data['unit'] ?? '').toString().trim();
+      if (transactionUnit.isNotEmpty && transactionUnit != _currentUnit) {
         continue;
       }
 
@@ -1531,8 +1537,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
             _priceRecommendation(),
             const SizedBox(height: 18),
 
-            // ---- Price ----
-            _label(pricePerUnitLabel(_currentUnit)),
+            // ---- Retail Price ----
+            _label('Retail ${pricePerUnitLabel(_currentUnit)}'),
             TextField(
               controller: _priceController,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
