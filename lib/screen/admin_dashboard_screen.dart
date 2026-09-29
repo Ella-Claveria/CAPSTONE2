@@ -3436,7 +3436,8 @@ class _PriceManagementView extends StatelessWidget {
                               columns: const [
                                 DataColumn(label: Text('Commodity')),
                                 DataColumn(label: Text('Category')),
-                                DataColumn(label: Text('Current Market Average')),
+                                DataColumn(label: Text('Current Retail Market Average')),
+                                DataColumn(label: Text('Current Wholesale Market Average')),
                                 DataColumn(label: Text('Admin Reference Price')),
                                 DataColumn(label: Text('Unit')),
                                 DataColumn(label: Text('Effective Date')),
@@ -3451,6 +3452,7 @@ class _PriceManagementView extends StatelessWidget {
                                 // active Farmer listings — never the admin's
                                 // reference price (see computeLiveAverage).
                                 final liveAverage = computeLiveAverage(products, name);
+                                final wholesaleLiveAverage = computeWholesaleLiveAverage(products, name);
                                 final category = (data['category'] ?? categoryOfCommodity(name))?.toString();
                                 final unit = (data['unit'] ?? '').toString();
                                 final effectiveDate = data['effectiveDate'] as Timestamp?;
@@ -3462,7 +3464,13 @@ class _PriceManagementView extends StatelessWidget {
                                   DataCell(Text(
                                     liveAverage != null
                                         ? _formatPriceWithUnit(liveAverage, unit)
-                                        : 'No active listings',
+                                        : 'No active retail listings',
+                                    style: TextStyle(color: c.textSecondary),
+                                  )),
+                                  DataCell(Text(
+                                    wholesaleLiveAverage != null
+                                        ? _formatPriceWithUnit(wholesaleLiveAverage, unit)
+                                        : 'No wholesale market data yet',
                                     style: TextStyle(color: c.textSecondary),
                                   )),
                                   DataCell(Text(_formatPriceWithUnit(baseline, unit),
