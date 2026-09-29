@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../services/order_service.dart';
 import '../services/market_price_helpers.dart';
+import '../services/pricing_tier_service.dart';
 import '../data/commodity_master_list.dart';
 
 class PlaceOrderScreen extends StatefulWidget {
@@ -58,6 +59,8 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
 
   bool _submitting = false;
   late String _deliveryMethod;
+  Map<String, dynamic>? _liveProduct;
+  bool _loadingProduct = true;
 
   @override
   void initState() {
@@ -68,6 +71,8 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     _deliveryMethod = widget.deliveryAvailable
         ? 'delivery'
         : (widget.pickupAvailable ? 'pickup' : 'unspecified');
+    _quantityController.addListener(_onQuantityChanged);
+    _loadProduct();
   }
 
   @override
@@ -75,12 +80,55 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     _nameController.dispose();
     _contactController.dispose();
     _addressController.dispose();
+    _quantityController.removeListener(_onQuantityChanged);
     _quantityController.dispose();
     super.dispose();
   }
 
   bool get _canChooseDelivery =>
       widget.pickupAvailable || widget.deliveryAvailable;
+
+  void _onQuantityChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _loadProduct() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('products')
+          .doc(widget.productId)
+          .get();
+      if (!mounted) return;
+      setState(() {
+        _liveProduct = snap.data();
+        _loadingProduct = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingProduct = false);
+    }
+  }
+
+  PricingTierQuote get _currentQuote {
+    final data = _liveProduct;
+    final qty = num.tryParse(_quantityController.text.trim()) ?? 0;
+    final retail = (data?['retailPrice'] as num?) ??
+        (data?['price'] as num?) ??
+        _extractUnitPrice(widget.productPrice);
+    final wholesaleEnabled = data != null
+        ? PricingTierService.wholesaleAvailable(data)
+        : widget.pricingType == 'wholesale';
+    final wholesalePrice = data?['wholesalePrice'] as num?;
+    final wholesaleMinimum = data?['wholesaleMinimumQuantity'] as num?;
+
+    return PricingTierService.quote(
+      quantity: qty,
+      retailPrice: retail,
+      wholesaleEnabled: wholesaleEnabled,
+      wholesalePrice: wholesalePrice,
+      wholesaleMinimumQuantity: wholesaleMinimum,
+    );
+  }
 
   // The commodity's real Unit of Measurement (see commodity_master_list.dart)
   // — explicit widget.unit wins when a caller passes it, otherwise derived
@@ -149,7 +197,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     }
 
     setState(() => _submitting = true);
-    final unitPrice = _extractUnitPrice(widget.productPrice);
+    final quote = _currentQuote;
 
     final err = await _orderService.createOrder(
       sellerId: widget.sellerId,
@@ -158,7 +206,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       productName: widget.productName,
       imageUrl: widget.productImage,
       quantity: qty,
-      unitPrice: unitPrice,
+      unitPrice: quote.unitPrice,
       buyerName: _nameController.text.trim(),
       buyerContact: _contactController.text.trim(),
       buyerAddress: _addressController.text.trim(),
@@ -256,9 +304,24 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            widget.productPrice,
+                            _loadingProduct
+                                ? widget.productPrice
+                                : formatPriceWithUnit(_currentQuote.unitPrice, _unit),
                             style: const TextStyle(
                               color: _dark,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _loadingProduct
+                                ? 'Checking pricing…'
+                                : _currentQuote.isWholesale
+                                    ? 'Wholesale price applied'
+                                    : 'Retail price applied',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: _currentQuote.isWholesale ? Colors.green[700] : Colors.grey[600],
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -322,7 +385,49 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                   return null;
                 },
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
+              if (!_loadingProduct) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _currentQuote.isWholesale ? Colors.green[50] : _accent.withValues(alpha: 0.55),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: _currentQuote.isWholesale ? Colors.green[200]! : Colors.grey[300]!,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _currentQuote.isWholesale
+                            ? 'Wholesale price applied'
+                            : 'Retail price applied',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${formatStock(_currentQuote.quantity, _unit)} × '
+                        '${formatPriceWithUnit(_currentQuote.unitPrice, _unit)} '
+                        '= ${formatPeso(_currentQuote.subtotal)}',
+                        style: const TextStyle(fontSize: 12.5),
+                      ),
+                      if (!_currentQuote.isWholesale &&
+                          _currentQuote.quantityToWholesale != null &&
+                          _currentQuote.quantityToWholesale! > 0) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Add ${formatStock(_currentQuote.quantityToWholesale!, _unit)} more '
+                          'to qualify for the wholesale price.',
+                          style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
               if (_canChooseDelivery)
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
