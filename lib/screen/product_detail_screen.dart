@@ -11,6 +11,7 @@ import '../services/product_service.dart';
 import '../services/market_price_helpers.dart';
 import '../data/commodity_master_list.dart';
 import 'message_order_screen.dart';
+import 'place_order_screen.dart';
 import 'buyer_market_view.dart';
 
 class ProductDetailScreen extends StatefulWidget {
@@ -123,7 +124,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final data = widget.data;
     final name = data['name']?.toString() ?? 'Unnamed';
     final category = data['category']?.toString() ?? '';
-    final price = (data['price'] as num?) ?? 0;
+    final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
+    final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
+    final wholesaleMinimum = (data['wholesaleMinimumQuantity'] as num?) ?? 1;
+    final wholesaleEnabled = data['wholesaleEnabled'] == true ||
+        (data['wholesaleEnabled'] == null && wholesalePrice != null && wholesalePrice > 0);
     final available = (data['quantity'] as num?) ?? 0;
     final unit = (data['unit'] as String?) ?? unitForProductName(name);
     final description = data['description']?.toString() ?? '';
@@ -244,6 +249,40 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         ),
                       ],
                     ),
+                    if (wholesaleEnabled && wholesalePrice != null && wholesalePrice > 0) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green[50],
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.green[200]!),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Wholesale available',
+                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _dark),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${formatPriceWithUnit(wholesalePrice, unit)} for orders of '
+                              '${formatStock(wholesaleMinimum, unit)} or more',
+                              style: TextStyle(fontSize: 12.5, color: Colors.grey[700]),
+                            ),
+                            if (available < wholesaleMinimum) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                'Wholesale is temporarily unavailable because current stock is below the minimum.',
+                                style: TextStyle(fontSize: 11.5, color: Colors.orange[800]),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     if (rating != null)
                       Row(
@@ -664,26 +703,45 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             children: [
               Expanded(
                 child: _actionButton(
-                  available > 0 ? Icons.message : Icons.block,
-                  available > 0 ? 'Message to Order' : 'Out of Stock',
-                  available <= 0
+                  available > 0 ? Icons.shopping_bag_outlined : Icons.block,
+                  available > 0 ? 'Order Now' : 'Out of Stock',
+                  available <= 0 || farmerId == null || farmerId.isEmpty
                       ? null
-                      : () async {
-                          if (farmerId == null || farmerId.isEmpty) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Unable to message this farmer. Try again later.',
-                                ),
+                      : () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => PlaceOrderScreen(
+                                sellerId: farmerId,
+                                sellerName: farmerName,
+                                productId: widget.productId,
+                                productName: name,
+                                productPrice: formatPriceWithUnit(price, unit),
+                                productImage: _imageUrl ?? '',
+                                deliveryAvailable: delivery,
+                                pickupAvailable: pickup,
+                                unit: unit,
                               ),
-                            );
-                            return;
-                          }
-                          await _messageFarmer(farmerId, farmerName, name);
-                        },
+                            ),
+                          ),
                 ),
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 10),
+              InkWell(
+                onTap: available <= 0 || farmerId == null || farmerId.isEmpty
+                    ? null
+                    : () => _messageFarmer(farmerId, farmerName, name),
+                borderRadius: BorderRadius.circular(18),
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: _accent,
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: const Icon(Icons.message_outlined, color: _dark, size: 22),
+                ),
+              ),
+              const SizedBox(width: 10),
               InkWell(
                 onTap: () => Navigator.push(
                   context,
