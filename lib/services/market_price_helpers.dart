@@ -70,12 +70,15 @@ String timeAgo(Timestamp? ts) {
 /// fake 0 or a silent fallback to the reference price.
 double? computeLiveAverage(
   List<QueryDocumentSnapshot<Map<String, dynamic>>> products,
-  String commodityKey,
-) {
+  String commodityKey, {
+  String pricingType = 'retail',
+}) {
   final key = commodityKey.trim().toLowerCase();
   if (key.isEmpty) return null;
 
   final matches = <double>[];
+  final expectedUnit = unitForCommodity(matchSupportedCommodity(commodityKey) ?? commodityKey);
+
   for (final doc in products) {
     final data = doc.data();
     if (data['isArchived'] == true || data['isSuspended'] == true) continue;
@@ -91,7 +94,21 @@ double? computeLiveAverage(
     final category = (data['category'] ?? '').toString().toLowerCase();
     if (commodity != key && !name.contains(key) && !category.contains(key)) continue;
 
-    final raw = data['price'];
+    final unit = (data['unit'] ?? unitForProductName(data['name']?.toString() ?? '')).toString();
+    if (expectedUnit.isNotEmpty && unit.isNotEmpty && unit != expectedUnit) continue;
+
+    dynamic raw;
+    if (pricingType == 'wholesale') {
+      final explicitEnabled = data['wholesaleEnabled'];
+      final wholesalePrice = data['wholesalePrice'];
+      final enabled = explicitEnabled == true ||
+          (explicitEnabled == null && wholesalePrice is num && wholesalePrice > 0);
+      if (!enabled) continue;
+      raw = wholesalePrice;
+    } else {
+      raw = data['retailPrice'] ?? data['price'];
+    }
+
     final price = raw is num
         ? raw.toDouble()
         : num.tryParse(raw?.toString() ?? '')?.toDouble();
@@ -101,3 +118,9 @@ double? computeLiveAverage(
   if (matches.isEmpty) return null;
   return matches.reduce((a, b) => a + b) / matches.length;
 }
+
+double? computeWholesaleLiveAverage(
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> products,
+  String commodityKey,
+) =>
+    computeLiveAverage(products, commodityKey, pricingType: 'wholesale');
