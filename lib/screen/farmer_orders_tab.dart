@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/order_service.dart';
+import '../services/market_price_helpers.dart';
 import '../widgets/shimmer.dart';
 import '../widgets/skeleton_loaders.dart';
 
@@ -103,6 +104,9 @@ class _OrdersTabState extends State<OrdersTab> {
         d['productName']?.toString() ?? d['name']?.toString() ?? 'Product';
     final buyer = d['buyerName']?.toString() ?? 'Buyer';
     final status = (d['status'] ?? 'pending').toString();
+    final pricingType = (d['pricingType'] ?? 'retail').toString();
+    final unit = d['unit']?.toString() ?? '';
+    final unitPrice = (d['pricePerUnit'] as num?) ?? (d['unitPrice'] as num?);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -115,6 +119,12 @@ class _OrdersTabState extends State<OrdersTab> {
             Text('Buyer: $buyer'),
             const SizedBox(height: 6),
             Text('Status: ${status[0].toUpperCase()}${status.substring(1)}'),
+            const SizedBox(height: 6),
+            Text('Pricing: ${pricingType == 'wholesale' ? 'Wholesale' : 'Retail'}'),
+            if (unitPrice != null) ...[
+              const SizedBox(height: 6),
+              Text('Price: ${formatPriceWithUnit(unitPrice, unit)}'),
+            ],
           ],
         ),
         actions: [
@@ -339,6 +349,8 @@ class _OrdersTabState extends State<OrdersTab> {
     final totalRaw = d['total'];
     final total = totalRaw is num ? totalRaw : (num.tryParse('$totalRaw') ?? 0);
     final status = (d['status'] ?? 'pending').toString();
+    final pricingType = (d['pricingType'] ?? 'retail').toString();
+    final pricePerUnit = (d['pricePerUnit'] as num?) ?? (d['unitPrice'] as num?);
     final imageUrl = d['imageUrl']?.toString();
 
     return Container(
@@ -393,6 +405,33 @@ class _OrdersTabState extends State<OrdersTab> {
                     Text(
                       qtyLabel,
                       style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 3),
+                    Wrap(
+                      spacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: pricingType == 'wholesale' ? Colors.green[50] : Colors.grey[100],
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            pricingType == 'wholesale' ? 'WHOLESALE' : 'RETAIL',
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
+                              color: pricingType == 'wholesale' ? Colors.green[800] : Colors.grey[700],
+                            ),
+                          ),
+                        ),
+                        if (pricePerUnit != null)
+                          Text(
+                            formatPriceWithUnit(pricePerUnit, unit),
+                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                          ),
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Row(
