@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'market_price_helpers.dart';
+
 /// Handles chat conversations and messages between farmers and buyers.
 /// FCM token registration/cleanup lives in PushNotificationService (see
 /// AuthService.signOut for cleanup, AppRouter/notification_permission_prompt
@@ -86,7 +88,7 @@ class MessageService {
       'productId': productId,
       'productName': productName,
       'productImageUrl': productImageUrl,
-      'productPrice': '₱${retailPrice ?? 0}/$unit',
+      'productPrice': formatPriceWithUnit(retailPrice ?? 0, unit),
       'unit': unit,
       'deliveryAvailable': deliveryAvailable,
       'pickupOnly': pickupOnly,

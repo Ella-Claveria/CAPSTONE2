@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'dart:convert';
 
 import '../services/audit_log_service.dart';
+import '../services/dashboard_analytics_service.dart';
 import '../services/market_price_helpers.dart';
 import '../services/pdf_report_service.dart';
 import 'admin_dashboard_screen.dart'
@@ -585,14 +586,13 @@ Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(String uid) as
 
   final orders =
       await FirebaseFirestore.instance.collection('orders').where('sellerId', isEqualTo: uid).get();
-  var completedCount = 0;
-  num totalSales = 0;
-  for (final o in orders.docs) {
-    if ((o.data()['status'] ?? '').toString().toLowerCase() != 'completed') continue;
-    completedCount++;
-    final total = o.data()['total'];
-    totalSales += total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0;
-  }
+  final completedCount = orders.docs
+      .where((o) => (o.data()['status'] ?? '').toString().toLowerCase() == 'completed')
+      .length;
+  // TOTAL TRANSACTION VALUE — same definition/formula as the platform-
+  // wide KPI tile (DashboardAnalyticsService.platformTransactionTotal),
+  // just scoped to this one farmer's own orders.
+  final totalSales = DashboardAnalyticsService.platformTransactionTotal(orders.docs);
 
   return _FarmerMarketplaceActivity(
     activeListings: active,

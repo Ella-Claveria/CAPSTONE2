@@ -1442,6 +1442,9 @@ class _AnalyticsDashboardView extends StatelessWidget {
             );
           }),
 
+          const SizedBox(height: 12),
+          _pricingTypeBreakdown(orders),
+
           const SizedBox(height: 24),
 
           // ---- ROW 2: Sales Overview + Sales by Category ----
@@ -1521,7 +1524,15 @@ class _AnalyticsDashboardView extends StatelessWidget {
                             style: TextStyle(
                                 color: c.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 4),
-                        Text('Current Market Average — Laurel, Batangas',
+                        // This card shows the Admin Reference Price
+                        // (market_prices.baselinePrice), NOT Current
+                        // Market Average — that's a distinct, active-
+                        // listing-derived figure shown in the Commodity
+                        // Price Management table below. Never relabel
+                        // this "Current Market Average"; see
+                        // DashboardAnalyticsService's canonical
+                        // definitions.
+                        Text('Admin Reference Price — Laurel, Batangas',
                             style: TextStyle(color: c.textSecondary, fontSize: 13)),
                       ],
                     ),
@@ -1684,6 +1695,51 @@ class _AnalyticsDashboardView extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  // Compact Retail/Wholesale breakdown — Orders + Revenue split by
+  // pricingType, all-time (same scope as the Total Transaction Value KPI
+  // card above, which this sits directly beneath). Deliberately small: a
+  // single row of two stat blocks, not a second dashboard. See
+  // DashboardAnalyticsService.pricingTypeSummary's doc comment.
+  Widget _pricingTypeBreakdown(List<QueryDocumentSnapshot<Map<String, dynamic>>> orders) {
+    final summary = DashboardAnalyticsService.pricingTypeSummary(orders);
+    return Builder(builder: (context) {
+      final c = AdminThemeScope.of(context).palette;
+      Widget stat(String label, int count, num revenue, Color color) {
+        return Expanded(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: c.border),
+            ),
+            child: Row(
+              children: [
+                Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                const SizedBox(width: 8),
+                Text(label, style: TextStyle(color: c.textSecondary, fontSize: 12.5, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                Text('$count order${count == 1 ? '' : 's'}',
+                    style: TextStyle(color: c.textSecondary, fontSize: 12)),
+                const SizedBox(width: 10),
+                Text(formatPeso(revenue),
+                    style: TextStyle(color: c.textPrimary, fontSize: 13.5, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
+        );
+      }
+
+      return Row(
+        children: [
+          stat('Retail', summary.retailOrders, summary.retailRevenue, c.blue),
+          const SizedBox(width: 12),
+          stat('Wholesale', summary.wholesaleOrders, summary.wholesaleRevenue, c.green),
+        ],
+      );
+    });
   }
 }
 
@@ -1976,11 +2032,10 @@ LatLngBounds _computeMapBounds(List<({double lat, double lng})> buyerPoints) {
   );
 }
 
-// The three preset zoom levels — replaces free-form Zoom In/Zoom Out,
-// which could land on an awkward in-between zoom where the heat discs'
-// fixed screen-pixel radius (see _DemandHeatmapPainter) looks either
-// like one giant blur or a scatter of tiny dots. Jumping between three
-// curated levels keeps it always looking intentional.
+// Three quick-jump zoom presets, shown as buttons alongside full free-form
+// zoom (mouse wheel / pinch / double-click, all enabled on the map itself
+// — see _HeatmapMap's zoomGesturesEnabled) — a convenience shortcut to a
+// curated level, not the only way to zoom.
 const double _zoomTownLevel = 12.0;
 const double _zoomBarangayLevel = 14.0;
 const double _zoomStreetLevel = 16.0;
@@ -2246,10 +2301,24 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                     .where((d) => d.data()['isArchived'] != true)
                     .map((d) => d.data())
                     .toList();
+                // "As of" reference point for the rolling 6-week trend
+                // window: the current moment for the current month/year
+                // (so today's own activity still counts), otherwise the
+                // last moment of the selected month — so this card
+                // actually responds to the Month/Year filter like every
+                // other figure on this page, instead of always silently
+                // showing "as of today" regardless of what period is
+                // selected.
+                final isCurrentPeriod = _selectedYear == _now.year && _selectedMonth == _now.month;
+                final trendsAsOf = isCurrentPeriod
+                    ? _now
+                    : DashboardAnalyticsService.monthWindow(_selectedYear, _selectedMonth)
+                        .end
+                        .subtract(const Duration(milliseconds: 1));
                 final trends = MarketTrendService.commodityTrends(
                   completedOrders: ordersSnap.data!.docs.map((d) => d.data()).toList(),
                   activeProducts: activeProducts,
-                  now: DateTime.now(),
+                  now: trendsAsOf,
                 );
 
                 return Padding(
@@ -2421,19 +2490,29 @@ class _HeatmapMapState extends State<_HeatmapMap> {
               initialCameraPosition: widget.initialCamera,
               style: _mutedMapStyle,
               myLocationButtonEnabled: false,
-              // Replaced by the custom zoom-preset buttons below — native
-              // browser zoom controls can't be repositioned next to the
-              // Fullscreen button the way this design calls for.
+              // Native on-map zoom controls are replaced by the custom
+              // zoom-preset buttons below (which can't be positioned next
+              // to the Fullscreen button any other way) — the underlying
+              // gestures themselves stay fully enabled below, this only
+              // swaps which UI draws the +/- buttons.
               zoomControlsEnabled: false,
               mapToolbarEnabled: false,
-              // Zoom is deliberately only reachable through the three
-              // preset buttons (Town/Barangay/Street) below — pinch,
-              // double-click, and scroll-wheel zoom are all off, so the
-              // heat discs' fixed screen-pixel radius (see
-              // _DemandHeatmapPainter) never lands on an in-between zoom
-              // level it wasn't designed to look right at. Panning (drag)
-              // stays on, so the map is still explorable within bounds.
-              zoomGesturesEnabled: false,
+              // Mouse wheel, trackpad pinch/scroll, and double-click zoom
+              // are all real, standard map interactions and must work
+              // normally — never disabled. _DemandHeatmapPainter's heat
+              // discs use a fixed SCREEN-pixel radius specifically so they
+              // look correct at any zoom level (see its own doc comment:
+              // that's what gives a real heatmap layer its "dissipates as
+              // you zoom in" look), so free zoom never looks broken.
+              zoomGesturesEnabled: true,
+              // Rotate/tilt stay off: _DemandHeatmapPainter's projection
+              // assumes a simple north-up, no-tilt camera (see _project) —
+              // panning and zooming still update it correctly frame to
+              // frame, but a rotated/tilted camera would make the painted
+              // heat discs visibly drift off their real map position.
+              // Neither gesture was requested; only pan/zoom are.
+              rotateGesturesEnabled: false,
+              tiltGesturesEnabled: false,
               // Keeps the map to wherever the real data actually is —
               // Laurel itself, plus any buyer point outside it (see
               // _computeMapBounds) — instead of a fixed Laurel-only lock,

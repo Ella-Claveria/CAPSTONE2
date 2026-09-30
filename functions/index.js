@@ -33,7 +33,7 @@ const messaging = getMessaging();
  * redelivers unchanged on retry) and unique per distinct event otherwise —
  * it becomes the notification's own document id, so a retried event
  * overwrites/no-ops the same doc rather than creating a duplicate. */
-async function notifyUser(uid, { title, body, type, data, dedupeId }) {
+async function notifyUser(uid, { title, body, type, data, dedupeId, relatedId }) {
   if (!uid || !dedupeId) return;
 
   const itemRef = db.collection("notifications").doc(uid).collection("items").doc(dedupeId);
@@ -46,9 +46,17 @@ async function notifyUser(uid, { title, body, type, data, dedupeId }) {
   }
 
   await itemRef.set({
+    // recipientId duplicates the {uid} already in this doc's own path
+    // (notifications/{uid}/items/{itemId}) — kept as an explicit field too
+    // so a query/export never has to parse the path to know who a record
+    // belongs to. relatedId is the one id most relevant to `type` (an
+    // orderId, conversationId, reportId, or the acted-on user's own uid for
+    // account-level events) — the full detail always still lives in `data`.
+    recipientId: uid,
     title,
     body,
     type,
+    relatedId: relatedId || null,
     data: data || {},
     read: false,
     createdAt: FieldValue.serverTimestamp(),
@@ -143,6 +151,7 @@ exports.sendMessageNotification = onDocumentCreated(
       title: senderName,
       body,
       type: "chat_message",
+      relatedId: conversationId,
       data: {
         conversationId,
         senderId: message.senderId,
@@ -174,6 +183,7 @@ exports.notifyNewOrder = onDocumentCreated("orders/{orderId}", async (event) => 
     title: "New order received",
     body: `${buyerName} ordered ${qtyLabel || "an item"} of ${productName}.`,
     type: "new_order",
+    relatedId: event.params.orderId,
     data: { orderId: event.params.orderId },
     dedupeId: `${event.id}-seller`,
   });
@@ -182,6 +192,7 @@ exports.notifyNewOrder = onDocumentCreated("orders/{orderId}", async (event) => 
     title: "Order placed!",
     body: `Your order for ${qtyLabel || "an item"} of ${productName} was sent to ${sellerName}.`,
     type: "new_order",
+    relatedId: event.params.orderId,
     data: { orderId: event.params.orderId },
     dedupeId: `${event.id}-buyer`,
   });
@@ -212,6 +223,7 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
     title: `Order ${label}`,
     body: `Your order for ${after.productName || "a product"} was ${label}.`,
     type: "order_status",
+    relatedId: event.params.orderId,
     data: { orderId: event.params.orderId, status: after.status },
     dedupeId: event.id,
   });
@@ -281,6 +293,7 @@ exports.notifyFarmerApprovalStatusChange = onDocumentUpdated(
       // introducing a differently-named type here would silently fall
       // through to their default case instead of routing/icon-matching.
       type: "verification_status",
+      relatedId: event.params.uid,
       data: { status: after.approvalStatus },
       dedupeId: event.id,
     });
@@ -312,6 +325,7 @@ exports.notifyModerationWarning = onDocumentUpdated("reports/{reportId}", async 
     title: productName ? "Listing Warning" : "Account Warning",
     body,
     type: "moderation_warning",
+    relatedId: event.params.reportId,
     data: {
       reportId: event.params.reportId,
       productId: after.productId || null,
@@ -340,6 +354,7 @@ exports.notifyAccountModeration = onDocumentUpdated("users/{uid}", async (event)
       ? `Your AgriTrade+ account has been temporarily suspended following an Admin review.${after.suspensionReason ? ` Reason: ${after.suspensionReason}` : ""}`
       : `Your AgriTrade+ account has been deactivated following an Admin review.${after.banReason ? ` Reason: ${after.banReason}` : ""}`,
     type: "moderation_warning",
+    relatedId: event.params.uid,
     data: { accountStatus: after.accountStatus },
     dedupeId: event.id,
   });

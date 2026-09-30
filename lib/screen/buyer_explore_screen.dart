@@ -2,12 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import '../data/commodity_master_list.dart';
 import '../services/product_service.dart';
 import '../services/product_visibility_service.dart';
 import '../services/image_helper.dart';
 import '../services/market_price_helpers.dart';
+import 'buyer_search_screen.dart';
 import 'product_detail_screen.dart';
 
 class BuyerExploreScreen extends StatefulWidget {
@@ -28,19 +28,11 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   final List<String> _categories = ['All Postings', ...kCommodityMasterList.keys];
 
   final ProductService _productService = ProductService();
-  final TextEditingController _searchController = TextEditingController();
-  final FocusNode _searchFocusNode = FocusNode();
-  String _searchQuery = '';
-  bool _searchFocused = false;
-  Timer? _searchLogDebounce;
 
   String _selectedBarangay = 'All Locations';
   Map<String, String> _barangayByFarmerUid = {};
   Map<String, bool> _verifiedByFarmerUid = {};
   StreamSubscription? _usersSub;
-
-  List<String> _trendingSearches = [];
-  StreamSubscription? _searchEventsSub;
 
   // Visibility-ranking inputs (ProductVisibilityService) — completed-order
   // count per product is the "demand" signal; seller verification feeds
@@ -51,11 +43,6 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   @override
   void initState() {
     super.initState();
-    _searchFocusNode.addListener(() {
-      if (!mounted) return;
-      setState(() => _searchFocused = _searchFocusNode.hasFocus);
-    });
-
     _usersSub = FirebaseFirestore.instance.collection('users').snapshots().listen((snap) {
       if (!mounted) return;
       setState(() {
@@ -65,9 +52,14 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                 (doc.data()['barangay'] ?? '').toString().isNotEmpty)
               doc.id: doc.data()['barangay'].toString(),
         };
+        // Derived directly from approvalStatus — the single source of
+        // truth for verification state across the whole app — rather than
+        // the separate isVerified field, which existed only as a mirror
+        // and could historically drift from it (see
+        // verification_queue_view.dart's _setFarmerApproval).
         _verifiedByFarmerUid = {
           for (final doc in snap.docs)
-            if ((doc.data()['role'] ?? '') == 'farmer') doc.id: doc.data()['isVerified'] == true,
+            if ((doc.data()['role'] ?? '') == 'farmer') doc.id: doc.data()['approvalStatus'] == 'approved',
         };
       });
     });
@@ -86,47 +78,13 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
       }
       setState(() => _completedOrderCountByProduct = counts);
     });
-
-    _searchEventsSub = FirebaseFirestore.instance
-        .collection('searchEvents')
-        .orderBy('createdAt', descending: true)
-        .limit(200)
-        .snapshots()
-        .listen((snap) {
-      if (!mounted) return;
-      final counts = <String, int>{};
-      for (final doc in snap.docs) {
-        final query = (doc.data()['query'] ?? '').toString().trim().toLowerCase();
-        if (query.isEmpty) continue;
-        counts[query] = (counts[query] ?? 0) + 1;
-      }
-      final ranked = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-      setState(() => _trendingSearches = ranked.take(6).map((e) => e.key).toList());
-    });
   }
 
   @override
   void dispose() {
     _usersSub?.cancel();
     _completedOrdersSub?.cancel();
-    _searchEventsSub?.cancel();
-    _searchLogDebounce?.cancel();
-    _searchController.dispose();
-    _searchFocusNode.dispose();
     super.dispose();
-  }
-
-  Future<void> _logSearchEvent(String uid, String query) async {
-    try {
-      await FirebaseFirestore.instance.collection('searchEvents').add({
-        'userId': uid,
-        'query': query,
-        'category': _selectedCategory,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    } catch (_) {
-      // Best-effort telemetry only — never surface this to the buyer.
-    }
   }
 
   Future<void> _refreshProducts() async {
@@ -135,80 +93,56 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
     setState(() {});
   }
 
-  void _onSearchChanged(String value) {
-    setState(() => _searchQuery = value.trim());
-
-    // Log the search after typing pauses, so the admin Demand Heatmap can
-    // aggregate what buyers are actually looking for. Fire-and-forget —
-    // never block or interrupt the buyer's search experience.
-    _searchLogDebounce?.cancel();
-    final query = value.trim();
-    if (query.length < 2) return;
-    _searchLogDebounce = Timer(const Duration(milliseconds: 800), () {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid == null) return;
-      _logSearchEvent(uid, query);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: () => _searchFocusNode.unfocus(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSearchBar(),
-          if (_searchFocused) _buildSuggestedSearches(),
-          _buildCategoryChips(),
-          _buildLocationChips(),
-          const SizedBox(height: 4),
-          Expanded(child: _buildProductGrid()),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSearchBar(),
+        _buildCategoryChips(),
+        _buildLocationChips(),
+        const SizedBox(height: 4),
+        Expanded(child: _buildProductGrid()),
+      ],
     );
   }
 
+  // Tapping this (not typing in it — it's not a real text field) opens the
+  // dedicated Search Screen, which owns the entire search experience
+  // (suggested/trending/recent searches, category browsing, recommended
+  // products, and result matching) — Explore itself no longer performs
+  // text search inline.
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
+      child: Material(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2)),
-          ],
-        ),
-        child: TextField(
-          controller: _searchController,
-          focusNode: _searchFocusNode,
-          textAlignVertical: TextAlignVertical.center,
-          style: const TextStyle(fontSize: 13.5, color: Colors.black87),
-          decoration: InputDecoration(
-            isDense: true,
-            filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(vertical: 14),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide.none,
-            ),
-            prefixIcon: Icon(Icons.search, color: Colors.grey[500], size: 20),
-            suffixIcon: _searchQuery.isEmpty
-                ? null
-                : IconButton(
-                    icon: Icon(Icons.close, color: Colors.grey[500], size: 18),
-                    onPressed: () {
-                      _searchController.clear();
-                      _onSearchChanged('');
-                    },
-                  ),
-            hintText: 'Search crops, livestock, or farmers...',
-            hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13.5),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const BuyerSearchScreen()),
           ),
-          onChanged: _onSearchChanged,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2)),
+              ],
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+            child: Row(
+              children: [
+                Icon(Icons.search, color: Colors.grey[500], size: 20),
+                const SizedBox(width: 10),
+                Text(
+                  'Search crops, livestock, or farmers...',
+                  style: TextStyle(color: Colors.grey[500], fontSize: 13.5),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -244,81 +178,6 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           );
         },
-      ),
-    );
-  }
-
-  void _applySuggestedSearch(String query) {
-    _searchController.text = query;
-    _searchController.selection = TextSelection.fromPosition(
-      TextPosition(offset: query.length),
-    );
-    setState(() => _searchQuery = query);
-    _searchFocusNode.unfocus();
-  }
-
-  // Trending terms narrowed to whatever's already typed, so this doubles as
-  // an autocomplete list once the buyer starts typing instead of only
-  // working as a pre-typing suggestion tray.
-  List<String> get _visibleSuggestions {
-    if (_searchQuery.isEmpty) return _trendingSearches;
-    final q = _searchQuery.toLowerCase();
-    return _trendingSearches.where((t) => t != q && t.contains(q)).toList();
-  }
-
-  // A dropdown-style panel anchored right under the search bar, shown only
-  // while that field is focused — built from searchEvents logged by every
-  // buyer (see _searchEventsSub in initState), not just this one.
-  Widget _buildSuggestedSearches() {
-    final suggestions = _visibleSuggestions;
-    if (suggestions.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 4)),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
-              child: Row(
-                children: [
-                  Icon(Icons.trending_up, size: 15, color: Colors.grey[600]),
-                  const SizedBox(width: 6),
-                  Text('Suggested searches',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey[600])),
-                ],
-              ),
-            ),
-            for (final term in suggestions)
-              InkWell(
-                onTap: () => _applySuggestedSearch(term),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  child: Row(
-                    children: [
-                      Icon(Icons.search, size: 16, color: Colors.grey[400]),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(term,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13.5, color: Colors.black87))),
-                      Icon(Icons.north_west, size: 14, color: Colors.grey[400]),
-                    ],
-                  ),
-                ),
-              ),
-            const SizedBox(height: 4),
-          ],
-        ),
       ),
     );
   }
@@ -389,16 +248,6 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
           }).toList();
         }
 
-        if (_searchQuery.isNotEmpty) {
-          final query = _searchQuery.toLowerCase();
-          docs = docs.where((doc) {
-            final data = doc.data();
-            final name = (data['name'] ?? '').toString().toLowerCase();
-            final farmer = (data['farmerName'] ?? '').toString().toLowerCase();
-            return name.contains(query) || farmer.contains(query);
-          }).toList();
-        }
-
         if (_selectedBarangay != 'All Locations') {
           docs = docs.where((doc) {
             final farmerId = (doc.data()['farmerId'] ?? '').toString();
@@ -424,8 +273,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
         });
 
         if (docs.isEmpty) {
-          final isFiltered = _searchQuery.isNotEmpty ||
-              _selectedBarangay != 'All Locations' ||
+          final isFiltered = _selectedBarangay != 'All Locations' ||
               _selectedCategory != 'All Postings';
 
           return Center(
@@ -441,11 +289,9 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    _searchQuery.isNotEmpty
-                        ? 'No results for "$_searchQuery"'
-                        : _selectedBarangay != 'All Locations'
-                            ? 'No listings yet in $_selectedBarangay'
-                            : 'No products available yet',
+                    _selectedBarangay != 'All Locations'
+                        ? 'No listings yet in $_selectedBarangay'
+                        : 'No products available yet',
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600),
                   ),
@@ -461,9 +307,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                     const SizedBox(height: 20),
                     OutlinedButton.icon(
                       onPressed: () {
-                        _searchController.clear();
                         setState(() {
-                          _searchQuery = '';
                           _selectedBarangay = 'All Locations';
                           _selectedCategory = 'All Postings';
                         });

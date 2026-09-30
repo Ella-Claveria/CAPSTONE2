@@ -5,8 +5,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// no-training-required style as PriceRecommendationService, not a trained
 /// ML model. Two signals, both grouped by product name:
 ///
-/// - Price Movement: weekly average completed-order unit price, trended.
-/// - Local Supply Trend: weekly count of new active listings, trended —
+/// - PRICE MOVEMENT (see DashboardAnalyticsService's canonical
+///   definitions): weekly average completed-order unit price, trended,
+///   for ONE [pricingType] at a time — retail and wholesale unit prices
+///   for the same commodity are never averaged together, since they
+///   aren't comparable numbers. Prefers each order's completedAt (falling
+///   back to updatedAt, then createdAt).
+/// - LOCAL SUPPLY TREND: weekly count of new active listings, trended —
 ///   there's no historical inventory snapshot to look back on, so "new
 ///   supply being added per week" is the honest, computable proxy for
 ///   whether local supply is expanding or contracting.
@@ -48,6 +53,13 @@ class MarketTrendService {
     return null;
   }
 
+  // When an order actually became 'completed' — mirrors
+  // DashboardAnalyticsService._completionDate.
+  static DateTime? _completionDate(Map<String, dynamic> order) =>
+      _toDateTime(order['completedAt']) ??
+      _toDateTime(order['updatedAt']) ??
+      _toDateTime(order['createdAt']);
+
   static double _num(dynamic raw) {
     if (raw is num) return raw.toDouble();
     return double.tryParse(raw?.toString() ?? '') ?? 0;
@@ -85,6 +97,7 @@ class MarketTrendService {
     required List<Map<String, dynamic>> activeProducts,
     required DateTime now,
     int topN = 6,
+    String pricingType = 'retail',
   }) {
     // 0 = the last 7 days, 1 = the 7 days before that, ... a rolling window
     // back from [now], not calendar-week-aligned buckets.
@@ -103,11 +116,15 @@ class MarketTrendService {
     for (final order in completedOrders) {
       final rawName = (order['productName'] ?? '').toString().trim();
       if (rawName.isEmpty) continue;
+      // Same commodity, same pricing type — never mix retail and
+      // wholesale unit prices into one weekly average.
+      final orderPricingType = (order['pricingType'] ?? 'retail').toString().toLowerCase();
+      if (orderPricingType != pricingType) continue;
       final key = rawName.toLowerCase();
       displayName.putIfAbsent(key, () => rawName);
       orderCountByName[key] = (orderCountByName[key] ?? 0) + 1;
 
-      final createdAt = _toDateTime(order['createdAt']);
+      final createdAt = _completionDate(order);
       final price = _num(order['unitPrice']);
       if (createdAt == null || price <= 0) continue;
       final bucket = bucketOf(createdAt);

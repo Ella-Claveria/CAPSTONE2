@@ -515,11 +515,20 @@ class AuthService {
   // ── Admin: fetch farmers awaiting approval ──
   // Returns a real-time stream so the dashboard updates automatically
   // whenever a new farmer registers or an admin approves/rejects someone.
+  //
+  // Deliberately filters only on role, not on approvalStatus — a Firestore
+  // equality filter (`isEqualTo: 'pending'`) never matches a document where
+  // the field is absent entirely, so a legacy farmer account that predates
+  // the approvalStatus field would silently never appear in this query,
+  // with no way for an admin to ever approve them short of the Firebase
+  // Console. The caller filters to "pending or missing" client-side
+  // instead (see verification_queue_view.dart) — same "missing defaults to
+  // pending" convention already used by AuthRoutingService/
+  // PendingApprovalScreen/getFarmerApprovalStatus.
   Stream<QuerySnapshot<Map<String, dynamic>>> getPendingFarmers() {
     return FirebaseFirestore.instance
         .collection('users')
         .where('role', isEqualTo: 'farmer')
-        .where('approvalStatus', isEqualTo: 'pending')
         .snapshots();
   }
 }

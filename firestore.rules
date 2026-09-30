@@ -7,9 +7,17 @@ service cloud.firestore {
       allow read: if true;
       // A farmer under a confirmed-violation suspension/ban may not create
       // new listings — see Moderation Queue (accountStatus on users/{uid}).
+      // Only an Approved farmer may create a listing at all — the Flutter
+      // app already keeps a Pending/Rejected farmer out of Add Product via
+      // routing (AuthRoutingService), but that's a client-side convenience,
+      // not a security boundary; this is what actually stops a direct API
+      // call from a farmer who never got approved (missing approvalStatus
+      // defaults to 'pending', same "not approved" convention used
+      // everywhere else in this app).
       allow create: if request.auth != null &&
         request.auth.uid == request.resource.data.farmerId &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('accountStatus', 'active') == 'active';
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('accountStatus', 'active') == 'active' &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('approvalStatus', 'pending') == 'approved';
       // The owning farmer can edit their own listing; an admin may also
       // update (never delete) a listing — this is what backs Moderation
       // Queue's Hide/Remove Listing actions (isSuspended toggle).

@@ -172,7 +172,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     final sellerId = d['sellerId']?.toString() ?? '';
     final totalRaw = d['total'];
     final total = totalRaw is num ? totalRaw : (num.tryParse('$totalRaw') ?? 0);
-    final status = (d['status'] ?? 'pending').toString();
+    final status = (d['status'] ?? 'pending').toString().toLowerCase();
     final method = d['deliveryMethod']?.toString() ?? '';
     final pricingType = (d['pricingType'] ?? 'retail').toString();
     final unit = d['unit']?.toString() ?? '';

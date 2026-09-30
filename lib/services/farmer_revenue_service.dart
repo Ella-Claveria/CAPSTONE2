@@ -43,6 +43,15 @@ class FarmerRevenueService {
     return null;
   }
 
+  // When an order actually became 'completed' — mirrors
+  // DashboardAnalyticsService._completionDate (completedAt, falling back
+  // to updatedAt, then createdAt) so this file's revenue/demand figures
+  // use the same preferred date as every other completed-order metric.
+  static DateTime? _completionDate(Map<String, dynamic> order) =>
+      _toDateTime(order['completedAt']) ??
+      _toDateTime(order['updatedAt']) ??
+      _toDateTime(order['createdAt']);
+
   static num totalRevenueForRange({
     required List<Map<String, dynamic>> orders,
     required FarmerRevenueView view,
@@ -63,7 +72,7 @@ class FarmerRevenueService {
       final status = (order['status'] ?? '').toString().toLowerCase();
       if (status != 'completed') continue;
 
-      final createdAt = _toDateTime(order['createdAt']);
+      final createdAt = _completionDate(order);
       if (createdAt == null) continue;
 
       if (!createdAt.isBefore(rangeStart) && !createdAt.isAfter(rangeEnd)) {
@@ -97,7 +106,7 @@ class FarmerRevenueService {
         for (final order in orders) {
           final status = (order['status'] ?? '').toString().toLowerCase();
           if (status != 'completed') continue;
-          final createdAt = _toDateTime(order['createdAt']);
+          final createdAt = _completionDate(order);
           if (createdAt == null) continue;
           final sameDay =
               createdAt.year == date.year &&
@@ -127,7 +136,7 @@ class FarmerRevenueService {
       for (final order in orders) {
         final status = (order['status'] ?? '').toString().toLowerCase();
         if (status != 'completed') continue;
-        final createdAt = _toDateTime(order['createdAt']);
+        final createdAt = _completionDate(order);
         if (createdAt == null) continue;
         final sameMonth =
             createdAt.year == monthDate.year &&
@@ -182,10 +191,13 @@ class FarmerRevenueService {
     return quantities.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
-  /// Top products by completed-order revenue, for one farmer's own orders
-  /// — powers the Market tab's "Best-Selling Products" card. Mirrors the
-  /// platform-wide single-product version on the admin dashboard, but
-  /// scoped to a farmer's [orders] and returning a ranked list.
+  /// TOP-SELLING PRODUCTS = products ranked by completed-order revenue,
+  /// quantity sold retained as a secondary value (see
+  /// dashboard_analytics_service.dart's canonical definitions). Powers the
+  /// Market tab's "Best-Selling Products" card for one farmer's own
+  /// [orders], and is reused as-is by
+  /// DashboardAnalyticsService.topSellingProducts for the platform-wide
+  /// admin version — one formula, two scopes.
   static List<({String name, num revenue, num quantity})> bestSellingProducts({
     required List<Map<String, dynamic>> orders,
     int limit = 3,
@@ -220,14 +232,27 @@ class FarmerRevenueService {
     required List<Map<String, dynamic>> orders,
     required DateTime now,
   }) {
-    // ---- 1. Current Market Average — scoped to the farmer's own
-    // most-listed commodity (by active listing count), never blended
-    // across different commodities/units (a per-kg vegetable and a
-    // per-head animal averaged together would be meaningless).
+    // ---- 1. Current Market Average — see
+    // dashboard_analytics_service.dart's canonical definition: the
+    // average ACTIVE listing price for one commodity (never the Admin
+    // Reference Price), scoped here to whichever commodity this pool of
+    // listings has the most of, never blended across different
+    // commodities/units (a per-kg vegetable and a per-head animal
+    // averaged together would be meaningless). "Active" matches
+    // market_price_helpers.dart's computeLiveAverage exactly — not
+    // archived, not suspended, in stock. Kept as its own loop (rather
+    // than calling computeLiveAverage directly) only because this
+    // function works with plain Maps, not Firestore
+    // QueryDocumentSnapshots.
     final activePricesByCommodity = <String, List<double>>{};
     for (final product in products) {
-      if (product['isArchived'] == true || product['quantity'] == null) continue;
-      final price = _asNum(product['price']).toDouble();
+      if (product['isArchived'] == true || product['isSuspended'] == true) continue;
+      final rawQuantity = product['quantity'];
+      final quantity = rawQuantity is num
+          ? rawQuantity.toDouble()
+          : num.tryParse(rawQuantity?.toString() ?? '')?.toDouble();
+      if (quantity == null || quantity <= 0) continue;
+      final price = _asNum(product['retailPrice'] ?? product['price']).toDouble();
       if (price <= 0) continue;
       final rawName = (product['commodity'] ?? product['name'] ?? '').toString().trim();
       if (rawName.isEmpty) continue;
@@ -251,7 +276,7 @@ class FarmerRevenueService {
 
     final completedOrders = orders.where((order) {
       final status = (order['status'] ?? '').toString().toLowerCase();
-      return status == 'completed' && _toDateTime(order['createdAt']) != null;
+      return status == 'completed' && _completionDate(order) != null;
     }).toList();
 
     // ---- 2. Top Product This Season — total quantity sold per product,
@@ -262,7 +287,7 @@ class FarmerRevenueService {
     final seasonRange = currentSeasonRange(now);
     final seasonalQuantities = <String, num>{};
     for (final order in completedOrders) {
-      final createdAt = _toDateTime(order['createdAt'])!;
+      final createdAt = _completionDate(order)!;
       if (createdAt.isBefore(seasonRange.start) || createdAt.isAfter(seasonRange.end)) {
         continue;
       }
@@ -279,7 +304,7 @@ class FarmerRevenueService {
     // activity is the only demand signal available.)
     final recentQuantities = <String, num>{};
     for (final order in completedOrders) {
-      final createdAt = _toDateTime(order['createdAt'])!;
+      final createdAt = _completionDate(order)!;
       if (now.difference(createdAt).inDays > _recentWindowDays) continue;
       final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
       if (name.isEmpty) continue;

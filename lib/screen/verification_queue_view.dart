@@ -7,6 +7,7 @@ import 'dart:convert'; // Decodes Base64-embedded verification document images
 import '../services/auth_service.dart';
 import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/dashboard_analytics_service.dart';
 import '../services/market_price_helpers.dart';
 import 'admin_dashboard_screen.dart' show AdminThemeScope;
 
@@ -59,7 +60,16 @@ class VerificationQueueView extends StatelessWidget {
                   return Center(child: Text('Error loading queue.', style: TextStyle(color: c.textSecondary)));
                 }
 
-                final docs = snapshot.data?.docs ?? [];
+                // "Pending" here means approvalStatus == 'pending' OR the
+                // field is missing entirely (a legacy farmer account from
+                // before this field existed) — the same "missing defaults
+                // to pending" convention used everywhere else in the app,
+                // so a legacy account is never invisible/stuck with no way
+                // for an admin to ever approve them.
+                final docs = (snapshot.data?.docs ?? []).where((d) {
+                  final status = d.data()['approvalStatus'];
+                  return status == null || status == 'pending';
+                }).toList();
 
                 if (docs.isEmpty) {
                   return Center(
@@ -331,6 +341,22 @@ Future<void> _setFarmerApproval(
   }
 
   final adminUid = FirebaseAuth.instance.currentUser?.uid;
+
+  // A Farmer must never be able to approve their own account. Firestore
+  // rules already make this practically unreachable (only an account with
+  // role == 'admin' can write approvalStatus at all, and a single account
+  // can't be both an admin and the farmer record it's acting on) — this is
+  // an explicit, defense-in-depth guard at the call site itself rather
+  // than relying on that alone.
+  if (adminUid != null && adminUid == uid) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You cannot approve or reject your own account.')),
+      );
+    }
+    return;
+  }
+
   final status = approved ? 'approved' : 'rejected';
 
   try {
@@ -338,8 +364,16 @@ Future<void> _setFarmerApproval(
       'approvalStatus': status,
       'reviewedAt': FieldValue.serverTimestamp(),
       'reviewedBy': adminUid,
+      // approvalStatus is the single source of truth for verification
+      // state — isVerified is a documented, intentionally-maintained
+      // mirror of it (see docs/firestore-schema-migration.md), and must
+      // never independently drift (a reject used to leave a farmer's
+      // previous isVerified untouched). Written symmetrically here so it
+      // stays accurate even though nothing currently reads it directly for
+      // access/ranking decisions (those now read approvalStatus itself —
+      // see buyer_explore_screen.dart / buyer_search_screen.dart).
+      'isVerified': approved,
     };
-    if (approved) userUpdate['isVerified'] = true;
     await FirebaseFirestore.instance.collection('users').doc(uid).update(userUpdate);
 
     final docUpdate = <String, dynamic>{
@@ -402,14 +436,13 @@ Future<_MarketplaceSummary> _loadMarketplaceSummary(String uid) async {
 
   final orders =
       await FirebaseFirestore.instance.collection('orders').where('sellerId', isEqualTo: uid).get();
-  var completedCount = 0;
-  num totalSales = 0;
-  for (final o in orders.docs) {
-    if ((o.data()['status'] ?? '').toString().toLowerCase() != 'completed') continue;
-    completedCount++;
-    final total = o.data()['total'];
-    totalSales += total is num ? total : num.tryParse(total?.toString() ?? '') ?? 0;
-  }
+  final completedCount = orders.docs
+      .where((o) => (o.data()['status'] ?? '').toString().toLowerCase() == 'completed')
+      .length;
+  // TOTAL TRANSACTION VALUE — same definition/formula as the platform-
+  // wide KPI tile (DashboardAnalyticsService.platformTransactionTotal),
+  // just scoped to this one farmer's own orders.
+  final totalSales = DashboardAnalyticsService.platformTransactionTotal(orders.docs);
 
   return _MarketplaceSummary(
     activeProducts: active,

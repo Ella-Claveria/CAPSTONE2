@@ -71,6 +71,72 @@ import 'farmer_revenue_service.dart';
 /// original logic rather than folded into one "clever" range-aware
 /// formula — safer than risking an off-by-one-day drift from unifying two
 /// slightly different reference points (now vs. a range boundary).
+///
+/// ================================================================
+/// CANONICAL METRIC DEFINITIONS — every number the app calls an
+/// "analytics" figure means exactly this, everywhere it's shown. A
+/// metric not on this list, or a screen showing one of these under a
+/// different formula, is a bug — fix the formula or the label, not both
+/// independently. Some of these live in other files (noted below) rather
+/// than here, since the underlying data (product listings, farmer-scoped
+/// revenue, price-trend statistics) is already owned elsewhere — but the
+/// DEFINITION is still centralized here.
+///
+/// - **TOTAL TRANSACTION VALUE** = sum of completed orders' `total`
+///   (`status == 'completed'`, any pricingType). See [platformTransactionTotal]
+///   — also reused as-is for a single farmer's own total (see
+///   farmer_list_view.dart / verification_queue_view.dart).
+/// - **SALES OVERVIEW** = revenue from completed orders within the
+///   selected period. Live dashboard + farmer Market tab:
+///   FarmerRevenueService.totalRevenueForRange/revenueBars. Export flow:
+///   [salesBarsForRange]. Deliberately two implementations (see class doc
+///   above) — both must independently satisfy this same definition.
+/// - **SALES BY CATEGORY** = completed-order revenue grouped by product
+///   category. See [categoryRevenue].
+/// - **TOP-SELLING PRODUCTS** = products ranked by completed-order
+///   revenue, quantity sold retained as a secondary value. See
+///   [topSellingProducts] (platform-wide) and
+///   FarmerRevenueService.bestSellingProducts (farmer-scoped — the
+///   function platform-wide delegates to).
+/// - **CURRENT MARKET AVERAGE** = average ACTIVE LISTING price for the
+///   same commodity, unit, and pricing type — never the Admin Reference
+///   Price (`market_prices.baselinePrice`). See
+///   market_price_helpers.dart's computeLiveAverage/
+///   computeWholesaleLiveAverage. The "Live Commodity Prices" card on
+///   this dashboard ([commodityPrices], below) intentionally shows the
+///   Admin Reference Price instead — a different, admin-set figure — and
+///   must never be captioned "Current Market Average".
+/// - **DEMAND HEATMAP** = buyer demand from completed purchases only, by
+///   the BUYER's own location (never the farmer's/seller's). See
+///   [demandByBuyerBarangay], [demandByBuyerAreaForMonth],
+///   [buyerDemandPoints], [buyerDemandPointsForMonth].
+/// - **SEARCH DEMAND** = buyer search-query activity (`searchEvents`),
+///   kept entirely separate from completed-purchase demand above — never
+///   blended into one number on this dashboard. See
+///   [topSearchQueriesForMonth].
+/// - **PRICE MOVEMENT** = historical COMPLETED-TRANSACTION prices
+///   (`orders.unitPrice`, not listing prices) for the same commodity,
+///   unit, and pricing type. See [weeklyAveragePrice] and
+///   market_trend_service.dart's commodityTrends.
+/// - **LOCAL SUPPLY TREND** = changes in active listings over time.
+///   AgriTrade+ keeps no historical snapshot of "how many listings were
+///   active on day X", so market_trend_service.dart's commodityTrends
+///   approximates this via the rate of NEW active listings created per
+///   week — an honest, documented proxy, not a literal active-count
+///   history. See that file's class doc for the full rationale.
+/// - **Retail / Wholesale breakdown**: [pricingTypeSummary] — a compact
+///   Orders/Revenue split by `pricingType`, not a duplicate dashboard.
+///   Legacy orders with no `pricingType` field default to Retail, never
+///   Wholesale, never excluded.
+///
+/// Every completed-order metric prefers [_completionDate] (`completedAt`,
+/// falling back to `updatedAt` then `createdAt`) over a bare `createdAt`
+/// read, and every one independently re-checks `status == 'completed'`
+/// rather than trusting the caller's Firestore query to have already
+/// filtered it — so a metric never silently counts a pending/confirmed/
+/// shipped/rejected order just because some future caller forgets to
+/// filter before calling it.
+/// ================================================================
 class DashboardAnalyticsService {
   const DashboardAnalyticsService._();
 
@@ -116,15 +182,29 @@ class DashboardAnalyticsService {
   // (orders, registrations, submissions) below.
   // ============================================================
 
+  // TOTAL USERS / farmer count = Buyers + APPROVED Farmers only — a
+  // pending or rejected application is never an active marketplace seller,
+  // regardless of how long ago they registered. approvalStatus is the
+  // single source-of-truth field for this everywhere in the app
+  // (verification queue, Farmer List, marketplace access, here) — never
+  // read isVerified for this purpose, it's a separate, narrower-scoped
+  // field (see verification_queue_view.dart's _setFarmerApproval).
   static int farmerCount(List<QueryDocumentSnapshot<Map<String, dynamic>>> users) =>
       users.where((d) => d.data()['role'] == 'farmer' && d.data()['approvalStatus'] == 'approved').length;
 
   static int buyerCount(List<QueryDocumentSnapshot<Map<String, dynamic>>> users) =>
       users.where((d) => d.data()['role'] == 'buyer').length;
 
-  static int pendingVerifications(List<QueryDocumentSnapshot<Map<String, dynamic>>> users) => users
-      .where((d) => d.data()['role'] == 'farmer' && d.data()['approvalStatus'] == 'pending')
-      .length;
+  // A missing approvalStatus (a legacy farmer account predating the field)
+  // counts as pending, not as silently excluded — same "missing defaults
+  // to pending" convention as AuthRoutingService/PendingApprovalScreen/
+  // getPendingFarmers, so this KPI never quietly undercounts legacy
+  // accounts that still need an admin decision.
+  static int pendingVerifications(List<QueryDocumentSnapshot<Map<String, dynamic>>> users) => users.where((d) {
+        if (d.data()['role'] != 'farmer') return false;
+        final status = d.data()['approvalStatus'];
+        return status == null || status == 'pending';
+      }).length;
 
   static ({int approved, int rejected, int pending}) verificationStatusCounts(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> users,
@@ -141,6 +221,7 @@ class DashboardAnalyticsService {
         case 'rejected':
           rejected++;
         case 'pending':
+        case null:
           pending++;
       }
     }
@@ -168,6 +249,11 @@ class DashboardAnalyticsService {
   // DATE-RANGE-AWARE ACTIVITY METRICS
   // ============================================================
 
+  // TOTAL TRANSACTION VALUE = sum of completed orders' `total`. Works for
+  // any order list passed in — the platform-wide KPI tile, the Export
+  // flow, and a single farmer's own "Total Sales" figure (see
+  // farmer_list_view.dart / verification_queue_view.dart) all call this
+  // same function rather than each re-summing independently.
   static num platformTransactionTotal(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> orders, {
     DateTimeRange? range,
@@ -176,13 +262,17 @@ class DashboardAnalyticsService {
     for (final doc in orders) {
       final data = doc.data();
       if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
-      if (!_inRange(_timestampToDate(data['createdAt']), range)) continue;
+      if (!_inRange(_completionDate(data), range)) continue;
       final raw = data['total'];
       total += raw is num ? raw : num.tryParse(raw?.toString() ?? '') ?? 0;
     }
     return total;
   }
 
+  // Compact Retail/Wholesale breakdown (Orders + Revenue) — see class doc.
+  // Not a second dashboard: this backs one small summary row alongside
+  // Total Transaction Value / Sales Overview, not a duplicate set of
+  // charts.
   static ({
     int retailOrders,
     int wholesaleOrders,
@@ -224,6 +314,9 @@ class DashboardAnalyticsService {
     );
   }
 
+  // SALES BY CATEGORY = completed-order revenue grouped by product
+  // category. Re-checks status itself (never just trusts the caller's
+  // Firestore query already filtered it) — see class doc.
   static Map<String, num> categoryRevenue(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> products, {
@@ -235,7 +328,8 @@ class DashboardAnalyticsService {
     final revenue = <String, num>{};
     for (final doc in orders) {
       final data = doc.data();
-      if (!_inRange(_timestampToDate(data['createdAt']), range)) continue;
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
+      if (!_inRange(_completionDate(data), range)) continue;
       var category = (data['category'] ?? '').toString().trim();
       if (category.isEmpty) {
         final productId = (data['productId'] ?? '').toString();
@@ -256,7 +350,7 @@ class DashboardAnalyticsService {
   }) {
     final filtered = range == null
         ? orders
-        : orders.where((d) => _inRange(_timestampToDate(d.data()['createdAt']), range));
+        : orders.where((d) => _inRange(_completionDate(d.data()), range));
     return FarmerRevenueService.bestSellingProducts(
       orders: filtered.map((d) => d.data()).toList(),
       limit: limit,
@@ -269,16 +363,28 @@ class DashboardAnalyticsService {
     return c.isNotEmpty && p.contains(c);
   }
 
-  /// Weekly average price, oldest-first. With no [range]: exactly today's
-  /// live-dashboard behavior — [weeks] windows counting back from [now].
-  /// With a [range]: buckets by week across the range instead.
+  /// PRICE MOVEMENT: weekly average of completed-order transaction prices
+  /// (`unitPrice`, not a listing price), oldest-first, for one commodity
+  /// AND one [pricingType] — never blending retail and wholesale prices
+  /// into the same weekly figure, since they aren't comparable numbers.
+  /// Legacy orders with no `pricingType` field are treated as Retail (see
+  /// class doc), matching every other pricingType read in the app. With
+  /// no [range]: exactly today's live-dashboard behavior — [weeks] windows
+  /// counting back from [now]. With a [range]: buckets by week across the
+  /// range instead.
   static List<double?> weeklyAveragePrice(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
     String commodityName, {
     required DateTime now,
     int weeks = 8,
     DateTimeRange? range,
+    String pricingType = 'retail',
   }) {
+    bool matchesPricingType(Map<String, dynamic> data) {
+      final type = (data['pricingType'] ?? 'retail').toString().toLowerCase();
+      return type == pricingType;
+    }
+
     if (range == null) {
       final buckets = List<List<double>>.generate(weeks, (_) => []);
       final windowStart = DateTime(now.year, now.month, now.day).subtract(Duration(days: 7 * weeks));
@@ -286,7 +392,8 @@ class DashboardAnalyticsService {
         final data = doc.data();
         final name = (data['productName'] ?? '').toString();
         if (!_orderMatchesCommodity(name, commodityName)) continue;
-        final date = _timestampToDate(data['createdAt']);
+        if (!matchesPricingType(data)) continue;
+        final date = _completionDate(data);
         if (date == null || date.isBefore(windowStart)) continue;
         final daysAgo = now.difference(date).inDays;
         final weekIndex = weeks - 1 - (daysAgo ~/ 7);
@@ -306,7 +413,8 @@ class DashboardAnalyticsService {
       final data = doc.data();
       final name = (data['productName'] ?? '').toString();
       if (!_orderMatchesCommodity(name, commodityName)) continue;
-      final date = _timestampToDate(data['createdAt']);
+      if (!matchesPricingType(data)) continue;
+      final date = _completionDate(data);
       if (date == null || date.isBefore(windowStart) || date.isAfter(windowEnd)) continue;
       final daysFromStart = date.difference(windowStart).inDays;
       final bucketIndex = (daysFromStart / 7).floor().clamp(0, bucketCount - 1);
@@ -349,7 +457,7 @@ class DashboardAnalyticsService {
     for (final doc in orders) {
       final data = doc.data();
       if (!allTime) {
-        final date = _timestampToDate(data['createdAt']);
+        final date = _completionDate(data);
         if (date == null || date.isBefore(windowStart!)) continue;
         if (windowEnd != null && date.isAfter(windowEnd)) continue;
       }
@@ -584,7 +692,7 @@ class DashboardAnalyticsService {
       for (final doc in orders) {
         final data = doc.data();
         if ((data['status'] ?? '').toString().toLowerCase() != 'completed') continue;
-        final date = _timestampToDate(data['createdAt']);
+        final date = _completionDate(data);
         if (date == null || !matches(date)) continue;
         final raw = data['total'];
         total += raw is num ? raw : num.tryParse(raw?.toString() ?? '') ?? 0;
