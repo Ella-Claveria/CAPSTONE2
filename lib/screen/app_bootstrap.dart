@@ -98,8 +98,8 @@ class _AppBootstrapState extends State<AppBootstrap> {
       // Notification permission itself is never requested here — this phase
       // runs on every single boot (every page load, before anyone is even
       // logged in on web), so asking here would re-prompt constantly. Mobile
-      // asks from the onboarding/app-router flow; the admin web portal asks
-      // once, right after a successful first login (see LoginFormFields).
+      // asks after a successful mobile login (see LoginFormFields). The
+      // admin web portal does not use this mobile push-permission flow.
       // Registers onMessage (foreground display), onMessageOpenedApp
       // (background tap), and captures getInitialMessage() (terminated-app
       // tap) — see PushNotificationService for why the terminated case is

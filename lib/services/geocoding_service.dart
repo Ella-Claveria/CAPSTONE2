@@ -3,13 +3,12 @@ import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 
-/// Turns a buyer's raw map pin (latitude/longitude — the location they
-/// entered at registration, see MyLocationField/register_screen.dart) into
-/// a human-readable barangay/municipality/province for the admin Demand
-/// Heatmap's "Highest Demand Areas" list. A buyer outside Laurel has no
-/// barangay picker, only a free map pin, so unlike a Laurel farmer or a
-/// legacy Laurel buyer there's no text field to read directly — this is
-/// what fills that in.
+/// Turns a buyer's raw GPS fix (latitude/longitude) into a human-readable
+/// barangay/municipality/province for the admin Demand Heatmap's "Highest
+/// Demand Areas" list. A buyer now sets this themselves when placing an
+/// order (see BuyerLocationField/buyer_location_picker.dart), which saves
+/// it immediately — this is only a backfill path for accounts that placed
+/// an order before that existed and only have a bare coordinate on file.
 ///
 /// Calls Google's Geocoding API with the same Maps key already embedded in
 /// web/index.html (no new key/secret introduced), and caches the result
@@ -25,6 +24,21 @@ import 'package:http/http.dart' as http;
 /// working). A disabled key, quota error, or any other failure here is
 /// non-fatal — DashboardAnalyticsService's coordinate-based fallback label
 /// stays in place until this succeeds on a later attempt.
+/// A reverse-geocode result, kept separate from barangay/municipality/
+/// province so a caller that only has partial address components (Google
+/// doesn't always return all three) can still show whatever it got.
+class ResolvedAddress {
+  final String? barangay;
+  final String? city;
+  final String? province;
+  const ResolvedAddress({this.barangay, this.city, this.province});
+
+  String get readable =>
+      [barangay, city, province].where((s) => s != null && s.isNotEmpty).join(', ');
+
+  bool get isEmpty => barangay == null && city == null && province == null;
+}
+
 class GeocodingService {
   GeocodingService._();
 
@@ -48,17 +62,41 @@ class GeocodingService {
 
   static Future<void> _resolve(String uid, double lat, double lng) async {
     try {
+      final addr = await reverseGeocode(lat, lng);
+      if (addr == null || addr.isEmpty) return;
+
+      await FirebaseFirestore.instance.collection('users').doc(uid).set({
+        if (addr.barangay != null) 'barangay': addr.barangay,
+        if (addr.city != null) 'municipality': addr.city,
+        if (addr.province != null) 'province': addr.province,
+        'locationResolvedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Best-effort enrichment only — see the class doc comment on the
+      // fallback this leaves in place.
+    }
+  }
+
+  /// Turns a GPS fix into a readable barangay/city/province — used
+  /// directly by the buyer location picker's "Use my current location"
+  /// mode (shown to the user before they confirm) as well as by
+  /// [_resolve]'s admin-triggered backfill above. Returns null on any
+  /// failure (network, disabled API, no results) rather than throwing —
+  /// callers decide how to surface that (e.g. "couldn't detect your
+  /// address, please pick it from the list instead").
+  static Future<ResolvedAddress?> reverseGeocode(double lat, double lng) async {
+    try {
       final uri = Uri.https('maps.googleapis.com', '/maps/api/geocode/json', {
         'latlng': '$lat,$lng',
         'key': _apiKey,
       });
       final res = await http.get(uri).timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return;
+      if (res.statusCode != 200) return null;
 
       final body = jsonDecode(res.body) as Map<String, dynamic>;
-      if (body['status'] != 'OK') return;
+      if (body['status'] != 'OK') return null;
       final results = body['results'] as List?;
-      if (results == null || results.isEmpty) return;
+      if (results == null || results.isEmpty) return null;
 
       String? barangay;
       String? municipality;
@@ -79,21 +117,43 @@ class GeocodingService {
         }
       }
 
-      if ((barangay == null || barangay.isEmpty) &&
-          (municipality == null || municipality.isEmpty) &&
-          (province == null || province.isEmpty)) {
-        return;
-      }
-
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({
-        if (barangay != null && barangay.isNotEmpty) 'barangay': barangay,
-        if (municipality != null && municipality.isNotEmpty) 'municipality': municipality,
-        if (province != null && province.isNotEmpty) 'province': province,
-        'locationResolvedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      final addr = ResolvedAddress(barangay: barangay, city: municipality, province: province);
+      return addr.isEmpty ? null : addr;
     } catch (_) {
-      // Best-effort enrichment only — see the class doc comment on the
-      // fallback this leaves in place.
+      return null;
+    }
+  }
+
+  /// The forward-geocode counterpart — turns a chosen Region/Province/
+  /// City/Barangay combination (no GPS fix) into an approximate
+  /// coordinate, via the same Google Geocoding API already used above.
+  /// This is the "reliable mapped coordinate source" the manual picker
+  /// uses instead of ever inventing a barangay/city center itself; a
+  /// failure here is non-fatal — the readable address is still saved,
+  /// just without a coordinate (see buyer_location_picker.dart).
+  static Future<({double lat, double lng})?> forwardGeocode(String address) async {
+    try {
+      final uri = Uri.https('maps.googleapis.com', '/maps/api/geocode/json', {
+        'address': address,
+        'region': 'ph',
+        'key': _apiKey,
+      });
+      final res = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return null;
+
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      if (body['status'] != 'OK') return null;
+      final results = body['results'] as List?;
+      if (results == null || results.isEmpty) return null;
+
+      final location =
+          (results.first as Map<String, dynamic>)['geometry']?['location'] as Map<String, dynamic>?;
+      final lat = (location?['lat'] as num?)?.toDouble();
+      final lng = (location?['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null) return null;
+      return (lat: lat, lng: lng);
+    } catch (_) {
+      return null;
     }
   }
 }

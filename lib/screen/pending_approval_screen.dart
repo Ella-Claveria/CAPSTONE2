@@ -26,9 +26,12 @@ import '../services/auth_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import 'farmer_home_screen.dart';
+import 'login_screen.dart';
 
 class PendingApprovalScreen extends StatefulWidget {
-  const PendingApprovalScreen({super.key});
+  final bool justVerified;
+
+  const PendingApprovalScreen({super.key, this.justVerified = false});
 
   @override
   State<PendingApprovalScreen> createState() => _PendingApprovalScreenState();
@@ -40,6 +43,9 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   // Possible values: 'pending', 'approved', 'rejected'
   String _status = 'pending';
   bool _loading = true;
+  bool _checkingStatus = false;
+  bool _returningToLogin = false;
+  bool _loginRedirectStarted = false;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
   // Firestore streams can re-emit the same value (e.g. a metadata-only
   // change), so this guards pushAndRemoveUntil from firing more than once.
@@ -60,25 +66,49 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
       setState(() => _loading = false);
       return;
     }
-    _sub = FirebaseFirestore.instance.collection('users').doc(uid).snapshots().listen((snap) {
-      if (!mounted) return;
-      final status = (snap.data()?['approvalStatus'] ?? 'pending').toString();
-      setState(() {
-        _status = status;
-        _loading = false;
-      });
-      _maybeEnterApp(status);
-    });
+    _sub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .listen(
+          (snap) {
+            if (!mounted) return;
+            final status = (snap.data()?['approvalStatus'] ?? 'pending')
+                .toString();
+            setState(() {
+              _status = status;
+              _loading = false;
+            });
+            _maybeEnterApp(status);
+          },
+          onError: (_) {
+            // Stay on whatever status was last known rather than leaving the
+            // spinner running forever — the manual "Check status" button
+            // still works independently of this listener.
+            if (!mounted) return;
+            setState(() => _loading = false);
+          },
+        );
   }
 
   void _maybeEnterApp(String status) {
     if (_navigated || status != 'approved') return;
     _navigated = true;
     _sub?.cancel();
+    if (widget.justVerified) {
+      _requireLoginToEnter();
+      return;
+    }
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const FarmerHomeScreen()),
       (route) => false,
+    );
+  }
+
+  Future<void> _requireLoginToEnter() async {
+    await _redirectToLogin(
+      'Your application is approved. Please log in to continue.',
     );
   }
 
@@ -93,16 +123,51 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   // Firestore status, independent of the live listener above.
   // ----------------------------------------------------------
   Future<void> _checkStatus() async {
-    setState(() => _loading = true);
+    if (_checkingStatus) return;
+    setState(() => _checkingStatus = true);
 
-    final status = await _authService.getFarmerApprovalStatus();
+    try {
+      final status = await _authService.getFarmerApprovalStatus();
+      if (!mounted) return;
+      setState(() => _status = status);
+      _maybeEnterApp(status);
+    } finally {
+      if (mounted) setState(() => _checkingStatus = false);
+    }
+  }
 
+  Future<void> _returnToLogin() async {
+    await _redirectToLogin();
+  }
+
+  Future<void> _redirectToLogin([String? message]) async {
+    if (_loginRedirectStarted) return;
+    _loginRedirectStarted = true;
+    if (mounted) setState(() => _returningToLogin = true);
+    _navigated = true;
+    try {
+      await _sub?.cancel().timeout(const Duration(seconds: 1));
+    } catch (_) {}
+
+    try {
+      await _authService.signOut().timeout(const Duration(seconds: 3));
+    } catch (_) {
+      try {
+        await FirebaseAuth.instance.signOut().timeout(
+          const Duration(seconds: 2),
+        );
+      } catch (_) {}
+    }
     if (!mounted) return;
-    setState(() {
-      _status = status;
-      _loading = false;
-    });
-    _maybeEnterApp(status);
+    Navigator.of(context, rootNavigator: true).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => LoginScreen(
+          role: 'farmer',
+          flashMessage: message,
+          disableBackNavigation: true,
+        ),
+      ),
+    );
   }
 
   @override
@@ -110,149 +175,195 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     final rejected = _status == 'rejected';
 
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.dark,
-          image: DecorationImage(
-            image: AssetImage('assets/images/onboarding_1_farming.png'),
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Container(
-                padding: const EdgeInsets.all(28),
-                decoration: AppTheme.authCard(),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // ---- Status icon ----
+      backgroundColor: AppTheme.bgLight,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Container(
+              padding: const EdgeInsets.all(28),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ---- Status icon ----
+                  Container(
+                    width: 84,
+                    height: 84,
+                    decoration: BoxDecoration(
+                      color: rejected
+                          ? Colors.red.withValues(alpha: 0.12)
+                          : AppTheme.accent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      rejected
+                          ? Icons.cancel_outlined
+                          : Icons.hourglass_top_rounded,
+                      size: 42,
+                      color: rejected ? Colors.red[700] : AppTheme.dark,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+
+                  const AgriTradeText(fontSize: 22),
+                  const SizedBox(height: 14),
+
+                  Text(
+                    rejected
+                        ? 'Application not approved'
+                        : 'Application under review',
+                    style: AppTheme.heading(20),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+
+                  Text(
+                    rejected
+                        ? 'The Department of Agriculture did not approve '
+                              'your application. Please contact their office '
+                              'for clarification.'
+                        : "You've submitted your farmer application, "
+                              'including your agricultural certificate. A '
+                              'Department of Agriculture officer now reviews '
+                              'it to confirm you\'re a genuine farmer before '
+                              'you can sell on AgriTrade+.',
+                    style: AppTheme.body(size: 13.5),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 18),
+
+                  if (!rejected) ...[
+                    // ---- Requirements checklist ----
                     Container(
-                      width: 84,
-                      height: 84,
+                      padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: rejected
-                            ? Colors.red.withValues(alpha: 0.12)
-                            : AppTheme.accent,
-                        shape: BoxShape.circle,
+                        color: AppTheme.accent.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(
-                        rejected
-                            ? Icons.cancel_outlined
-                            : Icons.hourglass_top_rounded,
-                        size: 42,
-                        color: rejected ? Colors.red[700] : AppTheme.dark,
+                      child: Column(
+                        children: const [
+                          _StepRow(label: 'Email verified', done: true),
+                          SizedBox(height: 10),
+                          _StepRow(label: 'Documents submitted', done: true),
+                          SizedBox(height: 10),
+                          _StepRow(label: 'Admin approval', done: false),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 14),
 
-                    const AgriTradeText(fontSize: 22),
+                    // ---- 24-hour notice ----
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.amber.shade300),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.schedule,
+                            color: Colors.amber.shade800,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Admin approval typically takes up to 24 hours. '
+                              "We'll notify you as soon as a decision is made.",
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.amber.shade900,
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                     const SizedBox(height: 14),
 
                     Text(
-                      rejected
-                          ? 'Application not approved'
-                          : 'Application under review',
-                      style: AppTheme.heading(20),
+                      'Your email is verified and your required documents are '
+                      'submitted. This application is waiting for admin review. '
+                      'We will email you when a decision is made.',
+                      style: AppTheme.body(size: 12.5),
                       textAlign: TextAlign.center,
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 20),
 
-                    Text(
-                      rejected
-                          ? 'Hindi naaprubahan ng Department of '
-                              'Agriculture ang iyong application. '
-                              'Maaari kang makipag-ugnayan sa kanilang '
-                              'opisina para sa paglilinaw.'
-                          : 'Naipasa na ang iyong farmer application. '
-                              'Sinusuri ito ng isang opisyal ng '
-                              'Department of Agriculture upang matiyak '
-                              'na tunay na magsasaka ang nagbebenta sa '
-                              'AgriTrade+.',
-                      style: AppTheme.body(size: 13.5),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 18),
-
-                    if (!rejected) ...[
-                      // ---- Simple 3-step progress ----
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: AppTheme.accent.withValues(alpha: 0.35),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Column(
-                          children: const [
-                            _StepRow(
-                              label: 'Account created',
-                              done: true,
-                            ),
-                            SizedBox(height: 10),
-                            _StepRow(
-                              label: 'Email verified',
-                              done: true,
-                            ),
-                            SizedBox(height: 10),
-                            _StepRow(
-                              label: 'Admin approval',
-                              done: false,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-
-                      Text(
-                        'Aabisuhan ka namin kapag naaprubahan na. '
-                        'Awtomatikong nag-che-check ang screen na ito.',
-                        style: AppTheme.body(size: 12.5),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 20),
-
-                      // ---- Manual refresh ----
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed:
-                              _loading ? null : () => _checkStatus(),
-                          style: AppTheme.primaryButton(),
-                          child: _loading
-                              ? const SizedBox(
-                                  height: 20,
-                                  width: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
+                    // ---- Manual refresh ----
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _loading || _checkingStatus
+                            ? null
+                            : _checkStatus,
+                        style: AppTheme.primaryButton(),
+                        child: _checkingStatus
+                            ? Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
                                   ),
-                                )
-                              : Text(
-                                  'I-check ang status',
-                                  style: AppTheme.buttonText(),
-                                ),
-                        ),
-                      ),
-                    ],
-
-                    const SizedBox(height: 12),
-
-                    TextButton(
-                      onPressed: () async {
-                        await _authService.signOut();
-                        if (!context.mounted) return;
-                        Navigator.of(context)
-                            .popUntil((route) => route.isFirst);
-                      },
-                      child: Text(
-                        'Mag-log out',
-                        style: AppTheme.body(size: 13),
+                                  const SizedBox(width: 10),
+                                  Text(
+                                    'Refreshing status',
+                                    style: AppTheme.buttonText(),
+                                  ),
+                                ],
+                              )
+                            : Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.refresh_rounded, size: 19),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Check status',
+                                    style: AppTheme.buttonText(),
+                                  ),
+                                ],
+                              ),
                       ),
                     ),
                   ],
-                ),
+
+                  const SizedBox(height: 12),
+
+                  TextButton(
+                    onPressed: _loginRedirectStarted ? null : _returnToLogin,
+                    child: _returningToLogin
+                        ? const SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text(
+                            'Back to login page',
+                            style: AppTheme.body(size: 13),
+                          ),
+                  ),
+                ],
               ),
             ),
           ),

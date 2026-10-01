@@ -99,7 +99,10 @@ class OrderService {
         final total = quote.subtotal;
 
         final orderRef = _orders.doc();
-        transaction.update(productRef, {'quantity': available - q});
+        transaction.update(productRef, {
+          'quantity': available - q,
+          'lastOrderId': orderRef.id,
+        });
         transaction.set(orderRef, {
           'sellerId': sellerId,
           'sellerName': sellerName,

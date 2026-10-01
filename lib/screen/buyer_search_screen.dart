@@ -9,7 +9,9 @@ import '../services/image_helper.dart';
 import '../services/market_price_helpers.dart';
 import '../services/product_service.dart';
 import '../services/product_visibility_service.dart';
+import '../widgets/retry_message.dart';
 import 'product_detail_screen.dart';
+import 'farmer_storefront_screen.dart';
 
 /// The dedicated Buyer Search experience — opened by tapping the (non-
 /// editable) search bar on Explore, never an inline field on the
@@ -63,6 +65,8 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   StreamSubscription? _trendingSub;
 
   List<String> _recentSearches = [];
+  bool _recentSearchesLoaded = false;
+  bool _recentSearchesError = false;
   StreamSubscription? _recentSub;
 
   Map<String, int> _completedOrderCountByProduct = {};
@@ -87,20 +91,23 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
         .limit(200)
         .snapshots()
         .listen((snap) {
-      if (!mounted) return;
-      final counts = <String, int>{};
-      for (final doc in snap.docs) {
-        // Normalize on read too, not just on write — legacy searchEvents
-        // docs (logged before this normalization existed) may still have
-        // mixed casing/spacing, and would otherwise fragment into separate
-        // "trending" entries for what's really the same search.
-        final query = _normalize((doc.data()['query'] ?? '').toString());
-        if (query.isEmpty) continue;
-        counts[query] = (counts[query] ?? 0) + 1;
-      }
-      final ranked = counts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-      setState(() => _trendingSearches = ranked.take(8).map((e) => e.key).toList());
-    });
+          if (!mounted) return;
+          final counts = <String, int>{};
+          for (final doc in snap.docs) {
+            // Normalize on read too, not just on write — legacy searchEvents
+            // docs (logged before this normalization existed) may still have
+            // mixed casing/spacing, and would otherwise fragment into separate
+            // "trending" entries for what's really the same search.
+            final query = _normalize((doc.data()['query'] ?? '').toString());
+            if (query.isEmpty) continue;
+            counts[query] = (counts[query] ?? 0) + 1;
+          }
+          final ranked = counts.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          setState(
+            () => _trendingSearches = ranked.take(8).map((e) => e.key).toList(),
+          );
+        });
 
     // RECENT SEARCHES = this logged-in buyer's own recent searches. No
     // orderBy paired with the equality filter (avoids needing a composite
@@ -112,57 +119,78 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           .where('userId', isEqualTo: uid)
           .limit(50)
           .snapshots()
-          .listen((snap) {
-        if (!mounted) return;
-        final docs = [...snap.docs]
-          ..sort((a, b) {
-            final at = a.data()['createdAt'] as Timestamp?;
-            final bt = b.data()['createdAt'] as Timestamp?;
-            return (bt?.millisecondsSinceEpoch ?? 0).compareTo(at?.millisecondsSinceEpoch ?? 0);
-          });
-        final seen = <String>{};
-        final recent = <String>[];
-        for (final doc in docs) {
-          final query = _normalize((doc.data()['query'] ?? '').toString());
-          if (query.isEmpty || seen.contains(query)) continue;
-          seen.add(query);
-          recent.add(query);
-          if (recent.length >= 8) break;
-        }
-        setState(() => _recentSearches = recent);
-      });
+          .listen(
+            (snap) {
+              if (!mounted) return;
+              final docs = [...snap.docs]
+                ..sort((a, b) {
+                  final at = a.data()['createdAt'] as Timestamp?;
+                  final bt = b.data()['createdAt'] as Timestamp?;
+                  return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
+                    at?.millisecondsSinceEpoch ?? 0,
+                  );
+                });
+              final seen = <String>{};
+              final recent = <String>[];
+              for (final doc in docs) {
+                final query = _normalize(
+                  (doc.data()['query'] ?? '').toString(),
+                );
+                if (query.isEmpty || seen.contains(query)) continue;
+                seen.add(query);
+                recent.add(query);
+                if (recent.length >= 8) break;
+              }
+              setState(() {
+                _recentSearches = recent;
+                _recentSearchesLoaded = true;
+                _recentSearchesError = false;
+              });
+            },
+            onError: (_) {
+              if (mounted)
+                setState(() {
+                  _recentSearchesLoaded = true;
+                  _recentSearchesError = true;
+                });
+            },
+          );
     }
 
     // Visibility-ranking inputs for Recommended Products / results, same
     // signals Explore's own grid ranks by (ProductVisibilityService).
-    _usersSub = FirebaseFirestore.instance.collection('users').snapshots().listen((snap) {
-      if (!mounted) return;
-      setState(() {
-        // Derived directly from approvalStatus — the single source of
-        // truth for verification state — rather than the separate
-        // isVerified field, which existed only as a mirror and could
-        // historically drift from it.
-        _verifiedByFarmerUid = {
-          for (final doc in snap.docs)
-            if ((doc.data()['role'] ?? '') == 'farmer') doc.id: doc.data()['approvalStatus'] == 'approved',
-        };
-      });
-    });
+    _usersSub = FirebaseFirestore.instance
+        .collection('publicProfiles')
+        .snapshots()
+        .listen((snap) {
+          if (!mounted) return;
+          setState(() {
+            // Derived directly from approvalStatus — the single source of
+            // truth for verification state — rather than the separate
+            // isVerified field, which existed only as a mirror and could
+            // historically drift from it.
+            _verifiedByFarmerUid = {
+              for (final doc in snap.docs)
+                if ((doc.data()['role'] ?? '') == 'farmer')
+                  doc.id: doc.data()['approvalStatus'] == 'approved',
+            };
+          });
+        });
 
     _completedOrdersSub = FirebaseFirestore.instance
         .collection('orders')
         .where('status', isEqualTo: 'completed')
         .snapshots()
         .listen((snap) {
-      if (!mounted) return;
-      final counts = <String, int>{};
-      for (final doc in snap.docs) {
-        final productId = (doc.data()['productId'] ?? '').toString();
-        if (productId.isEmpty) continue;
-        counts[productId] = (counts[productId] ?? 0) + 1;
-      }
-      setState(() => _completedOrderCountByProduct = counts);
-    });
+          if (!mounted) return;
+          final counts = <String, int>{};
+          for (final doc in snap.docs) {
+            final productId = (doc.data()['productId'] ?? '').toString();
+            if (productId.isEmpty) continue;
+            counts[productId] = (counts[productId] ?? 0) + 1;
+          }
+          setState(() => _completedOrderCountByProduct = counts);
+        });
   }
 
   @override
@@ -177,7 +205,8 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   }
 
   // lowercase, trim, collapse repeated internal whitespace.
-  static String _normalize(String raw) => raw.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  static String _normalize(String raw) =>
+      raw.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
   // Logs ONE meaningful search event — called only from _commitSearch
   // (submit, or picking a suggested/trending/recent term), never from
@@ -213,7 +242,9 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return;
     _controller.text = trimmed;
-    _controller.selection = TextSelection.fromPosition(TextPosition(offset: trimmed.length));
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: trimmed.length),
+    );
     setState(() {
       _activeQuery = trimmed;
       _activeCategory = null;
@@ -247,7 +278,10 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   List<String> get _suggestedSearches {
     if (_typed.trim().isEmpty) return const [];
     final q = _typed.trim().toLowerCase();
-    return kSupportedCommodities.where((c) => c.toLowerCase().contains(q)).take(8).toList();
+    return kSupportedCommodities
+        .where((c) => c.toLowerCase().contains(q))
+        .take(8)
+        .toList();
   }
 
   static IconData _categoryIcon(String category) {
@@ -280,7 +314,9 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
         child: Column(
           children: [
             _buildTopBar(),
-            Expanded(child: showingResults ? _buildResults() : _buildBrowsingState()),
+            Expanded(
+              child: showingResults ? _buildResults() : _buildBrowsingState(),
+            ),
           ],
         ),
       ),
@@ -302,7 +338,11 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2)),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
                 ],
               ),
               child: TextField(
@@ -316,12 +356,23 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                   filled: true,
                   fillColor: Colors.white,
                   contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-                  prefixIcon: Icon(Icons.search, color: Colors.grey[500], size: 20),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none,
+                  ),
+                  prefixIcon: Icon(
+                    Icons.search,
+                    color: Colors.grey[500],
+                    size: 20,
+                  ),
                   suffixIcon: _controller.text.isEmpty
                       ? null
                       : IconButton(
-                          icon: Icon(Icons.close, color: Colors.grey[500], size: 18),
+                          icon: Icon(
+                            Icons.close,
+                            color: Colors.grey[500],
+                            size: 18,
+                          ),
                           onPressed: _clearSearch,
                         ),
                   hintText: 'Search crops, livestock, or farmers...',
@@ -345,7 +396,14 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   }
 
   Widget _sectionHeading(String text) {
-    return Text(text, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.black87));
+    return Text(
+      text,
+      style: const TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.bold,
+        color: Colors.black87,
+      ),
+    );
   }
 
   Widget _chipRow(List<String> terms, {required IconData icon}) {
@@ -369,7 +427,13 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                 children: [
                   Icon(icon, size: 14, color: Colors.grey[500]),
                   const SizedBox(width: 6),
-                  Text(term, style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
+                  Text(
+                    term,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: Colors.black87,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -400,6 +464,17 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           const SizedBox(height: 10),
           _chipRow(_recentSearches, icon: Icons.history),
           const SizedBox(height: 22),
+        ],
+        if (_recentSearchesLoaded && _recentSearches.isEmpty) ...[
+          _sectionHeading('Recent Searches'),
+          const SizedBox(height: 6),
+          Text(
+            _recentSearchesError
+                ? 'Could not load recent searches.'
+                : 'No recent searches yet.',
+            style: TextStyle(color: Colors.grey[600], fontSize: 13),
+          ),
+          const SizedBox(height: 18),
         ],
         // Never "Popular Categories" — AgriTrade+'s category list is
         // whatever the Commodity Master List currently defines, not a
@@ -436,7 +511,11 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                           textAlign: TextAlign.center,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.black87),
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black87,
+                          ),
                         ),
                       ),
                     ],
@@ -467,7 +546,9 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
         if (scoreCompare != 0) return scoreCompare;
         final aCreated = a.data()['createdAt'] as Timestamp?;
         final bCreated = b.data()['createdAt'] as Timestamp?;
-        return (bCreated?.millisecondsSinceEpoch ?? 0).compareTo(aCreated?.millisecondsSinceEpoch ?? 0);
+        return (bCreated?.millisecondsSinceEpoch ?? 0).compareTo(
+          aCreated?.millisecondsSinceEpoch ?? 0,
+        );
       });
     return sorted;
   }
@@ -476,6 +557,13 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _productService.allProductsStream(),
       builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return RetryMessage(
+            message:
+                'Could not load recommended products. Check your connection and try again.',
+            onRetry: () => setState(() {}),
+          );
+        }
         if (!snapshot.hasData) {
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
@@ -483,12 +571,19 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           );
         }
         final docs = snapshot.data!.docs
-            .where((d) => d.data()['isArchived'] != true && d.data()['isSuspended'] != true)
+            .where(
+              (d) =>
+                  d.data()['isArchived'] != true &&
+                  d.data()['isSuspended'] != true,
+            )
             .toList();
         if (docs.isEmpty) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text('No products available yet.', style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+            child: Text(
+              'No products available yet.',
+              style: TextStyle(color: Colors.grey[600], fontSize: 13),
+            ),
           );
         }
         final top = _rankedByVisibility(docs).take(8).toList();
@@ -516,19 +611,29 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           return const Center(child: CircularProgressIndicator(color: _dark));
         }
         if (snapshot.hasError) {
-          return const Center(
-            child: Text('Something went wrong loading products.', style: TextStyle(color: Colors.black54)),
+          return RetryMessage(
+            message:
+                'Could not load products. Check your connection and try again.',
+            onRetry: () => setState(() {}),
           );
         }
         var docs = snapshot.data?.docs ?? [];
         docs = docs
-            .where((d) => d.data()['isArchived'] != true && d.data()['isSuspended'] != true)
+            .where(
+              (d) =>
+                  d.data()['isArchived'] != true &&
+                  d.data()['isSuspended'] != true,
+            )
             .toList();
 
         final category = _activeCategory;
         if (category != null) {
           docs = docs
-              .where((d) => (d.data()['category'] ?? '').toString().toLowerCase() == category.toLowerCase())
+              .where(
+                (d) =>
+                    (d.data()['category'] ?? '').toString().toLowerCase() ==
+                    category.toLowerCase(),
+              )
               .toList();
         }
 
@@ -544,45 +649,152 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
         }
 
         final ranked = _rankedByVisibility(docs);
+        final normalizedQuery = query?.trim().toLowerCase() ?? '';
 
-        if (ranked.isEmpty) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.search_off_rounded, size: 56, color: Colors.grey[350]),
-                  const SizedBox(height: 16),
-                  Text(
-                    query != null ? 'No results for "$query"' : 'No listings in $category',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.black87, fontSize: 16, fontWeight: FontWeight.w600),
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection('publicProfiles')
+              .snapshots(),
+          builder: (context, profileSnapshot) {
+            final farmerHits = normalizedQuery.isEmpty
+                ? <QueryDocumentSnapshot<Map<String, dynamic>>>[]
+                : (profileSnapshot.data?.docs ?? const []).where((profile) {
+                    final data = profile.data();
+                    if (data['role'] != 'farmer' ||
+                        data['approvalStatus'] != 'approved')
+                      return false;
+                    final name = (data['name'] ?? data['fullName'] ?? '')
+                        .toString()
+                        .toLowerCase();
+                    return name.contains(normalizedQuery);
+                  }).toList();
+
+            if (ranked.isEmpty &&
+                farmerHits.isEmpty &&
+                normalizedQuery.isNotEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.search_off_rounded,
+                        size: 56,
+                        color: Colors.grey[350],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No results for "$query"',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Try a different search or browse another category.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.black54, fontSize: 13.5),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Try a different search or browse another category.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black54, fontSize: 13.5),
+                ),
+              );
+            }
+
+            return ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                if (farmerHits.isNotEmpty) ...[
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      'Farmers',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  ...farmerHits.map(_buildFarmerCard),
+                  if (ranked.isNotEmpty) const SizedBox(height: 12),
+                ],
+                if (ranked.isNotEmpty) ...[
+                  if (farmerHits.isNotEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Products',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: ranked.length,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 12,
+                          childAspectRatio: 0.68,
+                        ),
+                    itemBuilder: (context, index) =>
+                        _buildProductCard(ranked[index]),
                   ),
                 ],
-              ),
-            ),
-          );
-        }
-
-        return GridView.builder(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          itemCount: ranked.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 0.68,
-          ),
-          itemBuilder: (context, index) => _buildProductCard(ranked[index]),
+              ],
+            );
+          },
         );
       },
+    );
+  }
+
+  Widget _buildFarmerCard(
+    QueryDocumentSnapshot<Map<String, dynamic>> farmerDoc,
+  ) {
+    final farmer = farmerDoc.data();
+    final name = (farmer['name'] ?? farmer['fullName'] ?? 'Farmer').toString();
+    final photoUrl = farmer['photoUrl']?.toString() ?? '';
+    final location =
+        [farmer['barangay'], farmer['municipality'], farmer['province']]
+            .where((part) => part != null && part.toString().trim().isNotEmpty)
+            .join(', ');
+    final rating = (farmer['rating'] as num?)?.toDouble();
+    final reviewCount = (farmer['reviewCount'] as num?)?.toInt() ?? 0;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        leading: CircleAvatar(
+          backgroundColor: const Color(0xFFDCEDC8),
+          backgroundImage: photoUrl.isNotEmpty ? NetworkImage(photoUrl) : null,
+          child: photoUrl.isEmpty
+              ? const Icon(Icons.person, color: _dark)
+              : null,
+        ),
+        title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text(
+          [
+            if (location.isNotEmpty) location else 'Verified farmer',
+            if (rating != null && reviewCount > 0)
+              '${rating.toStringAsFixed(1)} ★ · $reviewCount reviews',
+          ].join('  ·  '),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => FarmerStorefrontScreen(farmerId: farmerDoc.id),
+          ),
+        ),
+      ),
     );
   }
 
@@ -597,10 +809,14 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     final farmer = data['farmerName'] ?? 'Local Farmer';
     final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
     final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
-    final wholesaleEnabled = data['wholesaleEnabled'] == true ||
-        (data['wholesaleEnabled'] == null && wholesalePrice != null && wholesalePrice > 0);
+    final wholesaleEnabled =
+        data['wholesaleEnabled'] == true ||
+        (data['wholesaleEnabled'] == null &&
+            wholesalePrice != null &&
+            wholesalePrice > 0);
     final quantity = (data['quantity'] as num?) ?? 0;
-    final unit = (data['unit'] as String?) ?? unitForProductName(name.toString());
+    final unit =
+        (data['unit'] as String?) ?? unitForProductName(name.toString());
     final rating = (data['rating'] as num?)?.toDouble();
     final reviewCount = data['reviewCount'];
 
@@ -613,41 +829,80 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
       child: InkWell(
         onTap: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => ProductDetailScreen(productId: doc.id, data: data)),
+          MaterialPageRoute(
+            builder: (_) => ProductDetailScreen(productId: doc.id, data: data),
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(flex: 10, child: SizedBox(width: double.infinity, child: _buildProductImage(data))),
+            Expanded(
+              flex: 10,
+              child: SizedBox(
+                width: double.infinity,
+                child: _buildProductImage(data),
+              ),
+            ),
             Expanded(
               flex: 15,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(category.toString().toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey[500], letterSpacing: 0.5)),
+                    Text(
+                      category.toString().toUpperCase(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[500],
+                        letterSpacing: 0.5,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text(name,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 13.5, color: Colors.black87, height: 1.2)),
+                    Text(
+                      name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5,
+                        color: Colors.black87,
+                        height: 1.2,
+                      ),
+                    ),
                     const SizedBox(height: 2),
                     if (rating != null)
                       Row(
                         children: [
-                          const Icon(Icons.star_rounded, size: 14, color: Colors.amber),
+                          const Icon(
+                            Icons.star_rounded,
+                            size: 14,
+                            color: Colors.amber,
+                          ),
                           const SizedBox(width: 2),
-                          Text(rating.toStringAsFixed(1),
-                              style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.black87)),
+                          Text(
+                            rating.toStringAsFixed(1),
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
                           if (reviewCount != null) ...[
                             const SizedBox(width: 2),
-                            Text('($reviewCount)', style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+                            Text(
+                              '($reviewCount)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[500],
+                              ),
+                            ),
                           ],
                         ],
                       ),
@@ -659,19 +914,34 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: Alignment.centerLeft,
-                      child: Text(formatPriceWithUnit(price, unit),
-                          style: const TextStyle(color: _dark, fontWeight: FontWeight.bold, fontSize: 16)),
+                      child: Text(
+                        formatPriceWithUnit(price, unit),
+                        style: const TextStyle(
+                          color: _dark,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
                     ),
                     if (wholesaleEnabled) ...[
                       const SizedBox(height: 2),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFE8F5E9),
                           borderRadius: BorderRadius.circular(10),
                         ),
-                        child: const Text('Wholesale available',
-                            style: TextStyle(fontSize: 9.5, color: _dark, fontWeight: FontWeight.w600)),
+                        child: const Text(
+                          'Wholesale available',
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            color: _dark,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                     const SizedBox(height: 1),
@@ -693,10 +963,15 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                         ),
                         const SizedBox(width: 4),
                         Expanded(
-                          child: Text(farmer,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.grey[600], fontSize: 11)),
+                          child: Text(
+                            farmer,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 11,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -715,8 +990,8 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     final imageUrl = (data['imageUrl']?.toString().isNotEmpty == true)
         ? data['imageUrl']?.toString()
         : (data['imageUrls'] is List && (data['imageUrls'] as List).isNotEmpty)
-            ? (data['imageUrls'] as List).first?.toString()
-            : null;
+        ? (data['imageUrls'] as List).first?.toString()
+        : null;
 
     if (base64 != null && base64.isNotEmpty) {
       return Base64Image(
@@ -732,8 +1007,9 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
       return Image.network(
         imageUrl,
         fit: BoxFit.cover,
-        loadingBuilder: (context, child, progress) =>
-            progress == null ? child : const Center(child: CircularProgressIndicator(color: _dark)),
+        loadingBuilder: (context, child, progress) => progress == null
+            ? child
+            : const Center(child: CircularProgressIndicator(color: _dark)),
         errorBuilder: (context, error, stackTrace) => Container(
           color: const Color(0xFFDCEDC8),
           child: const Icon(Icons.broken_image, size: 48, color: _dark),

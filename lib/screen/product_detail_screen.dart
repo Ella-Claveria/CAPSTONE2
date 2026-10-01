@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../services/message_service.dart';
 import '../services/product_service.dart';
@@ -34,10 +37,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
   Uint8List? _imageBytes;
   String? _imageUrl;
+  late Map<String, dynamic> _currentData;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _productSub;
+  bool _productUnavailable = false;
+  bool _productLoadError = false;
 
   @override
   void initState() {
     super.initState();
+    _currentData = Map<String, dynamic>.from(widget.data);
+    _watchProduct();
     ProductService().logProductView(widget.productId);
 
     final b64 = widget.data['imageBase64']?.toString();
@@ -60,11 +69,117 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
   }
 
+  void _watchProduct() {
+    _productSub?.cancel();
+    _productSub = FirebaseFirestore.instance
+        .collection('products')
+        .doc(widget.productId)
+        .snapshots()
+        .listen(
+          (snapshot) {
+            if (!mounted) return;
+            final data = snapshot.data();
+            setState(() {
+              _productLoadError = false;
+              final available =
+                  snapshot.exists &&
+                  data != null &&
+                  data['isArchived'] != true &&
+                  data['isSuspended'] != true;
+              _productUnavailable = !available;
+              if (snapshot.exists &&
+                  data != null &&
+                  data['isArchived'] != true &&
+                  data['isSuspended'] != true) {
+                _currentData = Map<String, dynamic>.from(data);
+              }
+            });
+          },
+          onError: (_) {
+            if (mounted) setState(() => _productLoadError = true);
+          },
+        );
+  }
+
+  @override
+  void dispose() {
+    _productSub?.cancel();
+    super.dispose();
+  }
+
   String? _formatDate(dynamic ts) {
     if (ts is Timestamp) {
       return DateFormat('MMM d, y - h:mm a').format(ts.toDate());
     }
     return null;
+  }
+
+  Future<void> _reportReview(
+    String reviewId,
+    Map<String, dynamic> review,
+    String productName,
+  ) async {
+    final reporter = FirebaseAuth.instance.currentUser;
+    final sellerId = _currentData['farmerId']?.toString() ?? '';
+    final reviewedBuyerId = review['buyerId']?.toString() ?? '';
+    if (reporter == null || sellerId.isEmpty || reviewedBuyerId.isEmpty) return;
+
+    final controller = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Report this review?'),
+        content: TextField(
+          controller: controller,
+          minLines: 2,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            hintText: 'Tell us what is wrong with this review.',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Report'),
+          ),
+        ],
+      ),
+    );
+    final description = controller.text.trim();
+    controller.dispose();
+    if (confirmed != true || description.isEmpty || !mounted) return;
+
+    try {
+      await FirebaseFirestore.instance.collection('reports').add({
+        'issueType': 'Review Report',
+        'description': description,
+        'reporterId': reporter.uid,
+        'reporterName': reporter.displayName ?? 'User',
+        'reportedUserId': reviewedBuyerId,
+        'reportedUserName': (review['buyerName'] ?? 'Buyer').toString(),
+        'targetType': 'review',
+        'farmerId': sellerId,
+        'productId': widget.productId,
+        'productName': productName,
+        'reviewId': reviewId,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Review reported for admin review.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not report this review.')),
+      );
+    }
   }
 
   Widget _productImage() {
@@ -100,7 +215,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     if (farmerId == null || farmerId.isEmpty) return null;
     try {
       return await FirebaseFirestore.instance
-          .collection('users')
+          .collection('publicProfiles')
           .doc(farmerId)
           .get();
     } catch (_) {
@@ -108,34 +223,230 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
   }
 
+  Future<
+    ({
+      String area,
+      double? buyerLat,
+      double? buyerLng,
+      double? centerLat,
+      double? centerLng,
+    })
+  >
+  _loadApproximateFarmerLocation(String? farmerId) async {
+    if (farmerId == null || farmerId.isEmpty) {
+      return (
+        area: 'Farm area unavailable',
+        buyerLat: null,
+        buyerLng: null,
+        centerLat: null,
+        centerLng: null,
+      );
+    }
+    final buyerId = FirebaseAuth.instance.currentUser?.uid;
+    final farmerSnapshot = await FirebaseFirestore.instance
+        .collection('publicProfiles')
+        .doc(farmerId)
+        .get();
+    final farmer = farmerSnapshot.data() ?? const <String, dynamic>{};
+    final barangay = (farmer['barangay'] ?? '').toString();
+    final area = [barangay, farmer['municipality'], farmer['province']]
+        .where((part) => part != null && part.toString().trim().isNotEmpty)
+        .join(', ');
+
+    DocumentSnapshot<Map<String, dynamic>>? buyerGeo;
+    if (buyerId != null && buyerId.isNotEmpty) {
+      buyerGeo = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(buyerId)
+          .collection('private')
+          .doc('geo')
+          .get();
+    }
+    DocumentSnapshot<Map<String, dynamic>>? cluster;
+    if (barangay.isNotEmpty) {
+      cluster = await FirebaseFirestore.instance
+          .collection('barangayClusters')
+          .doc(barangay)
+          .get();
+    }
+
+    final buyerData = buyerGeo?.data() ?? const <String, dynamic>{};
+    final centerData = cluster?.data() ?? const <String, dynamic>{};
+    return (
+      area: area.isEmpty ? 'Farm area unavailable' : area,
+      buyerLat: (buyerData['latitude'] as num?)?.toDouble(),
+      buyerLng: (buyerData['longitude'] as num?)?.toDouble(),
+      centerLat: (centerData['lat'] as num?)?.toDouble(),
+      centerLng: (centerData['lng'] as num?)?.toDouble(),
+    );
+  }
+
+  Widget _approximateFarmerMap(String? farmerId) {
+    return FutureBuilder<
+      ({
+        String area,
+        double? buyerLat,
+        double? buyerLng,
+        double? centerLat,
+        double? centerLng,
+      })
+    >(
+      future: _loadApproximateFarmerLocation(farmerId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator(color: _dark)),
+          );
+        }
+        if (snapshot.hasError || !snapshot.hasData) {
+          return const Text('Approximate farm area is unavailable.');
+        }
+        final location = snapshot.data!;
+        final hasBuyer = location.buyerLat != null && location.buyerLng != null;
+        final hasCenter =
+            location.centerLat != null && location.centerLng != null;
+        final distanceKm = hasBuyer && hasCenter
+            ? Geolocator.distanceBetween(
+                    location.buyerLat!,
+                    location.buyerLng!,
+                    location.centerLat!,
+                    location.centerLng!,
+                  ) /
+                  1000
+            : null;
+
+        if (!hasCenter) {
+          return Text(
+            'Farm area: ${location.area}\nApproximate map is unavailable.',
+          );
+        }
+        final center = LatLng(location.centerLat!, location.centerLng!);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Farm area: ${location.area}',
+              style: TextStyle(color: Colors.grey[700], fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 190,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: GoogleMap(
+                  initialCameraPosition: CameraPosition(
+                    target: center,
+                    zoom: 12,
+                  ),
+                  zoomControlsEnabled: false,
+                  myLocationButtonEnabled: false,
+                  markers: {
+                    Marker(
+                      markerId: const MarkerId('farmer_area'),
+                      position: center,
+                      infoWindow: const InfoWindow(
+                        title: 'Approximate farm area',
+                      ),
+                    ),
+                    if (hasBuyer)
+                      Marker(
+                        markerId: const MarkerId('buyer'),
+                        position: LatLng(
+                          location.buyerLat!,
+                          location.buyerLng!,
+                        ),
+                        infoWindow: const InfoWindow(
+                          title: 'Your saved location',
+                        ),
+                      ),
+                  },
+                  circles: {
+                    Circle(
+                      circleId: const CircleId('approximate_farmer_area'),
+                      center: center,
+                      radius: 450,
+                      fillColor: _dark.withValues(alpha: 0.12),
+                      strokeColor: _dark.withValues(alpha: 0.6),
+                      strokeWidth: 1,
+                    ),
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              distanceKm == null
+                  ? 'Distance unavailable. Add a saved location to see an estimate.'
+                  : 'About ${distanceKm.toStringAsFixed(1)} km away (approximate)',
+              style: TextStyle(color: Colors.grey[700], fontSize: 12),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _refreshData() async {
-    await Future.delayed(const Duration(milliseconds: 700));
+    _watchProduct();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
-    setState(() {});
+    setState(() => _productLoadError = false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final data = widget.data;
+    final data = _currentData;
     final name = data['name']?.toString() ?? 'Unnamed';
     final category = data['category']?.toString() ?? '';
     final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
     final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
     final wholesaleMinimum = (data['wholesaleMinimumQuantity'] as num?) ?? 1;
-    final wholesaleEnabled = data['wholesaleEnabled'] == true ||
-        (data['wholesaleEnabled'] == null && wholesalePrice != null && wholesalePrice > 0);
+    final wholesaleEnabled =
+        data['wholesaleEnabled'] == true ||
+        (data['wholesaleEnabled'] == null &&
+            wholesalePrice != null &&
+            wholesalePrice > 0);
     final available = (data['quantity'] as num?) ?? 0;
     final unit = (data['unit'] as String?) ?? unitForProductName(name);
     final description = data['description']?.toString() ?? '';
     final farmerName = data['farmerName']?.toString() ?? 'Farmer';
     final farmerId = data['farmerId']?.toString();
-    final location = data['location']?.toString() ?? 'Location unavailable';
     final delivery = data['deliveryAvailable'] == true;
     final pickup = data['pickupOnly'] == true;
     final rating = (data['rating'] as num?)?.toDouble();
     final reviewCount = (data['reviewCount'] as num?)?.toInt();
     final postedOn = _formatDate(data['createdAt']);
     final updatedOn = _formatDate(data['updatedAt']);
+
+    if (_productLoadError || _productUnavailable) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Product Details')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _productLoadError
+                      ? 'Could not load this product. Check your connection and try again.'
+                      : 'This listing is no longer available.',
+                  textAlign: TextAlign.center,
+                ),
+                if (_productLoadError) ...[
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _refreshData,
+                    child: const Text('Retry'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: _bg,
@@ -223,8 +534,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                       ],
                     ),
                     const SizedBox(height: 10),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.end,
+                      spacing: 12,
+                      runSpacing: 4,
                       children: [
                         Text(
                           formatPeso(price),
@@ -234,7 +547,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                             color: _dark,
                           ),
                         ),
-                        const SizedBox(width: 12),
                         Text(
                           'per $unit',
                           style: TextStyle(
@@ -244,7 +556,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         ),
                       ],
                     ),
-                    if (wholesaleEnabled && wholesalePrice != null && wholesalePrice > 0) ...[
+                    if (wholesaleEnabled &&
+                        wholesalePrice != null &&
+                        wholesalePrice > 0) ...[
                       const SizedBox(height: 12),
                       Container(
                         width: double.infinity,
@@ -259,19 +573,29 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                           children: [
                             const Text(
                               'Wholesale available',
-                              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _dark),
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: _dark,
+                              ),
                             ),
                             const SizedBox(height: 4),
                             Text(
                               '${formatPriceWithUnit(wholesalePrice, unit)} for orders of '
                               '${formatStock(wholesaleMinimum, unit)} or more',
-                              style: TextStyle(fontSize: 12.5, color: Colors.grey[700]),
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                color: Colors.grey[700],
+                              ),
                             ),
                             if (available < wholesaleMinimum) ...[
                               const SizedBox(height: 4),
                               Text(
                                 'Wholesale is temporarily unavailable because current stock is below the minimum.',
-                                style: TextStyle(fontSize: 11.5, color: Colors.orange[800]),
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: Colors.orange[800],
+                                ),
                               ),
                             ],
                           ],
@@ -392,7 +716,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  location,
+                                  'Farmer',
                                   style: TextStyle(
                                     color: Colors.grey[700],
                                     fontSize: 13,
@@ -429,6 +753,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         ],
                       ),
                     ),
+                    const SizedBox(height: 10),
+                    _approximateFarmerMap(farmerId),
                     const SizedBox(height: 16),
                     const Divider(),
                     const SizedBox(height: 16),
@@ -437,12 +763,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         Expanded(
                           child: infoRow(
                             Icons.inventory_2,
-                            available > 0 ? '${formatStock(available, unit)} available' : 'Out of stock',
+                            available > 0
+                                ? '${formatStock(available, unit)} available'
+                                : 'Out of stock',
                           ),
                         ),
                         if (available <= 0)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: Colors.red[50],
                               borderRadius: BorderRadius.circular(20),
@@ -576,6 +907,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                                       >
                                     >[],
                               )
+                              ..removeWhere(
+                                (doc) =>
+                                    doc.data()['moderationStatus'] == 'removed',
+                              )
                               ..sort((a, b) {
                                 final at = a.data()['createdAt'] as Timestamp?;
                                 final bt = b.data()['createdAt'] as Timestamp?;
@@ -599,10 +934,12 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                             final review = doc.data();
                             final reviewer =
                                 review['buyerName']?.toString() ?? 'Buyer';
+                            final reviewerId =
+                                review['buyerId']?.toString() ?? '';
                             final reviewText =
                                 review['comment']?.toString() ?? '';
                             final reviewRating =
-                                (review['rating'] as num?)?.toInt() ?? 0;
+                                (review['rating'] as num?)?.toDouble() ?? 0;
                             final reviewImage =
                                 review['imageUrl']?.toString() ?? '';
                             return Padding(
@@ -612,11 +949,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                                 children: [
                                   Row(
                                     children: [
-                                      Text(
-                                        reviewer,
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
+                                      Expanded(
+                                        child: Text(
+                                          reviewer,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
                                         ),
                                       ),
                                       const SizedBox(width: 8),
@@ -624,16 +965,41 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                                         children: List.generate(
                                           5,
                                           (index) => Icon(
-                                            index < reviewRating
+                                            reviewRating >= index + 1
                                                 ? Icons.star_rounded
+                                                : reviewRating >= index + 0.5
+                                                ? Icons.star_half_rounded
                                                 : Icons.star_border_rounded,
                                             size: 14,
-                                            color: index < reviewRating
+                                            color: reviewRating >= index + 0.5
                                                 ? Colors.amber
                                                 : Colors.grey[400],
                                           ),
                                         ),
                                       ),
+                                      if (FirebaseAuth
+                                                  .instance
+                                                  .currentUser
+                                                  ?.uid !=
+                                              reviewerId &&
+                                          FirebaseAuth
+                                                  .instance
+                                                  .currentUser
+                                                  ?.uid !=
+                                              farmerId)
+                                        IconButton(
+                                          tooltip: 'Report review',
+                                          visualDensity: VisualDensity.compact,
+                                          onPressed: () => _reportReview(
+                                            doc.id,
+                                            review,
+                                            name,
+                                          ),
+                                          icon: const Icon(
+                                            Icons.flag_outlined,
+                                            size: 18,
+                                          ),
+                                        ),
                                     ],
                                   ),
                                   const SizedBox(height: 8),
@@ -666,6 +1032,26 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                                         ),
                                       ),
                                     ),
+                                    if (FirebaseAuth
+                                                .instance
+                                                .currentUser
+                                                ?.uid !=
+                                            reviewerId &&
+                                        FirebaseAuth
+                                                .instance
+                                                .currentUser
+                                                ?.uid !=
+                                            farmerId)
+                                      IconButton(
+                                        tooltip: 'Report review',
+                                        visualDensity: VisualDensity.compact,
+                                        onPressed: () =>
+                                            _reportReview(doc.id, review, name),
+                                        icon: const Icon(
+                                          Icons.flag_outlined,
+                                          size: 18,
+                                        ),
+                                      ),
                                   ],
                                 ],
                               ),
@@ -703,21 +1089,21 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   available <= 0 || farmerId == null || farmerId.isEmpty
                       ? null
                       : () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => PlaceOrderScreen(
-                                sellerId: farmerId,
-                                sellerName: farmerName,
-                                productId: widget.productId,
-                                productName: name,
-                                productPrice: formatPriceWithUnit(price, unit),
-                                productImage: _imageUrl ?? '',
-                                deliveryAvailable: delivery,
-                                pickupAvailable: pickup,
-                                unit: unit,
-                              ),
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => PlaceOrderScreen(
+                              sellerId: farmerId,
+                              sellerName: farmerName,
+                              productId: widget.productId,
+                              productName: name,
+                              productPrice: formatPriceWithUnit(price, unit),
+                              productImage: _imageUrl ?? '',
+                              deliveryAvailable: delivery,
+                              pickupAvailable: pickup,
+                              unit: unit,
                             ),
                           ),
+                        ),
                 ),
               ),
               const SizedBox(width: 10),
@@ -733,7 +1119,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     color: _accent,
                     borderRadius: BorderRadius.circular(18),
                   ),
-                  child: const Icon(Icons.message_outlined, color: _dark, size: 22),
+                  child: const Icon(
+                    Icons.message_outlined,
+                    color: _dark,
+                    size: 22,
+                  ),
                 ),
               ),
               const SizedBox(width: 10),
@@ -791,13 +1181,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         productId: widget.productId,
         productName: productName,
         productImageUrl: _imageUrl ?? '',
-        retailPrice: (widget.data['retailPrice'] as num?) ?? (widget.data['price'] as num?) ?? 0,
+        retailPrice:
+            (widget.data['retailPrice'] as num?) ??
+            (widget.data['price'] as num?) ??
+            0,
         wholesalePrice: widget.data['wholesalePrice'] as num?,
         wholesaleMinimumQuantity:
             (widget.data['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1,
         retailMaximumQuantity:
             (widget.data['retailMaximumQuantity'] as num?)?.toInt() ?? 1,
-        unit: (widget.data['unit'] as String?) ?? unitForProductName(productName),
+        unit:
+            (widget.data['unit'] as String?) ?? unitForProductName(productName),
         deliveryAvailable: widget.data['deliveryAvailable'] == true,
         pickupOnly: widget.data['pickupOnly'] == true,
       );
@@ -817,13 +1211,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           farmerName: farmerName,
           productName: productName,
           productPrice: formatPriceWithUnit(
-            (widget.data['retailPrice'] as num?) ?? (widget.data['price'] as num?) ?? 0,
+            (widget.data['retailPrice'] as num?) ??
+                (widget.data['price'] as num?) ??
+                0,
             (widget.data['unit'] as String?) ?? unitForProductName(productName),
           ),
           productImage: _imageUrl ?? '',
           deliveryAvailable: widget.data['deliveryAvailable'] == true,
           pickupAvailable: widget.data['pickupOnly'] == true,
-          unit: (widget.data['unit'] as String?) ?? unitForProductName(productName),
+          unit:
+              (widget.data['unit'] as String?) ??
+              unitForProductName(productName),
         ),
       ),
     );

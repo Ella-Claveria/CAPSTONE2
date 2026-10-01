@@ -172,10 +172,13 @@ class AppTheme {
     required IconData icon,
     Widget? suffix,
     String? errorText,
+    String? prefixText,
   }) {
     return InputDecoration(
       hintText: hint,
       prefixIcon: Icon(icon, color: Colors.grey),
+      prefixText: prefixText,
+      prefixStyle: const TextStyle(color: dark, fontWeight: FontWeight.w600, fontSize: 15),
       suffixIcon: suffix,
       filled: true,
       fillColor: fieldFill,

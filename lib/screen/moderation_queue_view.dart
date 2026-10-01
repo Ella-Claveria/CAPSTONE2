@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/dashboard_data_service.dart';
 import '../services/market_price_helpers.dart';
 import 'admin_dashboard_screen.dart'
     show
@@ -38,8 +39,9 @@ String? _firstNonEmpty(List<dynamic> candidates) {
 
 String _shortId(String id) => id.length > 8 ? id.substring(0, 8) : id;
 
-String _capitalize(String s) =>
-    s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1).replaceAll('_', ' ')}';
+String _capitalize(String s) => s.isEmpty
+    ? s
+    : '${s[0].toUpperCase()}${s.substring(1).replaceAll('_', ' ')}';
 
 /// Maps a moderation decision (report['moderationAction'] values) to its
 /// Audit Log action — every real decision except 'dismissed', which isn't
@@ -67,7 +69,9 @@ String _formatDate(Timestamp? t) =>
 Future<bool> _ensureOnline(BuildContext context) async {
   if (await ConnectivityService.instance.checkNow()) return true;
   if (context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
   }
   return false;
 }
@@ -77,7 +81,12 @@ Widget _sectionLabel(String label) {
     padding: const EdgeInsets.only(bottom: 6, top: 4),
     child: Text(
       label,
-      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.grey[600], letterSpacing: 0.4),
+      style: TextStyle(
+        fontWeight: FontWeight.bold,
+        fontSize: 12.5,
+        color: Colors.grey[600],
+        letterSpacing: 0.4,
+      ),
     ),
   );
 }
@@ -90,7 +99,13 @@ Widget _detailRow(String label, String value) {
       children: [
         SizedBox(
           width: 160,
-          child: Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700])),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+            ),
+          ),
         ),
         Expanded(child: Text(value)),
       ],
@@ -132,17 +147,23 @@ class _ReportRow {
     required this.farmerAccountStatus,
   });
 
-  bool get hasProduct => (data['productId']?.toString().trim().isNotEmpty ?? false);
-  String get targetType => (data['targetType'] ?? (hasProduct ? 'listing' : 'farmer')).toString();
-  String get targetLabel => hasProduct ? (data['productName'] ?? 'Listing').toString() : farmerName;
-  String get reason => (data['issueType'] ?? data['reason'] ?? 'General Report').toString();
+  bool get hasProduct =>
+      (data['productId']?.toString().trim().isNotEmpty ?? false);
+  String get targetType =>
+      (data['targetType'] ?? (hasProduct ? 'listing' : 'farmer')).toString();
+  String get targetLabel =>
+      hasProduct ? (data['productName'] ?? 'Listing').toString() : farmerName;
+  String get reason =>
+      (data['issueType'] ?? data['reason'] ?? 'General Report').toString();
   String get description => (data['description'] ?? '').toString();
-  String get reporterName => (data['reporterName'] ?? 'Unknown user').toString();
+  String get reporterName =>
+      (data['reporterName'] ?? 'Unknown user').toString();
   String get rawStatus => (data['status'] ?? 'pending').toString();
   // 'dismissed' is the legacy value the old admin stub wrote — treated as a
   // resolved outcome for tab/bucket purposes, never rewritten.
   String get bucketStatus => rawStatus == 'dismissed' ? 'resolved' : rawStatus;
-  String? get moderationAction => (data['moderationAction'] ?? data['action'])?.toString();
+  String? get moderationAction =>
+      (data['moderationAction'] ?? data['action'])?.toString();
   bool get violationConfirmed => data['violationConfirmed'] == true;
   Timestamp? get createdAt => data['createdAt'] as Timestamp?;
 }
@@ -211,29 +232,46 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
     final c = AdminThemeScope.of(context).palette;
 
     return Padding(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(28.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Moderation Queue',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: c.textPrimary)),
-          Text('Review reports against Farmer listings and accounts before any action is taken.',
-              style: TextStyle(color: c.textSecondary)),
+          Text(
+            'Moderation Queue',
+            style: TextStyle(
+              fontSize: 30,
+              height: 1.15,
+              letterSpacing: -0.6,
+              fontWeight: FontWeight.w800,
+              color: c.textPrimary,
+            ),
+          ),
+          Text(
+            'Review reports against farmer listings, accounts, and buyer reviews before taking action.',
+            style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5),
+          ),
           const SizedBox(height: 20),
 
           // Two live streams — every report, every user — combined and
           // aggregated client-side, same real-time pattern used across the
           // rest of this dashboard (Verified Farmers/Farmer List, Analytics).
+          // Both are DashboardDataService's shared, app-session-lifetime
+          // Stream instances (see its class doc) rather than opened fresh
+          // here — previously these were created inline in build(), so every
+          // setState from the tab/search/filter controls below tore down and
+          // resubscribed both live listeners on every keystroke.
           Expanded(
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance.collection('reports').snapshots(),
+              stream: DashboardDataService.instance.allReportsStream,
               builder: (context, reportsSnap) {
                 return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance.collection('users').snapshots(),
+                  stream: DashboardDataService.instance.usersStream,
                   builder: (context, usersSnap) {
                     final snapshots = [reportsSnap, usersSnap];
-                    if (snapshots.any((s) => s.hasError)) return const AdminStreamError();
-                    if (snapshots.any((s) => !s.hasData)) return const AdminLoadingSpinner();
+                    if (snapshots.any((s) => s.hasError))
+                      return const AdminStreamError();
+                    if (snapshots.any((s) => !s.hasData))
+                      return const AdminLoadingSpinner();
 
                     final usersByUid = <String, Map<String, dynamic>>{
                       for (final d in usersSnap.data!.docs) d.id: d.data(),
@@ -241,18 +279,24 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
 
                     final allRows = reportsSnap.data!.docs.map((doc) {
                       final data = doc.data();
-                      final farmerId = (data['farmerId'] ?? data['reportedUserId'] ?? '').toString();
+                      final farmerId =
+                          (data['farmerId'] ?? data['reportedUserId'] ?? '')
+                              .toString();
                       final farmerUser = usersByUid[farmerId];
-                      final farmerName = _firstNonEmpty([
+                      final farmerName =
+                          _firstNonEmpty([
                             farmerUser?['fullName'],
                             farmerUser?['name'],
                             data['reportedUserName'],
                             data['sellerName'],
                           ]) ??
                           'Unknown Farmer';
-                      final farmerBarangay = _firstNonEmpty([farmerUser?['barangay']]) ?? '—';
-                      final farmerApprovalStatus = (farmerUser?['approvalStatus'] ?? '—').toString();
-                      final farmerAccountStatus = (farmerUser?['accountStatus'] ?? 'active').toString();
+                      final farmerBarangay =
+                          _firstNonEmpty([farmerUser?['barangay']]) ?? '—';
+                      final farmerApprovalStatus =
+                          (farmerUser?['approvalStatus'] ?? '—').toString();
+                      final farmerAccountStatus =
+                          (farmerUser?['accountStatus'] ?? 'active').toString();
                       return _ReportRow(
                         id: doc.id,
                         data: data,
@@ -264,106 +308,138 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                       );
                     }).toList();
 
-                    final pendingCount = allRows.where((r) => r.bucketStatus == 'pending').length;
-                    final underReviewCount = allRows.where((r) => r.bucketStatus == 'under_review').length;
-                    final resolvedCount = allRows.where((r) => r.bucketStatus == 'resolved').length;
-                    final violationsCount = allRows.where((r) => r.violationConfirmed).length;
+                    final pendingCount = allRows
+                        .where((r) => r.bucketStatus == 'pending')
+                        .length;
+                    final underReviewCount = allRows
+                        .where((r) => r.bucketStatus == 'under_review')
+                        .length;
+                    final resolvedCount = allRows
+                        .where((r) => r.bucketStatus == 'resolved')
+                        .length;
+                    final violationsCount = allRows
+                        .where((r) => r.violationConfirmed)
+                        .length;
 
-                    final reasonOptions = {'All', ...allRows.map((r) => r.reason)}.toList()..sort();
+                    final reasonOptions = {
+                      'All',
+                      ...allRows.map((r) => r.reason),
+                    }.toList()..sort();
 
                     List<_ReportRow> bucketRows;
                     switch (_tab) {
                       case _ModTab.pending:
-                        bucketRows = allRows.where((r) => r.bucketStatus == 'pending').toList();
+                        bucketRows = allRows
+                            .where((r) => r.bucketStatus == 'pending')
+                            .toList();
                         break;
                       case _ModTab.underReview:
-                        bucketRows = allRows.where((r) => r.bucketStatus == 'under_review').toList();
+                        bucketRows = allRows
+                            .where((r) => r.bucketStatus == 'under_review')
+                            .toList();
                         break;
                       case _ModTab.resolved:
-                        bucketRows = allRows.where((r) => r.bucketStatus == 'resolved').toList();
+                        bucketRows = allRows
+                            .where((r) => r.bucketStatus == 'resolved')
+                            .toList();
                         break;
                       case _ModTab.violations:
-                        bucketRows = allRows.where((r) => r.violationConfirmed).toList();
+                        bucketRows = allRows
+                            .where((r) => r.violationConfirmed)
+                            .toList();
                         break;
                     }
 
-                    final rows = bucketRows.where((r) {
-                      if (_targetTypeFilter != 'All' && r.targetType != _targetTypeFilter.toLowerCase()) {
-                        return false;
-                      }
-                      if (_reasonFilter != 'All' && r.reason != _reasonFilter) return false;
-                      final q = _search.trim().toLowerCase();
-                      if (q.isEmpty) return true;
-                      return r.farmerName.toLowerCase().contains(q) ||
-                          r.targetLabel.toLowerCase().contains(q) ||
-                          r.id.toLowerCase().contains(q) ||
-                          r.reporterName.toLowerCase().contains(q);
-                    }).toList()
-                      ..sort((a, b) => (b.createdAt?.millisecondsSinceEpoch ?? 0)
-                          .compareTo(a.createdAt?.millisecondsSinceEpoch ?? 0));
+                    final rows =
+                        bucketRows.where((r) {
+                          if (_targetTypeFilter != 'All' &&
+                              r.targetType != _targetTypeFilter.toLowerCase()) {
+                            return false;
+                          }
+                          if (_reasonFilter != 'All' &&
+                              r.reason != _reasonFilter)
+                            return false;
+                          final q = _search.trim().toLowerCase();
+                          if (q.isEmpty) return true;
+                          return r.farmerName.toLowerCase().contains(q) ||
+                              r.targetLabel.toLowerCase().contains(q) ||
+                              r.id.toLowerCase().contains(q) ||
+                              r.reporterName.toLowerCase().contains(q);
+                        }).toList()..sort(
+                          (a, b) => (b.createdAt?.millisecondsSinceEpoch ?? 0)
+                              .compareTo(
+                                a.createdAt?.millisecondsSinceEpoch ?? 0,
+                              ),
+                        );
 
                     return SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          LayoutBuilder(builder: (context, constraints) {
-                            // A Wrap (not a fixed-childAspectRatio
-                            // GridView) so each card sizes to its own
-                            // content height — it can't overflow at any
-                            // width — while the column count still reflows
-                            // continuously with the available space (see
-                            // the same fix on the Dashboard Overview's KPI
-                            // row).
-                            const spacing = 16.0;
-                            final width = constraints.maxWidth;
-                            final columns = width >= 900 ? 4 : (width >= 560 ? 2 : 1);
-                            final cardWidth = (width - spacing * (columns - 1)) / columns;
-                            final cards = [
-                              AdminStatCard(
-                                label: 'Pending Reports',
-                                value: '$pendingCount',
-                                delta: 'Awaiting Admin review',
-                                icon: Icons.hourglass_empty_rounded,
-                                iconColor: (c) => c.amber,
-                                iconBg: (c) => c.amberBg,
-                                isEmpty: pendingCount == 0,
-                              ),
-                              AdminStatCard(
-                                label: 'Under Review',
-                                value: '$underReviewCount',
-                                delta: 'Currently being investigated',
-                                icon: Icons.search_rounded,
-                                iconColor: (c) => c.blue,
-                                iconBg: (c) => c.blueBg,
-                                isEmpty: underReviewCount == 0,
-                              ),
-                              AdminStatCard(
-                                label: 'Confirmed Violations',
-                                value: '$violationsCount',
-                                delta: 'Admin-confirmed only',
-                                icon: Icons.gavel_rounded,
-                                iconColor: (c) => c.red,
-                                iconBg: (c) => c.redBg,
-                                isEmpty: violationsCount == 0,
-                              ),
-                              AdminStatCard(
-                                label: 'Resolved Reports',
-                                value: '$resolvedCount',
-                                delta: 'Including dismissed reports',
-                                icon: Icons.task_alt_rounded,
-                                iconColor: (c) => c.green,
-                                iconBg: (c) => c.greenBg,
-                                isEmpty: resolvedCount == 0,
-                              ),
-                            ];
-                            return Wrap(
-                              spacing: spacing,
-                              runSpacing: spacing,
-                              children: [
-                                for (final card in cards) SizedBox(width: cardWidth, child: card),
-                              ],
-                            );
-                          }),
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              // A Wrap (not a fixed-childAspectRatio
+                              // GridView) so each card sizes to its own
+                              // content height — it can't overflow at any
+                              // width — while the column count still reflows
+                              // continuously with the available space (see
+                              // the same fix on the Dashboard Overview's KPI
+                              // row).
+                              const spacing = 16.0;
+                              final width = constraints.maxWidth;
+                              final columns = width >= 900
+                                  ? 4
+                                  : (width >= 560 ? 2 : 1);
+                              final cardWidth =
+                                  (width - spacing * (columns - 1)) / columns;
+                              final cards = [
+                                AdminStatCard(
+                                  label: 'Pending Reports',
+                                  value: '$pendingCount',
+                                  delta: 'Awaiting Admin review',
+                                  icon: Icons.hourglass_empty_rounded,
+                                  iconColor: (c) => c.amber,
+                                  iconBg: (c) => c.amberBg,
+                                  isEmpty: pendingCount == 0,
+                                ),
+                                AdminStatCard(
+                                  label: 'Under Review',
+                                  value: '$underReviewCount',
+                                  delta: 'Currently being investigated',
+                                  icon: Icons.search_rounded,
+                                  iconColor: (c) => c.blue,
+                                  iconBg: (c) => c.blueBg,
+                                  isEmpty: underReviewCount == 0,
+                                ),
+                                AdminStatCard(
+                                  label: 'Confirmed Violations',
+                                  value: '$violationsCount',
+                                  delta: 'Admin-confirmed only',
+                                  icon: Icons.gavel_rounded,
+                                  iconColor: (c) => c.red,
+                                  iconBg: (c) => c.redBg,
+                                  isEmpty: violationsCount == 0,
+                                ),
+                                AdminStatCard(
+                                  label: 'Resolved Reports',
+                                  value: '$resolvedCount',
+                                  delta: 'Including dismissed reports',
+                                  icon: Icons.task_alt_rounded,
+                                  iconColor: (c) => c.green,
+                                  iconBg: (c) => c.greenBg,
+                                  isEmpty: resolvedCount == 0,
+                                ),
+                              ];
+                              return Wrap(
+                                spacing: spacing,
+                                runSpacing: spacing,
+                                children: [
+                                  for (final card in cards)
+                                    SizedBox(width: cardWidth, child: card),
+                                ],
+                              );
+                            },
+                          ),
                           const SizedBox(height: 20),
 
                           _ModTabBar(
@@ -381,12 +457,15 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                             _ReportFilterBar(
                               c: c,
                               search: _search,
-                              onSearchChanged: (v) => setState(() => _search = v),
+                              onSearchChanged: (v) =>
+                                  setState(() => _search = v),
                               targetTypeFilter: _targetTypeFilter,
-                              onTargetTypeChanged: (v) => setState(() => _targetTypeFilter = v),
+                              onTargetTypeChanged: (v) =>
+                                  setState(() => _targetTypeFilter = v),
                               reasonOptions: reasonOptions,
                               reasonFilter: _reasonFilter,
-                              onReasonChanged: (v) => setState(() => _reasonFilter = v),
+                              onReasonChanged: (v) =>
+                                  setState(() => _reasonFilter = v),
                             ),
                             const SizedBox(height: 16),
                           ],
@@ -402,8 +481,10 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                           else if (rows.isEmpty)
                             AdminEmptyState(
                               icon: Icons.search_off,
-                              title: 'No matches for the current search/filters.',
-                              subtitle: 'Try clearing the search or filters above.',
+                              title:
+                                  'No matches for the current search/filters.',
+                              subtitle:
+                                  'Try clearing the search or filters above.',
                             )
                           else
                             _ReportTable(c: c, rows: rows),
@@ -452,7 +533,8 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
       return const AdminEmptyState(
         icon: Icons.verified_outlined,
         title: 'No confirmed violations.',
-        subtitle: 'Farmers/listings with an Admin-confirmed violation will appear here.',
+        subtitle:
+            'Farmers/listings with an Admin-confirmed violation will appear here.',
       );
     }
 
@@ -462,22 +544,28 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
       byFarmer.putIfAbsent(r.farmerId, () => []).add(r);
     }
 
-    final summaries = byFarmer.entries.map((e) {
-      final reports = [...e.value]
-        ..sort((a, b) =>
-            (b.createdAt?.millisecondsSinceEpoch ?? 0).compareTo(a.createdAt?.millisecondsSinceEpoch ?? 0));
-      final latest = reports.first;
-      return _ViolationSummary(
-        farmerId: e.key,
-        farmerName: latest.farmerName,
-        accountStatus: latest.farmerAccountStatus,
-        confirmedCount: reports.length,
-        lastViolation: latest.createdAt,
-        lastAction: latest.moderationAction,
-      );
-    }).toList()
-      ..sort((a, b) =>
-          (b.lastViolation?.millisecondsSinceEpoch ?? 0).compareTo(a.lastViolation?.millisecondsSinceEpoch ?? 0));
+    final summaries =
+        byFarmer.entries.map((e) {
+          final reports = [...e.value]
+            ..sort(
+              (a, b) => (b.createdAt?.millisecondsSinceEpoch ?? 0).compareTo(
+                a.createdAt?.millisecondsSinceEpoch ?? 0,
+              ),
+            );
+          final latest = reports.first;
+          return _ViolationSummary(
+            farmerId: e.key,
+            farmerName: latest.farmerName,
+            accountStatus: latest.farmerAccountStatus,
+            confirmedCount: reports.length,
+            lastViolation: latest.createdAt,
+            lastAction: latest.moderationAction,
+          );
+        }).toList()..sort(
+          (a, b) => (b.lastViolation?.millisecondsSinceEpoch ?? 0).compareTo(
+            a.lastViolation?.millisecondsSinceEpoch ?? 0,
+          ),
+        );
 
     return _ViolationsTable(c: c, rows: summaries);
   }
@@ -579,14 +667,19 @@ class _ReportFilterBar extends StatelessWidget {
       fillColor: c.surfaceAlt,
       isDense: true,
       contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide.none,
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final fieldStyle = TextStyle(color: c.textPrimary, fontSize: 13);
-    final validReason = reasonOptions.contains(reasonFilter) ? reasonFilter : 'All';
+    final validReason = reasonOptions.contains(reasonFilter)
+        ? reasonFilter
+        : 'All';
 
     return Wrap(
       spacing: 12,
@@ -597,7 +690,10 @@ class _ReportFilterBar extends StatelessWidget {
           width: 300,
           child: TextField(
             style: fieldStyle,
-            decoration: _fieldDecoration('Search farmer, listing, report ID, reporter…', Icons.search),
+            decoration: _fieldDecoration(
+              'Search farmer, listing, report ID, reporter…',
+              Icons.search,
+            ),
             onChanged: onSearchChanged,
           ),
         ),
@@ -607,11 +703,15 @@ class _ReportFilterBar extends StatelessWidget {
             initialValue: targetTypeFilter,
             style: fieldStyle,
             dropdownColor: c.surface,
-            decoration: _fieldDecoration('Target Type', Icons.category_outlined),
+            decoration: _fieldDecoration(
+              'Target Type',
+              Icons.category_outlined,
+            ),
             items: const [
               DropdownMenuItem(value: 'All', child: Text('All')),
               DropdownMenuItem(value: 'Listing', child: Text('Listing')),
               DropdownMenuItem(value: 'Farmer', child: Text('Farmer')),
+              DropdownMenuItem(value: 'Review', child: Text('Review')),
             ],
             onChanged: (v) => v != null ? onTargetTypeChanged(v) : null,
           ),
@@ -622,8 +722,13 @@ class _ReportFilterBar extends StatelessWidget {
             initialValue: validReason,
             style: fieldStyle,
             dropdownColor: c.surface,
-            decoration: _fieldDecoration('Reason', Icons.report_gmailerrorred_outlined),
-            items: reasonOptions.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+            decoration: _fieldDecoration(
+              'Reason',
+              Icons.report_gmailerrorred_outlined,
+            ),
+            items: reasonOptions
+                .map((r) => DropdownMenuItem(value: r, child: Text(r)))
+                .toList(),
             onChanged: (v) => v != null ? onReasonChanged(v) : null,
           ),
         ),
@@ -657,7 +762,11 @@ class _ReportTable extends StatelessWidget {
           dataRowColor: WidgetStateProperty.all(Colors.transparent),
           columnSpacing: 28,
           horizontalMargin: 12,
-          headingTextStyle: TextStyle(color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+          headingTextStyle: TextStyle(
+            color: c.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
           dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
           columns: const [
             DataColumn(label: Text('Report ID')),
@@ -671,25 +780,41 @@ class _ReportTable extends StatelessWidget {
             DataColumn(label: Text('Action')),
           ],
           rows: rows.map((r) {
-            return DataRow(cells: [
-              DataCell(Text(_shortId(r.id))),
-              DataCell(Text(r.targetLabel)),
-              DataCell(Text(_capitalize(r.targetType))),
-              DataCell(Text(r.farmerName)),
-              DataCell(Text(r.reason)),
-              DataCell(Text(r.reporterName)),
-              DataCell(Text(_formatDate(r.createdAt))),
-              DataCell(AdminStatusBadge(
-                  text: _reportStatusLabel(r), color: _reportStatusColor(c, r), bg: _reportStatusBg(c, r))),
-              DataCell(TextButton.icon(
-                icon: Icon(Icons.visibility_outlined, size: 16, color: c.green),
-                label: Text('View Report', style: TextStyle(color: c.green, fontSize: 12.5)),
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => _ReportDetailDialog(reportId: r.id),
+            return DataRow(
+              cells: [
+                DataCell(Text(_shortId(r.id))),
+                DataCell(Text(r.targetLabel)),
+                DataCell(Text(_capitalize(r.targetType))),
+                DataCell(Text(r.farmerName)),
+                DataCell(Text(r.reason)),
+                DataCell(Text(r.reporterName)),
+                DataCell(Text(_formatDate(r.createdAt))),
+                DataCell(
+                  AdminStatusBadge(
+                    text: _reportStatusLabel(r),
+                    color: _reportStatusColor(c, r),
+                    bg: _reportStatusBg(c, r),
+                  ),
                 ),
-              )),
-            ]);
+                DataCell(
+                  TextButton.icon(
+                    icon: Icon(
+                      Icons.visibility_outlined,
+                      size: 16,
+                      color: c.green,
+                    ),
+                    label: Text(
+                      'View Report',
+                      style: TextStyle(color: c.green, fontSize: 12.5),
+                    ),
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => _ReportDetailDialog(reportId: r.id),
+                    ),
+                  ),
+                ),
+              ],
+            );
           }).toList(),
         ),
       ),
@@ -739,7 +864,11 @@ class _ViolationsTable extends StatelessWidget {
           dataRowColor: WidgetStateProperty.all(Colors.transparent),
           columnSpacing: 28,
           horizontalMargin: 12,
-          headingTextStyle: TextStyle(color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+          headingTextStyle: TextStyle(
+            color: c.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
           dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
           columns: const [
             DataColumn(label: Text('Farmer ID')),
@@ -751,22 +880,34 @@ class _ViolationsTable extends StatelessWidget {
             DataColumn(label: Text('View History')),
           ],
           rows: rows.map((r) {
-            return DataRow(cells: [
-              DataCell(Text(_shortId(r.farmerId))),
-              DataCell(Text(r.farmerName)),
-              DataCell(Text('${r.confirmedCount}')),
-              DataCell(Text(_formatDate(r.lastViolation))),
-              DataCell(_accountStatusBadge(c, r.accountStatus)),
-              DataCell(Text(r.lastAction != null ? _capitalize(r.lastAction!) : '—')),
-              DataCell(TextButton.icon(
-                icon: Icon(Icons.history, size: 16, color: c.green),
-                label: Text('View History', style: TextStyle(color: c.green, fontSize: 12.5)),
-                onPressed: () => showDialog<void>(
-                  context: context,
-                  builder: (_) => _FarmerViolationHistoryDialog(farmerId: r.farmerId, farmerName: r.farmerName),
+            return DataRow(
+              cells: [
+                DataCell(Text(_shortId(r.farmerId))),
+                DataCell(Text(r.farmerName)),
+                DataCell(Text('${r.confirmedCount}')),
+                DataCell(Text(_formatDate(r.lastViolation))),
+                DataCell(_accountStatusBadge(c, r.accountStatus)),
+                DataCell(
+                  Text(r.lastAction != null ? _capitalize(r.lastAction!) : '—'),
                 ),
-              )),
-            ]);
+                DataCell(
+                  TextButton.icon(
+                    icon: Icon(Icons.history, size: 16, color: c.green),
+                    label: Text(
+                      'View History',
+                      style: TextStyle(color: c.green, fontSize: 12.5),
+                    ),
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => _FarmerViolationHistoryDialog(
+                        farmerId: r.farmerId,
+                        farmerName: r.farmerName,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
           }).toList(),
         ),
       ),
@@ -796,15 +937,26 @@ class _FarmerViolationHistory {
 /// forward) and the legacy `reportedUserId` (older chat reports predating
 /// that field) so history is complete regardless of when a report was
 /// filed, then de-dupes by report id.
-Future<_FarmerViolationHistory> _loadFarmerViolationHistory(String farmerId) async {
+Future<_FarmerViolationHistory> _loadFarmerViolationHistory(
+  String farmerId,
+) async {
   if (farmerId.isEmpty) {
-    return const _FarmerViolationHistory(confirmedViolations: 0, warnings: 0, suspensions: 0, relatedReports: []);
+    return const _FarmerViolationHistory(
+      confirmedViolations: 0,
+      warnings: 0,
+      suspensions: 0,
+      relatedReports: [],
+    );
   }
 
-  final byFarmerId =
-      await FirebaseFirestore.instance.collection('reports').where('farmerId', isEqualTo: farmerId).get();
-  final byReportedUserId =
-      await FirebaseFirestore.instance.collection('reports').where('reportedUserId', isEqualTo: farmerId).get();
+  final byFarmerId = await FirebaseFirestore.instance
+      .collection('reports')
+      .where('farmerId', isEqualTo: farmerId)
+      .get();
+  final byReportedUserId = await FirebaseFirestore.instance
+      .collection('reports')
+      .where('reportedUserId', isEqualTo: farmerId)
+      .get();
 
   final seen = <String>{};
   final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
@@ -815,7 +967,9 @@ Future<_FarmerViolationHistory> _loadFarmerViolationHistory(String farmerId) asy
   docs.sort((a, b) {
     final at = a.data()['createdAt'] as Timestamp?;
     final bt = b.data()['createdAt'] as Timestamp?;
-    return (bt?.millisecondsSinceEpoch ?? 0).compareTo(at?.millisecondsSinceEpoch ?? 0);
+    return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
+      at?.millisecondsSinceEpoch ?? 0,
+    );
   });
 
   var confirmed = 0, warnings = 0, suspensions = 0;
@@ -832,15 +986,17 @@ Future<_FarmerViolationHistory> _loadFarmerViolationHistory(String farmerId) asy
     warnings: warnings,
     suspensions: suspensions,
     relatedReports: docs
-        .map((d) => _ReportRow(
-              id: d.id,
-              data: d.data(),
-              farmerId: farmerId,
-              farmerName: '',
-              farmerBarangay: '—',
-              farmerApprovalStatus: '—',
-              farmerAccountStatus: '—',
-            ))
+        .map(
+          (d) => _ReportRow(
+            id: d.id,
+            data: d.data(),
+            farmerId: farmerId,
+            farmerName: '',
+            farmerBarangay: '—',
+            farmerApprovalStatus: '—',
+            farmerAccountStatus: '—',
+          ),
+        )
         .take(10)
         .toList(),
   );
@@ -849,7 +1005,10 @@ Future<_FarmerViolationHistory> _loadFarmerViolationHistory(String farmerId) asy
 class _FarmerViolationHistoryDialog extends StatelessWidget {
   final String farmerId;
   final String farmerName;
-  const _FarmerViolationHistoryDialog({required this.farmerId, required this.farmerName});
+  const _FarmerViolationHistoryDialog({
+    required this.farmerId,
+    required this.farmerName,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -858,14 +1017,24 @@ class _FarmerViolationHistoryDialog extends StatelessWidget {
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const AlertDialog(
-            content: SizedBox(height: 120, child: Center(child: CircularProgressIndicator())),
+            content: SizedBox(
+              height: 120,
+              child: Center(child: CircularProgressIndicator()),
+            ),
           );
         }
         if (snap.hasError || !snap.hasData) {
           return AlertDialog(
             title: const Text('Something went wrong'),
-            content: const Text('Could not load violation history. Please try again.'),
-            actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+            content: const Text(
+              'Could not load violation history. Please try again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
           );
         }
         final h = snap.data!;
@@ -878,16 +1047,24 @@ class _FarmerViolationHistoryDialog extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _detailRow('Confirmed Violations', '${h.confirmedViolations}'),
+                  _detailRow(
+                    'Confirmed Violations',
+                    '${h.confirmedViolations}',
+                  ),
                   _detailRow('Warnings Issued', '${h.warnings}'),
                   _detailRow('Suspensions', '${h.suspensions}'),
                   const SizedBox(height: 10),
                   _sectionLabel('Related Reports'),
                   if (h.relatedReports.isEmpty)
-                    Text('No related reports.', style: TextStyle(color: Colors.grey[600], fontSize: 12.5))
+                    Text(
+                      'No related reports.',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 12.5),
+                    )
                   else
                     ...h.relatedReports.map((r) {
-                      final action = r.moderationAction != null ? _capitalize(r.moderationAction!) : 'No decision yet';
+                      final action = r.moderationAction != null
+                          ? _capitalize(r.moderationAction!)
+                          : 'No decision yet';
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Text(
@@ -900,7 +1077,12 @@ class _FarmerViolationHistoryDialog extends StatelessWidget {
               ),
             ),
           ),
-          actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
         );
       },
     );
@@ -932,20 +1114,25 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     _claimAttempted = true;
     if ((report['status'] ?? 'pending') != 'pending') return;
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
-    final reportRef = FirebaseFirestore.instance.collection('reports').doc(widget.reportId);
-    reportRef.update({
-      'status': 'under_review',
-      'reviewedBy': adminUid,
-      'reviewedAt': FieldValue.serverTimestamp(),
-    }).then((_) {
-      reportRef.collection('history').add({
-        'action': 'under_review',
-        'adminId': adminUid,
-        'reason': null,
-        'notes': null,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    }).catchError((_) {});
+    final reportRef = FirebaseFirestore.instance
+        .collection('reports')
+        .doc(widget.reportId);
+    reportRef
+        .update({
+          'status': 'under_review',
+          'reviewedBy': adminUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+        })
+        .then((_) {
+          reportRef.collection('history').add({
+            'action': 'under_review',
+            'adminId': adminUid,
+            'reason': null,
+            'notes': null,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        })
+        .catchError((_) {});
   }
 
   Future<void> _runAction({
@@ -961,11 +1148,15 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     setState(() => _busy = true);
     try {
       final adminUid = FirebaseAuth.instance.currentUser?.uid;
-      final farmerId = (report['farmerId'] ?? report['reportedUserId'] ?? '').toString();
+      final farmerId = (report['farmerId'] ?? report['reportedUserId'] ?? '')
+          .toString();
       final productId = report['productId']?.toString();
+      final reviewId = report['reviewId']?.toString();
 
       final batch = FirebaseFirestore.instance.batch();
-      final reportRef = FirebaseFirestore.instance.collection('reports').doc(widget.reportId);
+      final reportRef = FirebaseFirestore.instance
+          .collection('reports')
+          .doc(widget.reportId);
       batch.update(reportRef, {
         'status': 'resolved',
         'moderationAction': action,
@@ -979,24 +1170,47 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
       // Hide/Remove both map to the existing isSuspended gate — already
       // respected by every buyer-facing query (marketplace listing, order
       // placement) — no new visibility field needed.
-      if ((action == 'hidden' || action == 'removed') && productId != null && productId.isNotEmpty) {
-        batch.update(FirebaseFirestore.instance.collection('products').doc(productId), {'isSuspended': true});
+      if ((action == 'hidden' || action == 'removed') &&
+          productId != null &&
+          productId.isNotEmpty) {
+        batch.update(
+          FirebaseFirestore.instance.collection('products').doc(productId),
+          {'isSuspended': true},
+        );
+      }
+      if (action == 'review_removed' &&
+          reviewId != null &&
+          reviewId.isNotEmpty) {
+        batch.update(
+          FirebaseFirestore.instance.collection('productReviews').doc(reviewId),
+          {
+            'moderationStatus': 'removed',
+            'moderatedBy': adminUid,
+            'moderatedAt': FieldValue.serverTimestamp(),
+          },
+        );
       }
       if (action == 'suspended' && farmerId.isNotEmpty) {
-        batch.update(FirebaseFirestore.instance.collection('users').doc(farmerId), {
-          'accountStatus': 'suspended',
-          'suspensionReason': reason,
-          'moderationUpdatedBy': adminUid,
-          'moderationUpdatedAt': FieldValue.serverTimestamp(),
-        });
+        batch.update(
+          FirebaseFirestore.instance.collection('users').doc(farmerId),
+          {
+            'accountStatus': 'suspended',
+            'suspensionReason': reason,
+            'moderationUpdatedBy': adminUid,
+            'moderationUpdatedAt': FieldValue.serverTimestamp(),
+          },
+        );
       }
       if (action == 'banned' && farmerId.isNotEmpty) {
-        batch.update(FirebaseFirestore.instance.collection('users').doc(farmerId), {
-          'accountStatus': 'banned',
-          'banReason': reason,
-          'moderationUpdatedBy': adminUid,
-          'moderationUpdatedAt': FieldValue.serverTimestamp(),
-        });
+        batch.update(
+          FirebaseFirestore.instance.collection('users').doc(farmerId),
+          {
+            'accountStatus': 'banned',
+            'banReason': reason,
+            'moderationUpdatedBy': adminUid,
+            'moderationUpdatedAt': FieldValue.serverTimestamp(),
+          },
+        );
       }
 
       await batch.commit();
@@ -1012,10 +1226,16 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
 
       final auditAction = _auditActionFor(action);
       if (auditAction != null) {
-        final who = _firstNonEmpty([report['reportedUserName'], report['sellerName']]) ??
+        final who =
+            _firstNonEmpty([
+              report['reportedUserName'],
+              report['sellerName'],
+            ]) ??
             (farmerId.isEmpty ? 'Unknown seller' : 'farmer $farmerId');
         final productName = report['productName']?.toString();
-        final target = productName != null && productName.isNotEmpty ? '"$productName" ($who)' : who;
+        final target = productName != null && productName.isNotEmpty
+            ? '"$productName" ($who)'
+            : who;
         AuditLogService.log(
           auditAction,
           '${_capitalize(action)}: $target.${reason.isNotEmpty ? ' Reason: $reason' : ''}',
@@ -1030,7 +1250,9 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -1040,21 +1262,28 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     setState(() => _busy = true);
     try {
       final adminUid = FirebaseAuth.instance.currentUser?.uid;
-      await FirebaseFirestore.instance.collection('users').doc(farmerId).update({
-        'accountStatus': 'active',
-        'suspensionReason': FieldValue.delete(),
-        'suspendedUntil': FieldValue.delete(),
-        'banReason': FieldValue.delete(),
-        'moderationUpdatedBy': adminUid,
-        'moderationUpdatedAt': FieldValue.serverTimestamp(),
-      });
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(farmerId)
+          .update({
+            'accountStatus': 'active',
+            'suspensionReason': FieldValue.delete(),
+            'suspendedUntil': FieldValue.delete(),
+            'banReason': FieldValue.delete(),
+            'moderationUpdatedBy': adminUid,
+            'moderationUpdatedAt': FieldValue.serverTimestamp(),
+          });
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Farmer account reactivated.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Farmer account reactivated.')),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -1091,7 +1320,9 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                     minLines: 2,
                     maxLines: 3,
                     decoration: InputDecoration(
-                      labelText: requireReason ? 'Reason (required)' : 'Reason (optional)',
+                      labelText: requireReason
+                          ? 'Reason (required)'
+                          : 'Reason (optional)',
                       border: const OutlineInputBorder(),
                     ),
                   ),
@@ -1109,9 +1340,17 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
                       initialValue: severity,
-                      decoration: const InputDecoration(labelText: 'Violation severity', border: OutlineInputBorder()),
+                      decoration: const InputDecoration(
+                        labelText: 'Violation severity',
+                        border: OutlineInputBorder(),
+                      ),
                       items: severityOptions
-                          .map((s) => DropdownMenuItem(value: s, child: Text(_capitalize(s))))
+                          .map(
+                            (s) => DropdownMenuItem(
+                              value: s,
+                              child: Text(_capitalize(s)),
+                            ),
+                          )
                           .toList(),
                       onChanged: (v) => setDialogState(() => severity = v),
                     ),
@@ -1121,11 +1360,18 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: actionColor, foregroundColor: Colors.white),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: actionColor,
+                foregroundColor: Colors.white,
+              ),
               onPressed: () {
-                if (requireReason && reasonController.text.trim().isEmpty) return;
+                if (requireReason && reasonController.text.trim().isEmpty)
+                  return;
                 Navigator.of(dialogContext).pop(true);
               },
               child: Text(actionLabel),
@@ -1149,44 +1395,75 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('reports').doc(widget.reportId).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('reports')
+          .doc(widget.reportId)
+          .snapshots(),
       builder: (context, snap) {
         if (snap.hasError) {
           return AlertDialog(
             title: const Text('Something went wrong'),
-            content: const Text('Could not load this report. Please try again.'),
-            actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+            content: const Text(
+              'Could not load this report. Please try again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
           );
         }
         if (!snap.hasData) {
           return const AlertDialog(
-            content: SizedBox(height: 120, child: Center(child: CircularProgressIndicator())),
+            content: SizedBox(
+              height: 120,
+              child: Center(child: CircularProgressIndicator()),
+            ),
           );
         }
         final report = snap.data!.data();
         if (report == null) {
           return AlertDialog(
             title: const Text('Report Not Found'),
-            content: const Text('This report could not be found. It may have been removed.'),
-            actions: [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))],
+            content: const Text(
+              'This report could not be found. It may have been removed.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
           );
         }
 
-        WidgetsBinding.instance.addPostFrameCallback((_) => _claimIfPending(report));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _claimIfPending(report),
+        );
 
-        final hasProduct = (report['productId']?.toString().trim().isNotEmpty ?? false);
-        final targetType = (report['targetType'] ?? (hasProduct ? 'listing' : 'farmer')).toString();
-        final farmerId = (report['farmerId'] ?? report['reportedUserId'] ?? '').toString();
+        final hasProduct =
+            (report['productId']?.toString().trim().isNotEmpty ?? false);
+        final targetType =
+            (report['targetType'] ?? (hasProduct ? 'listing' : 'farmer'))
+                .toString();
+        final farmerId = (report['farmerId'] ?? report['reportedUserId'] ?? '')
+            .toString();
         final productId = report['productId']?.toString();
+        final reviewId = report['reviewId']?.toString();
         final rawStatus = (report['status'] ?? 'pending').toString();
         final bucketStatus = rawStatus == 'dismissed' ? 'resolved' : rawStatus;
         final isResolved = bucketStatus == 'resolved';
-        final reason = (report['issueType'] ?? report['reason'] ?? 'General Report').toString();
+        final reason =
+            (report['issueType'] ?? report['reason'] ?? 'General Report')
+                .toString();
         final description = (report['description'] ?? '').toString();
         final createdAt = report['createdAt'] as Timestamp?;
-        final reporterName = (report['reporterName'] ?? 'Unknown user').toString();
+        final reporterName = (report['reporterName'] ?? 'Unknown user')
+            .toString();
         final reporterId = (report['reporterId'] ?? '—').toString();
-        final moderationAction = (report['moderationAction'] ?? report['action'])?.toString();
+        final moderationAction =
+            (report['moderationAction'] ?? report['action'])?.toString();
         final adminNotes = (report['adminNotes'] ?? '').toString();
         final violationConfirmed = report['violationConfirmed'] == true;
 
@@ -1204,11 +1481,21 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                   _detailRow('Target Type', _capitalize(targetType)),
                   _detailRow('Date Reported', _formatDate(createdAt)),
                   _detailRow('Reason', reason),
-                  if (description.isNotEmpty) _detailRow('Description', description),
-                  _detailRow('Current Status',
-                      violationConfirmed ? 'Violation Confirmed' : _capitalize(bucketStatus)),
-                  if (moderationAction != null) _detailRow('Admin Action Taken', _capitalize(moderationAction)),
-                  if (adminNotes.isNotEmpty) _detailRow('Admin Notes', adminNotes),
+                  if (description.isNotEmpty)
+                    _detailRow('Description', description),
+                  _detailRow(
+                    'Current Status',
+                    violationConfirmed
+                        ? 'Violation Confirmed'
+                        : _capitalize(bucketStatus),
+                  ),
+                  if (moderationAction != null)
+                    _detailRow(
+                      'Admin Action Taken',
+                      _capitalize(moderationAction),
+                    ),
+                  if (adminNotes.isNotEmpty)
+                    _detailRow('Admin Notes', adminNotes),
                   const SizedBox(height: 10),
 
                   _sectionLabel('Reporter Information'),
@@ -1218,35 +1505,66 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
 
                   _sectionLabel('Reported Farmer'),
                   FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                    future:
-                        farmerId.isEmpty ? null : FirebaseFirestore.instance.collection('users').doc(farmerId).get(),
+                    future: farmerId.isEmpty
+                        ? null
+                        : FirebaseFirestore.instance
+                              .collection('users')
+                              .doc(farmerId)
+                              .get(),
                     builder: (context, farmerSnap) {
                       if (farmerId.isEmpty) {
-                        return Text('No farmer on record for this report.',
-                            style: TextStyle(color: Colors.grey[600], fontSize: 12.5));
+                        return Text(
+                          'No farmer on record for this report.',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12.5,
+                          ),
+                        );
                       }
                       if (farmerSnap.connectionState != ConnectionState.done) {
                         return const Padding(
                           padding: EdgeInsets.symmetric(vertical: 8),
-                          child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                          child: SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                         );
                       }
                       final farmer = farmerSnap.data?.data();
                       if (farmer == null) {
-                        return Text('Farmer account not found.',
-                            style: TextStyle(color: Colors.grey[600], fontSize: 12.5));
+                        return Text(
+                          'Farmer account not found.',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12.5,
+                          ),
+                        );
                       }
-                      final name = _firstNonEmpty([farmer['fullName'], farmer['name']]) ?? 'Unknown Farmer';
-                      final barangay = _firstNonEmpty([farmer['barangay']]) ?? '—';
-                      final approvalStatus = (farmer['approvalStatus'] ?? '—').toString();
-                      final accountStatus = (farmer['accountStatus'] ?? 'active').toString();
+                      final name =
+                          _firstNonEmpty([
+                            farmer['fullName'],
+                            farmer['name'],
+                          ]) ??
+                          'Unknown Farmer';
+                      final barangay =
+                          _firstNonEmpty([farmer['barangay']]) ?? '—';
+                      final approvalStatus = (farmer['approvalStatus'] ?? '—')
+                          .toString();
+                      final accountStatus =
+                          (farmer['accountStatus'] ?? 'active').toString();
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           _detailRow('Farmer Name', name),
                           _detailRow('Farmer ID', _shortId(farmerId)),
                           _detailRow('Barangay', barangay),
-                          _detailRow('Approval Status', approvalStatus.isEmpty ? '—' : _capitalize(approvalStatus)),
+                          _detailRow(
+                            'Approval Status',
+                            approvalStatus.isEmpty
+                                ? '—'
+                                : _capitalize(approvalStatus),
+                          ),
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 4),
                             child: Row(
@@ -1254,10 +1572,18 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                               children: [
                                 SizedBox(
                                   width: 160,
-                                  child: Text('Account Status',
-                                      style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700])),
+                                  child: Text(
+                                    'Account Status',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
                                 ),
-                                _accountStatusBadge(AdminThemeScope.of(context).palette, accountStatus),
+                                _accountStatusBadge(
+                                  AdminThemeScope.of(context).palette,
+                                  accountStatus,
+                                ),
                               ],
                             ),
                           ),
@@ -1266,7 +1592,9 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                             OutlinedButton.icon(
                               icon: const Icon(Icons.restart_alt, size: 16),
                               label: const Text('Reactivate Account'),
-                              onPressed: _busy ? null : () => _reactivateFarmer(farmerId),
+                              onPressed: _busy
+                                  ? null
+                                  : () => _reactivateFarmer(farmerId),
                             ),
                           ],
                         ],
@@ -1280,36 +1608,59 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                     FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                       future: (productId == null || productId.isEmpty)
                           ? null
-                          : FirebaseFirestore.instance.collection('products').doc(productId).get(),
+                          : FirebaseFirestore.instance
+                                .collection('products')
+                                .doc(productId)
+                                .get(),
                       builder: (context, productSnap) {
                         if (productId == null || productId.isEmpty) {
-                          return Text('No listing on record for this report.',
-                              style: TextStyle(color: Colors.grey[600], fontSize: 12.5));
+                          return Text(
+                            'No listing on record for this report.',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 12.5,
+                            ),
+                          );
                         }
-                        if (productSnap.connectionState != ConnectionState.done) {
+                        if (productSnap.connectionState !=
+                            ConnectionState.done) {
                           return const Padding(
                             padding: EdgeInsets.symmetric(vertical: 8),
-                            child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                            child: SizedBox(
+                              height: 16,
+                              width: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
                           );
                         }
                         final product = productSnap.data?.data();
                         if (product == null) {
-                          return Text('This listing no longer exists.',
-                              style: TextStyle(color: Colors.grey[600], fontSize: 12.5));
+                          return Text(
+                            'This listing no longer exists.',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 12.5,
+                            ),
+                          );
                         }
                         final name = (product['name'] ?? '—').toString();
-                        final category = (product['category'] ?? '—').toString();
+                        final category = (product['category'] ?? '—')
+                            .toString();
                         final desc = (product['description'] ?? '—').toString();
                         final price = product['price'];
                         final qty = product['quantity'];
                         final imageUrls = product['imageUrls'];
                         final imageUrl = _firstNonEmpty([
                           product['imageUrl'],
-                          (imageUrls is List && imageUrls.isNotEmpty) ? imageUrls.first?.toString() : null,
+                          (imageUrls is List && imageUrls.isNotEmpty)
+                              ? imageUrls.first?.toString()
+                              : null,
                         ]);
                         final isArchived = product['isArchived'] == true;
                         final isSuspended = product['isSuspended'] == true;
-                        final listingStatus = isSuspended ? 'Suspended' : (isArchived ? 'Archived' : 'Active');
+                        final listingStatus = isSuspended
+                            ? 'Suspended'
+                            : (isArchived ? 'Archived' : 'Active');
 
                         return Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1322,7 +1673,8 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                                   width: 120,
                                   height: 90,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                                  errorBuilder: (_, _, _) =>
+                                      const SizedBox.shrink(),
                                 ),
                               ),
                               const SizedBox(height: 8),
@@ -1330,11 +1682,85 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                             _detailRow('Product Name', name),
                             _detailRow('Category', category),
                             _detailRow('Description', desc),
-                            _detailRow('Price',
-                                price != null ? formatPeso(price is num ? price : num.tryParse('$price') ?? 0) : '—'),
+                            _detailRow(
+                              'Price',
+                              price != null
+                                  ? formatPeso(
+                                      price is num
+                                          ? price
+                                          : num.tryParse('$price') ?? 0,
+                                    )
+                                  : '—',
+                            ),
                             _detailRow('Quantity', qty?.toString() ?? '—'),
                             _detailRow('Listing Status', listingStatus),
                             _detailRow('Listing Owner', _shortId(farmerId)),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+
+                  if (targetType == 'review') ...[
+                    _sectionLabel('Reported Buyer Review'),
+                    FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      future: (reviewId == null || reviewId.isEmpty)
+                          ? null
+                          : FirebaseFirestore.instance
+                                .collection('productReviews')
+                                .doc(reviewId)
+                                .get(),
+                      builder: (context, reviewSnap) {
+                        if (reviewId == null || reviewId.isEmpty) {
+                          return Text(
+                            'No review is attached to this report.',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 12.5,
+                            ),
+                          );
+                        }
+                        if (reviewSnap.connectionState !=
+                            ConnectionState.done) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: SizedBox(
+                              height: 16,
+                              width: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        }
+                        final review = reviewSnap.data?.data();
+                        if (review == null) {
+                          return Text(
+                            'This review is no longer available.',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 12.5,
+                            ),
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _detailRow(
+                              'Product',
+                              (review['productName'] ?? '—').toString(),
+                            ),
+                            _detailRow(
+                              'Buyer',
+                              (review['buyerName'] ?? 'Buyer').toString(),
+                            ),
+                            _detailRow(
+                              'Rating',
+                              '${review['rating'] ?? '—'} / 5',
+                            ),
+                            _detailRow(
+                              'Review',
+                              (review['comment'] ?? '').toString(),
+                            ),
                           ],
                         );
                       },
@@ -1349,21 +1775,39 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                       if (histSnap.connectionState != ConnectionState.done) {
                         return const Padding(
                           padding: EdgeInsets.symmetric(vertical: 8),
-                          child: SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                          child: SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
                         );
                       }
                       if (histSnap.hasError || !histSnap.hasData) {
-                        return Text('Could not load violation history.',
-                            style: TextStyle(color: Colors.grey[600], fontSize: 12.5));
+                        return Text(
+                          'Could not load violation history.',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12.5,
+                          ),
+                        );
                       }
                       final h = histSnap.data!;
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _detailRow('Previous Confirmed Violations', '${h.confirmedViolations}'),
+                          _detailRow(
+                            'Previous Confirmed Violations',
+                            '${h.confirmedViolations}',
+                          ),
                           _detailRow('Previous Warnings', '${h.warnings}'),
-                          _detailRow('Previous Suspensions', '${h.suspensions}'),
-                          _detailRow('Related Reports', '${h.relatedReports.length}'),
+                          _detailRow(
+                            'Previous Suspensions',
+                            '${h.suspensions}',
+                          ),
+                          _detailRow(
+                            'Related Reports',
+                            '${h.relatedReports.length}',
+                          ),
                         ],
                       );
                     },
@@ -1373,28 +1817,39 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
             ),
           ),
           actions: isResolved
-              ? [TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close'))]
+              ? [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
+                ]
               : [
-                  TextButton(onPressed: _busy ? null : () => Navigator.of(context).pop(), child: const Text('Close')),
+                  TextButton(
+                    onPressed: _busy ? null : () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
                   TextButton(
                     onPressed: _busy
                         ? null
                         : () => _openActionDialog(
-                              report: report,
-                              title: 'Dismiss this report?',
-                              actionLabel: 'Dismiss',
-                              actionColor: Colors.grey,
-                              action: 'dismissed',
-                              violationConfirmed: false,
-                              requireReason: false,
-                            ),
+                            report: report,
+                            title: 'Dismiss this report?',
+                            actionLabel: 'Dismiss',
+                            actionColor: Colors.grey,
+                            action: 'dismissed',
+                            violationConfirmed: false,
+                            requireReason: false,
+                          ),
                     child: const Text('Dismiss Report'),
                   ),
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(foregroundColor: Colors.orange),
-                    onPressed: _busy
-                        ? null
-                        : () => _openActionDialog(
+                  if (targetType != 'review')
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange,
+                      ),
+                      onPressed: _busy
+                          ? null
+                          : () => _openActionDialog(
                               report: report,
                               title: 'Issue a warning?',
                               actionLabel: 'Issue Warning',
@@ -1404,72 +1859,102 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                               severityOptions: const ['minor', 'moderate'],
                               defaultSeverity: 'minor',
                             ),
-                    child: const Text('Issue Warning'),
-                  ),
-                  if (targetType == 'listing') ...[
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.blueGrey),
+                      child: const Text('Issue Warning'),
+                    ),
+                  if (targetType == 'review')
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
                       onPressed: _busy
                           ? null
                           : () => _openActionDialog(
-                                report: report,
-                                title: 'Hide this listing?',
-                                actionLabel: 'Hide Listing',
-                                actionColor: Colors.blueGrey,
-                                action: 'hidden',
-                                violationConfirmed: true,
-                                severityOptions: const ['minor', 'moderate'],
-                                defaultSeverity: 'minor',
-                              ),
+                              report: report,
+                              title: 'Remove this buyer review?',
+                              actionLabel: 'Remove Review',
+                              actionColor: Colors.red,
+                              action: 'review_removed',
+                              violationConfirmed: false,
+                              requireReason: true,
+                            ),
+                      child: const Text('Remove Review'),
+                    )
+                  else if (targetType == 'listing') ...[
+                    OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.blueGrey,
+                      ),
+                      onPressed: _busy
+                          ? null
+                          : () => _openActionDialog(
+                              report: report,
+                              title: 'Hide this listing?',
+                              actionLabel: 'Hide Listing',
+                              actionColor: Colors.blueGrey,
+                              action: 'hidden',
+                              violationConfirmed: true,
+                              severityOptions: const ['minor', 'moderate'],
+                              defaultSeverity: 'minor',
+                            ),
                       child: const Text('Hide Listing'),
                     ),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
                       onPressed: _busy
                           ? null
                           : () => _openActionDialog(
-                                report: report,
-                                title: 'Remove this listing?',
-                                actionLabel: 'Remove Listing',
-                                actionColor: Colors.red,
-                                action: 'removed',
-                                violationConfirmed: true,
-                                severityOptions: const ['moderate', 'serious'],
-                                defaultSeverity: 'moderate',
-                              ),
+                              report: report,
+                              title: 'Remove this listing?',
+                              actionLabel: 'Remove Listing',
+                              actionColor: Colors.red,
+                              action: 'removed',
+                              violationConfirmed: true,
+                              severityOptions: const ['moderate', 'serious'],
+                              defaultSeverity: 'moderate',
+                            ),
                       child: const Text('Remove Listing'),
                     ),
                   ] else ...[
                     OutlinedButton(
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.deepOrange),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.deepOrange,
+                      ),
                       onPressed: _busy
                           ? null
                           : () => _openActionDialog(
-                                report: report,
-                                title: 'Temporarily suspend this Farmer?',
-                                actionLabel: 'Suspend',
-                                actionColor: Colors.deepOrange,
-                                action: 'suspended',
-                                violationConfirmed: true,
-                                severityOptions: const ['serious'],
-                                defaultSeverity: 'serious',
-                              ),
+                              report: report,
+                              title: 'Temporarily suspend this Farmer?',
+                              actionLabel: 'Suspend',
+                              actionColor: Colors.deepOrange,
+                              action: 'suspended',
+                              violationConfirmed: true,
+                              severityOptions: const ['serious'],
+                              defaultSeverity: 'serious',
+                            ),
                       child: const Text('Temporary Suspension'),
                     ),
                     ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
                       onPressed: _busy
                           ? null
                           : () => _openActionDialog(
-                                report: report,
-                                title: 'Permanently deactivate this Farmer account?',
-                                actionLabel: 'Ban / Deactivate',
-                                actionColor: Colors.red,
-                                action: 'banned',
-                                violationConfirmed: true,
-                                severityOptions: const ['critical'],
-                                defaultSeverity: 'critical',
-                              ),
+                              report: report,
+                              title:
+                                  'Permanently deactivate this Farmer account?',
+                              actionLabel: 'Ban / Deactivate',
+                              actionColor: Colors.red,
+                              action: 'banned',
+                              violationConfirmed: true,
+                              severityOptions: const ['critical'],
+                              defaultSeverity: 'critical',
+                            ),
                       child: const Text('Permanent Ban / Deactivate'),
                     ),
                   ],

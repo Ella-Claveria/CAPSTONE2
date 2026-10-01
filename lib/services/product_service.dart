@@ -4,6 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'connectivity_service.dart';
 
 class ProductService {
+  static const String archiveBlockedByOrdersMessage =
+      'This product has pending orders. Resolve them before archiving it.';
+
   final _products = FirebaseFirestore.instance.collection('products');
 
   Future<String?> addProduct({
@@ -32,6 +35,7 @@ class ProductService {
     // instead of each one re-deriving it independently.
     String? unit,
   }) async {
+    if (imageUrls.isEmpty) return 'Please add a product photo.';
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
 
@@ -94,6 +98,7 @@ class ProductService {
     // See addProduct's unit param.
     String? unit,
   }) async {
+    if (imageUrls.isEmpty) return 'Please add a product photo.';
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
 
@@ -143,6 +148,25 @@ class ProductService {
     if (offlineError != null) return offlineError;
 
     try {
+      final farmerId = FirebaseAuth.instance.currentUser?.uid;
+      if (farmerId == null || farmerId.isEmpty) {
+        return 'Please log in again before archiving this product.';
+      }
+
+      final orders = await FirebaseFirestore.instance
+          .collection('orders')
+          .where('sellerId', isEqualTo: farmerId)
+          .get(const GetOptions(source: Source.server));
+      final hasUnfulfilledOrders = orders.docs.any((order) {
+        final data = order.data();
+        final status = (data['status'] ?? '').toString().toLowerCase();
+        return data['productId'] == id &&
+            const {'pending', 'confirmed', 'shipped'}.contains(status);
+      });
+      if (hasUnfulfilledOrders) {
+        return archiveBlockedByOrdersMessage;
+      }
+
       await _products.doc(id).update({
         'isArchived': true,
         'archivedAt': FieldValue.serverTimestamp(),

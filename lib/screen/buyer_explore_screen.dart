@@ -7,6 +7,7 @@ import '../services/product_service.dart';
 import '../services/product_visibility_service.dart';
 import '../services/image_helper.dart';
 import '../services/market_price_helpers.dart';
+import '../widgets/retry_message.dart';
 import 'buyer_search_screen.dart';
 import 'product_detail_screen.dart';
 
@@ -43,7 +44,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   @override
   void initState() {
     super.initState();
-    _usersSub = FirebaseFirestore.instance.collection('users').snapshots().listen((snap) {
+    _usersSub = FirebaseFirestore.instance.collection('publicProfiles').snapshots().listen((snap) {
       if (!mounted) return;
       setState(() {
         _barangayByFarmerUid = {
@@ -231,7 +232,10 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
           return const Center(child: CircularProgressIndicator(color: _dark));
         }
         if (snapshot.hasError) {
-          return const Center(child: Text('Something went wrong loading products.', style: TextStyle(color: Colors.black54)));
+          return RetryMessage(
+            message: 'Could not load products. Check your connection and try again.',
+            onRetry: () => setState(() {}),
+          );
         }
         var docs = snapshot.data?.docs ?? [];
 

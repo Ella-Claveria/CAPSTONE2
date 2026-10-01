@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../services/market_price_helpers.dart';
 import '../data/commodity_master_list.dart';
-import 'admin_dashboard_screen.dart' show AdminThemeScope, AdminPalette, AdminEmptyState;
+import 'admin_dashboard_screen.dart' show AdminThemeScope, AdminPalette, AdminEmptyState, AdminRadii;
 
 // ============================================================
 // New chart widgets for the Admin Analytics Dashboard redesign. Every
@@ -36,10 +36,10 @@ class AdminSalesByCategoryCard extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: c.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AdminRadii.card),
         border: Border.all(color: c.border),
       ),
       child: Column(
@@ -147,10 +147,10 @@ class AdminTopProductsCard extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: c.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AdminRadii.card),
         border: Border.all(color: c.border),
       ),
       child: Column(
@@ -192,7 +192,7 @@ class AdminTopProductsCard extends StatelessWidget {
       decoration: isTop
           ? BoxDecoration(
               color: c.amberBg,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(AdminRadii.control),
               border: Border.all(color: c.amber.withValues(alpha: 0.35)),
             )
           : null,
@@ -273,10 +273,10 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: c.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AdminRadii.card),
         border: Border.all(color: c.border),
       ),
       child: Column(
@@ -307,6 +307,7 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
                     selectedColor: c.green,
                     backgroundColor: c.surfaceAlt,
                     side: BorderSide(color: c.border),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdminRadii.control)),
                     labelStyle: TextStyle(
                       color: _selected == name ? Colors.white : c.textPrimary,
                       fontSize: 12.5,

@@ -112,8 +112,27 @@ needs no action.
 | `approvalStatus` | keep | string enum | `'pending' \| 'approved' \| 'rejected'` — unchanged, already the one real source of truth |
 | `hasVerificationDoc` | keep (dead) | bool | write-only, no known consumer; left alone |
 | `location` | keep (known bug, not fixed here) | string | orphaned field written by `EditProfileScreen`; never read; editing "Location" does **not** actually update `barangay`. See §7 |
-| `barangay` / `municipality` / `province` | keep | string | unchanged |
+| `barangay` / `municipality` / `province` | keep | string | unchanged — coarse, public-safe, shown to buyers as-is |
+| `latitude` / `longitude` | **removed** (see migration `003_move_location_to_private_geo.js`) | double | previously lived here, meaning ANY signed-in user could read any other user's exact GPS pin directly via the Firestore SDK, regardless of what the app's UI chose to display. Moved to `users/{uid}/private/geo` (own subcollection, own rule: owner or admin only — see `firestore.rules`). Nothing else about this doc changed. |
 | `updatedAt` | **new** | Timestamp | added by migration/going-forward writes so every doc has a "last touched" reference |
+
+### `users/{uid}/private/geo` (new)
+
+| Field | Status | Type | Notes |
+|---|---|---|---|
+| `latitude` / `longitude` | new | double | the exact pin, moved off the parent doc above. Read by: the doc's own owner (their own profile screens), an admin (Demand Heatmap analytics), and Cloud Functions via the Admin SDK (order-confirmation snapshot, barangay cluster aggregation) — never by any other client. |
+| `updatedAt` | new | Timestamp | |
+
+### `barangayClusters/{barangay}` (new)
+
+PII-free, server-computed aggregate the buyer marketplace map reads instead of any individual farmer's exact coordinates. Maintained entirely by Cloud Functions (`recomputeBarangayCluster` in `functions/index.js`); clients cannot write to it.
+
+| Field | Status | Type | Notes |
+|---|---|---|---|
+| `barangay` | new | string | matches the doc ID |
+| `lat` / `lng` | new | double | average of that barangay's approved, active farmers' exact pins |
+| `farmerCount` | new | number | how many farmers contributed to the average — never which ones |
+| `updatedAt` | new | Timestamp | |
 
 ### `products`
 

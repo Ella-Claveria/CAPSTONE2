@@ -5,11 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import '../services/auth_routing_service.dart';
 import '../services/audit_log_service.dart';
+import '../services/notification_permission_prompt.dart';
 import '../theme/app_theme.dart';
 import '../screen/auth_route_handler.dart';
 import '../screen/forgot_password_screen.dart';
 import '../screen/google_complete_profile_screen.dart';
 import '../screen/page_transitions.dart';
+import '../screen/register_screen.dart';
 import 'glow_field.dart';
 import 'role_mismatch_dialog.dart';
 import '../l10n/app_localizations.dart';
@@ -50,6 +52,11 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
   bool _loading = false;
   bool _googleLoading = false;
   bool _obscurePassword = true;
+  // Set when AuthService.logIn reports this email has no account at all
+  // (see AuthService.logIn's 'EMAIL_NOT_REGISTERED' sentinel) — shown as
+  // its own prompt with a "Create One" action instead of the generic
+  // wrong-password message, since those are genuinely different problems.
+  bool _emailNotRegistered = false;
 
   bool get _isAdmin => widget.role == 'admin';
 
@@ -60,10 +67,18 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
   void initState() {
     super.initState();
     if (_isAdmin) _loadSavedAdminCredentials();
+    _emailController.addListener(_onEmailEdited);
+  }
+
+  // Retyping the email after an "Email not registered" result clears that
+  // prompt — otherwise it'd keep showing against a different address.
+  void _onEmailEdited() {
+    if (_emailNotRegistered) setState(() => _emailNotRegistered = false);
   }
 
   @override
   void dispose() {
+    _emailController.removeListener(_onEmailEdited);
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
@@ -99,7 +114,10 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
       _showMessage('Please enter your email and password.');
       return;
     }
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _emailNotRegistered = false;
+    });
     final error = await _authService.logIn(
       email: email,
       password: password,
@@ -114,6 +132,15 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
       setState(() => _loading = false);
       final registeredRole = error.substring('ROLE_MISMATCH:'.length);
       showRoleMismatchDialog(context, registeredRole);
+      return;
+    }
+
+    if (error == 'EMAIL_NOT_REGISTERED') {
+      if (_isAdmin) AuditLogService.logPreAuth(AuditAction.loginFailed, email: email, details: error);
+      setState(() {
+        _loading = false;
+        _emailNotRegistered = true;
+      });
       return;
     }
 
@@ -178,6 +205,10 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
     if (!mounted) return;
     setState(() => _loading = false);
+    if (result.isSignedIn && (role == 'farmer' || role == 'buyer')) {
+      await NotificationPermissionPrompt.instance.afterLogin(context);
+    }
+    if (!mounted) return;
     // pushAndRemoveUntil (inside applyAuthRouteResult) clears splash/
     // role-selection/login from the stack, so the back button on Home has
     // nothing left to pop to.
@@ -238,6 +269,11 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
         }
 
         if (!mounted) return;
+        if (routeResult.isSignedIn &&
+            (routeResult.role == 'farmer' || routeResult.role == 'buyer')) {
+          await NotificationPermissionPrompt.instance.afterLogin(context);
+        }
+        if (!mounted) return;
         setState(() => _googleLoading = false);
         await applyAuthRouteResult(context, routeResult);
         return;
@@ -246,6 +282,63 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
   void _showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  // Shown instead of the generic wrong-password message when AuthService
+  // .logIn reports this email has no account at all. The admin door has
+  // no sign-up flow (see the class doc comment), so it just states the
+  // fact without a Create One action.
+  Widget _emailNotRegisteredPrompt() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.shade300),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, color: Colors.amber.shade800, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Email not registered',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.amber.shade900),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  "There's no account with this email yet.",
+                  style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
+                ),
+                if (!_isAdmin) ...[
+                  const SizedBox(height: 6),
+                  TextButton(
+                    onPressed: () => Navigator.push(
+                      context,
+                      slideRoute(RegisterScreen(
+                        initialRole: widget.role ?? 'buyer',
+                        initialEmail: _emailController.text.trim(),
+                      )),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppTheme.dark,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Create One', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -297,6 +390,10 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
             onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
           ),
         ),
+        if (_emailNotRegistered) ...[
+          const SizedBox(height: 14),
+          _emailNotRegisteredPrompt(),
+        ],
         const SizedBox(height: 20),
         SizedBox(
           width: double.infinity,

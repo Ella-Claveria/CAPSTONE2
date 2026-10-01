@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'market_price_helpers.dart';
+import 'connectivity_service.dart';
 
 /// Handles chat conversations and messages between farmers and buyers.
 /// FCM token registration/cleanup lives in PushNotificationService (see
@@ -25,6 +26,11 @@ class MessageService {
       _firestore.collection('conversations');
 
   String get currentUid => _auth.currentUser!.uid;
+
+  Future<void> _requireOnline() async {
+    final error = await requireOnlineOrError();
+    if (error != null) throw StateError(error);
+  }
 
   /// Deterministic conversation id for a pair of users, independent of order.
   String conversationIdFor(String uidA, String uidB) {
@@ -50,6 +56,7 @@ class MessageService {
     bool deliveryAvailable = false,
     bool pickupOnly = false,
   }) async {
+    await _requireOnline();
     final currentUserId = FirebaseAuth.instance.currentUser!.uid;
     final currentUser = FirebaseAuth.instance.currentUser!;
     final userSnapshot = await FirebaseFirestore.instance
@@ -113,6 +120,7 @@ class MessageService {
     required int wholesaleMinimumQuantity,
     required int retailMaximumQuantity,
   }) async {
+    await _requireOnline();
     final me = _auth.currentUser!;
     final convRef = _conversations.doc(conversationId);
     final msgRef = convRef.collection('messages').doc();
@@ -145,7 +153,51 @@ class MessageService {
         .doc(conversationId)
         .collection('messages')
         .orderBy('createdAt', descending: true)
-        .snapshots();
+        .snapshots(includeMetadataChanges: true);
+  }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> typingStream(
+    String conversationId,
+    String uid,
+  ) => _conversations
+      .doc(conversationId)
+      .collection('typing')
+      .doc(uid)
+      .snapshots();
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> readReceiptStream(
+    String conversationId,
+    String uid,
+  ) => _conversations
+      .doc(conversationId)
+      .collection('reads')
+      .doc(uid)
+      .snapshots();
+
+  Future<void> setTyping(String conversationId, bool isTyping) async {
+    await _conversations
+        .doc(conversationId)
+        .collection('typing')
+        .doc(currentUid)
+        .set({'isTyping': isTyping, 'updatedAt': FieldValue.serverTimestamp()});
+  }
+
+  Future<void> toggleLike(String conversationId, String messageId) async {
+    await _requireOnline();
+    final ref = _conversations
+        .doc(conversationId)
+        .collection('messages')
+        .doc(messageId);
+    await _firestore.runTransaction((transaction) async {
+      final snapshot = await transaction.get(ref);
+      if (!snapshot.exists) return;
+      final likes = Map<String, dynamic>.from(snapshot.data()?['likes'] ?? {});
+      if (likes[currentUid] == true) {
+        transaction.update(ref, {'likes.$currentUid': FieldValue.delete()});
+      } else {
+        transaction.update(ref, {'likes.$currentUid': true});
+      }
+    });
   }
 
   /// Real-time stream of conversations for the current user.
@@ -162,7 +214,9 @@ class MessageService {
     required String otherUserId,
     String? text,
     String? imageUrl,
+    Map<String, dynamic>? replyTo,
   }) async {
+    await _requireOnline();
     final trimmed = text?.trim() ?? '';
     if (trimmed.isEmpty && (imageUrl == null || imageUrl.isEmpty)) return;
 
@@ -180,6 +234,9 @@ class MessageService {
     }
     if (imageUrl != null && imageUrl.isNotEmpty) {
       messageData['imageUrl'] = imageUrl;
+    }
+    if (replyTo != null) {
+      messageData['replyTo'] = replyTo;
     }
 
     batch.set(msgRef, messageData);
@@ -202,6 +259,7 @@ class MessageService {
     required double latitude,
     required double longitude,
   }) async {
+    await _requireOnline();
     final me = _auth.currentUser!;
     final convRef = _conversations.doc(conversationId);
     final msgRef = convRef.collection('messages').doc();
@@ -229,6 +287,7 @@ class MessageService {
     required String imageUrl,
     String? text,
   }) async {
+    await _requireOnline();
     final caption = text?.trim() ?? '';
     if (imageUrl.isEmpty && caption.isEmpty) return;
 
@@ -258,9 +317,13 @@ class MessageService {
 
   /// Call when the user opens a conversation, to zero out their unread badge.
   Future<void> markConversationRead(String conversationId) async {
-    await _conversations.doc(conversationId).update({
-      'unreadCount.$currentUid': 0,
+    final conversation = _conversations.doc(conversationId);
+    final batch = _firestore.batch();
+    batch.update(conversation, {'unreadCount.$currentUid': 0});
+    batch.set(conversation.collection('reads').doc(currentUid), {
+      'lastReadAt': FieldValue.serverTimestamp(),
     });
+    await batch.commit();
   }
 
   String otherParticipant(List<dynamic> participants) {

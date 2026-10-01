@@ -55,12 +55,22 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     if (user != null) {
       final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
       final data = doc.data();
+      // Exact coordinates live under users/{uid}/private/geo, not on the
+      // main doc just read above — only this account (the owner) or an
+      // admin can read it (see firestore.rules).
+      final geoDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('private')
+          .doc('geo')
+          .get();
+      final geo = geoDoc.data();
+      _latitude = (geo?['latitude'] as num?)?.toDouble();
+      _longitude = (geo?['longitude'] as num?)?.toDouble();
       if (data != null) {
         _phoneController.text = data['phone']?.toString() ?? '';
         _photoUrl = data['photoUrl']?.toString();
         _role = data['role']?.toString();
-        _latitude = (data['latitude'] as num?)?.toDouble();
-        _longitude = (data['longitude'] as num?)?.toDouble();
         // Combine barangay/municipality/province into one display string,
         // matching how ProfileTab shows location. Adjust field names here
         // if your schema differs.

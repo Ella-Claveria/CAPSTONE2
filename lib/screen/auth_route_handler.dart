@@ -1,14 +1,17 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../services/auth_routing_service.dart';
 import '../services/auth_service.dart';
+import '../services/session_timeout_service.dart';
 import 'admin_dashboard_screen.dart';
 import 'buyer_marketplace_screen.dart';
 import 'farmer_home_screen.dart';
 import 'login_screen.dart';
 import 'pending_approval_screen.dart';
 import 'role_selection_screen.dart';
+import 'email_verification_screen.dart';
 
 /// Turns an [AuthRouteResult] into the actual navigation it implies —
 /// the one place every login entry point (LoginFormFields, the "continue
@@ -20,6 +23,9 @@ import 'role_selection_screen.dart';
 /// back button can never return to a screen that belonged to a role/session
 /// that's no longer valid.
 Future<void> applyAuthRouteResult(BuildContext context, AuthRouteResult result) async {
+  if (result.isSignedIn) {
+    SessionTimeoutService.instance.recordActivity();
+  }
   switch (result.decision) {
     case AuthRouteDecision.farmerHome:
       _replaceWith(context, const FarmerHomeScreen());
@@ -29,6 +35,13 @@ Future<void> applyAuthRouteResult(BuildContext context, AuthRouteResult result) 
       return;
     case AuthRouteDecision.buyerHome:
       _replaceWith(context, const BuyerMarketplaceScreen());
+      return;
+    case AuthRouteDecision.emailVerificationRequired:
+      _replaceWith(context, EmailVerificationScreen(
+        role: result.role ?? 'buyer',
+        email: FirebaseAuth.instance.currentUser?.email ?? '',
+        sendInitialEmail: false,
+      ));
       return;
     case AuthRouteDecision.adminDashboard:
       _replaceWith(context, AdminDashboardScreen());

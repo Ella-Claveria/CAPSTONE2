@@ -69,6 +69,15 @@ class PrivacyPolicyScreen extends StatelessWidget {
           'demand analytics.',
       'Your precise location is not publicly displayed to other users.',
     ]),
+    _LegalSection('E3. Sharing Your Location in Chat', [
+      'Separately from the general location handling above, either party in '
+          'a conversation may choose to share their current precise location '
+          'as a chat message, for example to coordinate a pick-up or delivery.',
+      'This is optional and only happens when you tap "Share location" and '
+          'confirm — it is never sent automatically.',
+      'A location shared this way is visible only to the other participant '
+          'in that conversation, as part of the message history.',
+    ]),
     _LegalSection('F. Data Privacy Act', [
       'AgriTrade+ is designed to handle personal information in accordance '
           'with applicable data privacy requirements, including the principles '

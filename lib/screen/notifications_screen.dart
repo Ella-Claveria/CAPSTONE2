@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../services/connectivity_service.dart';
 import '../services/notification_navigation_service.dart';
 import '../services/push_notification_service.dart';
+import '../widgets/permission_rationale_dialog.dart';
+import '../widgets/retry_message.dart';
 
 /// Reads notifications/{uid}/items — written by Cloud Functions
 /// (functions/index.js) whenever a new message, new order, order status
@@ -35,10 +37,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           .doc(uid)
           .collection('items');
     }
-    // The permission explanation + request itself now happens on the user's
-    // very first tap anywhere in the app (see NotificationPermissionPrompt),
-    // so by the time they've navigated here it's already been decided —
-    // this just keeps the FCM token fresh (a silent no-op otherwise).
+    // Refreshes the token only when OS permission is already granted. This
+    // call never opens a permission prompt.
     PushNotificationService().setupFCM().catchError((_) {});
     _checkPermission();
   }
@@ -171,7 +171,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     return const Center(child: CircularProgressIndicator(color: _dark));
                   }
                   if (snapshot.hasError) {
-                    return const Center(child: Text('Error loading notifications. Please try again.'));
+                    return RetryMessage(
+                      message: 'Could not load notifications. Check your connection and try again.',
+                      onRetry: () => setState(() {}),
+                    );
                   }
 
                   if (docs.isEmpty) {
@@ -251,7 +254,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     height: 32,
                     child: OutlinedButton(
                       onPressed: () async {
-                        await PushNotificationService().setupFCM();
+                        final proceed = await showPermissionRationale(
+                          context,
+                          icon: Icons.notifications_active_outlined,
+                          title: 'Stay Updated with AgriTrade+',
+                          message: 'Payagan ang notifications para makatanggap ka ng updates tungkol sa orders, messages, verification status, delivery o pick-up, warnings, at ibang importanteng marketplace activities.',
+                          denyLabel: 'Not Now',
+                          allowLabel: 'Enable Notifications',
+                        );
+                        if (proceed) {
+                          await PushNotificationService().setupFCM(requestPermission: true);
+                        }
                         _checkPermission();
                       },
                       style: OutlinedButton.styleFrom(
@@ -353,3 +366,5 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 }
+
+

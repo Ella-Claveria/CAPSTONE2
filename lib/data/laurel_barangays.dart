@@ -93,3 +93,16 @@ bool isWithinLaurel(double lat, double lng) {
   return Geolocator.distanceBetween(lat, lng, kLaurelCenterLat, kLaurelCenterLng) <=
       kLaurelMaxRadiusMeters;
 }
+
+// Buyer registration (BuyerLocationField) isn't restricted to Laurel like
+// farmers are — a buyer may be anywhere in the Philippines. Used as a
+// sanity check on whatever coordinate the buyer location popup comes back
+// with (a GPS fix, or a forward-geocoded manual pick) — a generous
+// bounding box (not a precise coastline), padded past the northernmost
+// (Batanes, ~21.1°N) and southernmost (Tawi-Tawi, ~4.6°N) islands and the
+// EEZ-adjacent longitude range, so it only rejects a coordinate that's
+// unambiguously outside PH (e.g. another country or the open ocean), never
+// a real edge-of-the-map barangay.
+bool isWithinPhilippines(double lat, double lng) {
+  return lat >= 4.0 && lat <= 21.5 && lng >= 116.0 && lng <= 127.0;
+}

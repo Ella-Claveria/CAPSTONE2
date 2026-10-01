@@ -36,15 +36,13 @@ class PushNotificationService {
   static RemoteMessage? _pendingInitialMessage;
   static bool _initialMessageChecked = false;
 
-  Future<void> setupFCM() async {
+  Future<void> setupFCM({bool requestPermission = false}) async {
     try {
       // On web this can fail if messaging is unavailable (service worker/
       // permission/browser mode). Do not block app startup for this.
-      NotificationSettings settings = await _fcm.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
+      final settings = requestPermission
+          ? await _fcm.requestPermission(alert: true, badge: true, sound: true)
+          : await _fcm.getNotificationSettings();
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
         final token = await _fcm.getToken();

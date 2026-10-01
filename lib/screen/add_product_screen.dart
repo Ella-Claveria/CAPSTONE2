@@ -46,15 +46,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final CloudinaryService _cloudinaryService = CloudinaryService();
 
   String? _category;
-  // Derived from the Commodity Master List so this always has every category
-  // the admin's approved commodities actually use (Grains, Root Crops,
-  // Vegetables, Spices, Fruits, Livestock, Fisheries) — never a separately
-  // hand-maintained list that can drift out of sync.
-  final List<String> _categories = kCommodityMasterList.keys.toList();
-
-  // Tracks the category we last auto-filled, so a farmer's own manual pick
-  // is never silently overwritten — see _onNameChanged below.
-  String? _lastAutoDetectedCategory;
 
   // The official Commodity Master List entry this listing represents (see
   // commodity_master_list.dart) — optional, separate from the free-text
@@ -68,6 +59,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
   bool _wholesaleEnabled = false;
   bool _loading = false;
   bool _isArchived = false;
+  bool _confirmingExit = false;
+  bool _allowPop = false;
 
   // Single photo slot. Holds either a freshly-picked file (+ preview bytes)
   // or an existing URL (when editing).
@@ -97,29 +90,29 @@ class _AddProductScreenState extends State<AddProductScreen> {
         .collection('products')
         .snapshots()
         .listen((snap) {
-      if (mounted) setState(() => _liveProducts = snap.docs);
-    });
+          if (mounted) setState(() => _liveProducts = snap.docs);
+        });
     _ordersSub = FirebaseFirestore.instance
         .collection('orders')
         .where('status', isEqualTo: 'completed')
         .snapshots()
         .listen((snap) {
-      if (mounted) setState(() => _completedOrders = snap.docs);
-    });
+          if (mounted) setState(() => _completedOrders = snap.docs);
+        });
     _marketPricesSub = FirebaseFirestore.instance
         .collection('market_prices')
         .snapshots()
         .listen((snap) {
-      if (mounted) setState(() => _marketPrices = snap.docs);
-    });
+          if (mounted) setState(() => _marketPrices = snap.docs);
+        });
     // Aggregated only — see PriceRecommendation.searchCount's doc comment;
     // no individual buyer/search record is ever surfaced to the farmer.
     _searchEventsSub = FirebaseFirestore.instance
         .collection('searchEvents')
         .snapshots()
         .listen((snap) {
-      if (mounted) setState(() => _searchEvents = snap.docs);
-    });
+          if (mounted) setState(() => _searchEvents = snap.docs);
+        });
   }
 
   double? _numField(Map<String, dynamic> data, String field) {
@@ -142,7 +135,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
   // never a guessed number (client requirement: supported commodities
   // only).
   String? get _matchedCommodity =>
-      _selectedCommodity ?? matchSupportedCommodity(_nameController.text.trim());
+      _selectedCommodity ??
+      matchSupportedCommodity(_nameController.text.trim());
 
   // The Unit of Measurement for the currently-selected commodity (see
   // commodity_master_list.dart's kCommodityUnits) — drives the Available
@@ -168,11 +162,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
       final quantity = _numField(data, 'quantity') ?? 0;
       if (quantity <= 0) continue;
       final matchesCommodity =
-          (data['commodity']?.toString().toLowerCase() == commodity.toLowerCase()) ||
-              PriceRecommendationService.namesLikelyMatch(
-                commodity,
-                (data['name'] ?? '').toString(),
-              );
+          (data['commodity']?.toString().toLowerCase() ==
+              commodity.toLowerCase()) ||
+          PriceRecommendationService.namesLikelyMatch(
+            commodity,
+            (data['name'] ?? '').toString(),
+          );
       if (!matchesCommodity) continue;
       final listingUnit = (data['unit'] ?? '').toString().trim();
       if (listingUnit.isNotEmpty && listingUnit != _currentUnit) continue;
@@ -180,8 +175,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
       double? price;
       if (isWholesale) {
         final wholesale = _numField(data, 'wholesalePrice');
-        final enabled = data['wholesaleEnabled'] == true ||
-            (data['wholesaleEnabled'] == null && wholesale != null && wholesale > 0);
+        final enabled =
+            data['wholesaleEnabled'] == true ||
+            (data['wholesaleEnabled'] == null &&
+                wholesale != null &&
+                wholesale > 0);
         if (!enabled) continue;
         price = wholesale;
       } else {
@@ -204,7 +202,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
         continue;
       }
 
-      final storedType = (data['pricingType'] ?? 'retail').toString().toLowerCase();
+      final storedType = (data['pricingType'] ?? 'retail')
+          .toString()
+          .toLowerCase();
       if (isWholesale ? storedType != 'wholesale' : storedType == 'wholesale') {
         continue;
       }
@@ -218,7 +218,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
       if (price != null && price > 0) {
         transactions.add((
           price: price,
-          date: _dateField(data, 'completedAt') ?? _dateField(data, 'createdAt'),
+          date:
+              _dateField(data, 'completedAt') ?? _dateField(data, 'createdAt'),
         ));
       }
     }
@@ -295,18 +296,23 @@ class _AddProductScreenState extends State<AddProductScreen> {
       _wholesaleMinimumController.text =
           (data['wholesaleMinimumQuantity'] as num?)?.toString() ?? '10';
       final existingWholesale = (data['wholesalePrice'] as num?)?.toDouble();
-      _wholesaleEnabled = data['wholesaleEnabled'] == true ||
-          (data['wholesaleEnabled'] == null && existingWholesale != null && existingWholesale > 0);
+      _wholesaleEnabled =
+          data['wholesaleEnabled'] == true ||
+          (data['wholesaleEnabled'] == null &&
+              existingWholesale != null &&
+              existingWholesale > 0);
       _quantityController.text = (data['quantity'] as num?)?.toString() ?? '';
       _descriptionController.text = data['description']?.toString() ?? '';
       final category = data['category']?.toString();
-      if (category != null && _categories.contains(category)) {
-        _category = category;
-      }
       final commodity = data['commodity']?.toString();
       if (commodity != null && kSupportedCommodities.contains(commodity)) {
         _selectedCommodity = commodity;
       }
+      _category =
+          categoryOfCommodity(
+            matchSupportedCommodity(_nameController.text.trim()) ?? '',
+          ) ??
+          category;
       _deliveryAvailable = data['deliveryAvailable'] == true;
       _pickupOnly = data['pickupOnly'] == true;
       _isArchived = data['isArchived'] == true;
@@ -327,23 +333,16 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _listenToMarketData();
   }
 
-  // Product Name now doubles as the commodity picker (it's restricted to
-  // the Commodity Master List — see _save()'s unsupported-product gate), so
-  // as soon as it resolves to a supported commodity, auto-fill Category to
-  // match. Only touches Category while it's still showing our own last
-  // suggestion (or is empty) — a farmer's own manual pick is never
-  // silently overwritten.
+  // Category is always derived from the current product name; it cannot be
+  // independently changed by the farmer.
   void _onNameChanged() {
-    final matched = matchSupportedCommodity(_nameController.text.trim());
-    if (matched != null) {
-      final detected = categoryOfCommodity(matched);
-      if (detected != null &&
-          _categories.contains(detected) &&
-          (_category == null || _category == _lastAutoDetectedCategory)) {
-        _category = detected;
-        _lastAutoDetectedCategory = detected;
-      }
+    final name = _nameController.text.trim();
+    if (_selectedCommodity != null &&
+        _selectedCommodity!.toLowerCase() != name.toLowerCase()) {
+      _selectedCommodity = null;
     }
+    final matched = matchSupportedCommodity(name);
+    _category = matched == null ? null : categoryOfCommodity(matched);
     setState(() {});
   }
 
@@ -457,14 +456,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     );
   }
 
-  void _removeImage() {
-    setState(() {
-      _file = null;
-      _bytes = null;
-      _imageUrl = null;
-    });
-  }
-
   Future<void> _save() async {
     final name = _nameController.text.trim();
     final priceText = _priceController.text.trim();
@@ -473,6 +464,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final quantityText = _quantityController.text.trim();
     final description = _descriptionController.text.trim();
 
+    if (_file == null && (_imageUrl == null || _imageUrl!.isEmpty)) {
+      _showMessage('Please add a product photo.');
+      return;
+    }
     if (name.isEmpty || priceText.isEmpty || quantityText.isEmpty) {
       _showMessage('Please fill in name, price, and quantity.');
       return;
@@ -528,11 +523,15 @@ class _AddProductScreenState extends State<AddProductScreen> {
         wholesaleMinimum != null &&
         isCountBasedUnit(unit) &&
         wholesaleMinimum != wholesaleMinimum.roundToDouble()) {
-      _showMessage('Wholesale minimum quantity for $unit must be a whole number.');
+      _showMessage(
+        'Wholesale minimum quantity for $unit must be a whole number.',
+      );
       return;
     }
     if (_wholesaleEnabled && wholesaleMinimum! > quantity) {
-      _showMessage('Wholesale minimum cannot be greater than the available stock.');
+      _showMessage(
+        'Wholesale minimum cannot be greater than the available stock.',
+      );
       return;
     }
 
@@ -592,7 +591,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     setState(() => _loading = false);
     if (error == null) {
       _showMessage(_isEditing ? 'Product updated!' : 'Product posted!');
-      Navigator.pop(context);
+      _closeScreen();
     } else {
       _showMessage(error);
     }
@@ -639,7 +638,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
     setState(() => _loading = false);
     if (error == null) {
       _showMessage('Product deleted.');
-      Navigator.pop(context);
+      _closeScreen();
     } else {
       _showMessage(error);
     }
@@ -654,9 +653,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
     setState(() => _loading = false);
     if (error == null) {
       setState(() => _isArchived = !_isArchived);
-      _showMessage(_isArchived
-          ? 'Listing archived — hidden from the marketplace until you restore it.'
-          : 'Listing restored — visible in the marketplace again.');
+      _showMessage(
+        _isArchived
+            ? 'Listing archived — hidden from the marketplace until you restore it.'
+            : 'Listing restored — visible in the marketplace again.',
+      );
     } else {
       _showMessage(error);
     }
@@ -676,6 +677,52 @@ class _AddProductScreenState extends State<AddProductScreen> {
     );
   }
 
+  Future<void> _confirmExit() async {
+    if (_loading || _confirmingExit || _allowPop) return;
+    _confirmingExit = true;
+    final shouldLeave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Leave product posting?',
+          style: GoogleFonts.montserrat(fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          'Are you sure you want to leave? Your changes will not be saved.',
+          style: GoogleFonts.montserrat(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.montserrat(color: Colors.black54),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(
+              'Leave',
+              style: GoogleFonts.montserrat(color: _darkGreen),
+            ),
+          ),
+        ],
+      ),
+    );
+    _confirmingExit = false;
+    if (!mounted || shouldLeave != true) return;
+    _closeScreen();
+  }
+
+  void _closeScreen() {
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) Navigator.of(context).pop();
+    });
+  }
+
   void _openSupportedProducts() {
     Navigator.push(
       context,
@@ -690,8 +737,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Product not currently supported',
-            style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, fontSize: 16)),
+        title: Text(
+          'Product not currently supported',
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.w600,
+            fontSize: 16,
+          ),
+        ),
         content: Text(
           'AgriTrade+ currently supports selected commodities based on the system '
           'scope and available agricultural data. Please choose a product from the '
@@ -704,12 +756,20 @@ class _AddProductScreenState extends State<AddProductScreen> {
               Navigator.pop(context);
               _openSupportedProducts();
             },
-            child: Text('View Supported Products',
-                style: GoogleFonts.montserrat(color: _darkGreen, fontWeight: FontWeight.w600)),
+            child: Text(
+              'View Supported Products',
+              style: GoogleFonts.montserrat(
+                color: _darkGreen,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('OK', style: GoogleFonts.montserrat(color: Colors.black54)),
+            child: Text(
+              'OK',
+              style: GoogleFonts.montserrat(color: Colors.black54),
+            ),
           ),
         ],
       ),
@@ -731,7 +791,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.warning_amber_rounded, size: 18, color: Colors.amber.shade800),
+          Icon(
+            Icons.warning_amber_rounded,
+            size: 18,
+            color: Colors.amber.shade800,
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Column(
@@ -740,7 +804,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 Text(
                   'Not all goods are available to sell. AgriTrade+ currently supports '
                   'selected commodities only — choose a product from the supported list.',
-                  style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.black87, height: 1.35),
+                  style: GoogleFonts.montserrat(
+                    fontSize: 11.5,
+                    color: Colors.black87,
+                    height: 1.35,
+                  ),
                 ),
                 GestureDetector(
                   onTap: _openSupportedProducts,
@@ -773,9 +841,21 @@ class _AddProductScreenState extends State<AddProductScreen> {
         children: [
           Icon(Icons.straighten, size: 16, color: _midGreen),
           const SizedBox(width: 6),
-          Text('Unit of Measurement: ', style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.grey[700])),
-          Text(_currentUnit,
-              style: GoogleFonts.montserrat(fontSize: 12.5, fontWeight: FontWeight.bold, color: _darkGreen)),
+          Text(
+            'Unit of Measurement: ',
+            style: GoogleFonts.montserrat(
+              fontSize: 12.5,
+              color: Colors.grey[700],
+            ),
+          ),
+          Text(
+            _currentUnit,
+            style: GoogleFonts.montserrat(
+              fontSize: 12.5,
+              fontWeight: FontWeight.bold,
+              color: _darkGreen,
+            ),
+          ),
         ],
       ),
     );
@@ -917,26 +997,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       borderRadius: BorderRadius.circular(16),
                       child: _bytes != null
                           ? Image.memory(_bytes!, fit: BoxFit.cover)
-                          : Image.network(_imageUrl!, fit: BoxFit.cover),
-                    ),
-                    Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Material(
-                        color: Colors.black54,
-                        shape: const CircleBorder(),
-                        child: IconButton(
-                          padding: const EdgeInsets.all(4),
-                          constraints: const BoxConstraints(),
-                          icon: const Icon(
-                            Icons.close,
-                            color: Colors.white,
-                            size: 18,
-                          ),
-                          onPressed: _loading ? null : _removeImage,
-                          tooltip: 'Remove photo',
-                        ),
-                      ),
+                          : Image.network(
+                              _imageUrl!,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => Container(
+                                color: const Color(0xFFDCEDC8),
+                                alignment: Alignment.center,
+                                child: const Icon(
+                                  Icons.broken_image_outlined,
+                                  color: Color(0xFF1B5E20),
+                                ),
+                              ),
+                            ),
                     ),
                     Positioned(
                       bottom: 6,
@@ -1009,18 +1081,30 @@ class _AddProductScreenState extends State<AddProductScreen> {
           children: [
             Text(
               'Price recommendation currently unavailable',
-              style: GoogleFonts.montserrat(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+              style: GoogleFonts.montserrat(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 6),
             Text(
               'Not enough pricing data is available for this commodity yet. Please check again after '
               'the latest reference price has been provided or more marketplace data becomes available.',
-              style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 12, height: 1.4),
+              style: GoogleFonts.montserrat(
+                color: Colors.white70,
+                fontSize: 12,
+                height: 1.4,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
               'You can still set your own selling price below.',
-              style: GoogleFonts.montserrat(color: Colors.white60, fontSize: 10.5, fontStyle: FontStyle.italic),
+              style: GoogleFonts.montserrat(
+                color: Colors.white60,
+                fontSize: 10.5,
+                fontStyle: FontStyle.italic,
+              ),
             ),
           ],
         ),
@@ -1042,7 +1126,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
         children: [
           Row(
             children: [
-              Expanded(child: _statBlock('SUGGESTED PRICE', '₱${suggested.toStringAsFixed(2)} / $_currentUnit', big: true)),
+              Expanded(
+                child: _statBlock(
+                  'SUGGESTED PRICE',
+                  '₱${suggested.toStringAsFixed(2)} / $_currentUnit',
+                  big: true,
+                ),
+              ),
               Container(width: 1, height: 38, color: Colors.white24),
               const SizedBox(width: 14),
               Expanded(
@@ -1059,7 +1149,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
               Expanded(
                 child: _statBlock(
                   'REFERENCE PRICE',
-                  result.referencePrice != null ? '₱${result.referencePrice!.toStringAsFixed(2)} / $_currentUnit' : 'Not set',
+                  result.referencePrice != null
+                      ? '₱${result.referencePrice!.toStringAsFixed(2)} / $_currentUnit'
+                      : 'Not set',
                 ),
               ),
               Container(width: 1, height: 38, color: Colors.white24),
@@ -1079,7 +1171,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
             Text(
               'Reference price last updated: ${DateFormat('MMM d, y').format(result.referenceEffectiveDate!)}'
               '${result.referenceIsStale ? ' (may be outdated)' : ''}',
-              style: GoogleFonts.montserrat(color: Colors.white60, fontSize: 10.5),
+              style: GoogleFonts.montserrat(
+                color: Colors.white60,
+                fontSize: 10.5,
+              ),
             ),
           ],
           const SizedBox(height: 10),
@@ -1091,45 +1186,72 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ),
             child: Text(
               'Data Availability: ${result.tier.dataAvailabilityLabel}',
-              style: GoogleFonts.montserrat(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+              style: GoogleFonts.montserrat(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           const SizedBox(height: 12),
           Text(
             isColdStart
                 ? 'This recommendation is currently based mainly on the latest reference commodity price. '
-                    'Future recommendations will improve as AgriTrade+ collects more actual marketplace activity.'
+                      'Future recommendations will improve as AgriTrade+ collects more actual marketplace activity.'
                 : 'Based on the latest reference price, recent completed transactions, active listings, and '
-                    'current AgriTrade+ marketplace activity.',
-            style: GoogleFonts.montserrat(color: Colors.white70, fontSize: 11.5, height: 1.4),
+                      'current AgriTrade+ marketplace activity.',
+            style: GoogleFonts.montserrat(
+              color: Colors.white70,
+              fontSize: 11.5,
+              height: 1.4,
+            ),
           ),
           const SizedBox(height: 10),
           Text(
             'Based on:',
-            style: GoogleFonts.montserrat(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
+            style: GoogleFonts.montserrat(
+              color: Colors.white,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 6),
           if (result.referencePrice != null)
-            _basisLine(result.referenceIsStale
-                ? 'Latest reference commodity price (last updated a while ago)'
-                : 'Latest reference commodity price'),
-          if (result.transactionCount > 0) _basisLine('${result.transactionCount} recent completed transaction(s)'),
-          if (result.listingCount > 0) _basisLine('${result.listingCount} active listing(s)'),
-          if (result.usedSupplyDemand) _basisLine('Current supply and buyer demand'),
+            _basisLine(
+              result.referenceIsStale
+                  ? 'Latest reference commodity price (last updated a while ago)'
+                  : 'Latest reference commodity price',
+            ),
+          if (result.transactionCount > 0)
+            _basisLine(
+              '${result.transactionCount} recent completed transaction(s)',
+            ),
+          if (result.listingCount > 0)
+            _basisLine('${result.listingCount} active listing(s)'),
+          if (result.usedSupplyDemand)
+            _basisLine('Current supply and buyer demand'),
           if (isColdStart)
-            _basisLine('AgriTrade+ does not yet have enough marketplace transaction data for this product.')
+            _basisLine(
+              'AgriTrade+ does not yet have enough marketplace transaction data for this product.',
+            )
           else
-            _basisLine('Weighted toward actual completed sales over asking prices, and outlier-resistant.'),
+            _basisLine(
+              'Weighted toward actual completed sales over asking prices, and outlier-resistant.',
+            ),
           if (result.tier == PriceDataTier.limited)
-            _basisLine('Limited data so far — treat this as a rough starting point, not a confident market read.'),
+            _basisLine(
+              'Limited data so far — treat this as a rough starting point, not a confident market read.',
+            ),
           if (_wholesaleEnabled) ...[
             const SizedBox(height: 14),
             Divider(color: Colors.white.withValues(alpha: 0.28)),
             const SizedBox(height: 10),
             Builder(
               builder: (context) {
-                final wholesaleResult =
-                    _computeRecommendation(commodity, pricingType: 'wholesale');
+                final wholesaleResult = _computeRecommendation(
+                  commodity,
+                  pricingType: 'wholesale',
+                );
                 if (wholesaleResult.tier == PriceDataTier.insufficient) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1200,8 +1322,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     const SizedBox(height: 8),
                     OutlinedButton(
                       onPressed: () {
-                        _wholesalePriceController.text =
-                            wholesaleSuggested.toStringAsFixed(2);
+                        _wholesalePriceController.text = wholesaleSuggested
+                            .toStringAsFixed(2);
                         _showMessage(
                           'Wholesale suggested price applied — you can still edit it.',
                         );
@@ -1220,7 +1342,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
           const SizedBox(height: 10),
           Text(
             'This is an AI-assisted suggestion only — you always make the final pricing decision.',
-            style: GoogleFonts.montserrat(color: Colors.white60, fontSize: 10.5, fontStyle: FontStyle.italic),
+            style: GoogleFonts.montserrat(
+              color: Colors.white60,
+              fontSize: 10.5,
+              fontStyle: FontStyle.italic,
+            ),
           ),
           const SizedBox(height: 12),
           SizedBox(
@@ -1228,7 +1354,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
             child: ElevatedButton(
               onPressed: () {
                 _priceController.text = suggested.toStringAsFixed(2);
-                _showMessage('Suggested price applied — you can still edit it.');
+                _showMessage(
+                  'Suggested price applied — you can still edit it.',
+                );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
@@ -1342,262 +1470,240 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _lightGreenBg,
-      appBar: AppBar(
-        title: Text(
-          _isEditing ? 'Edit Product' : 'Add Product',
-          style: GoogleFonts.montserrat(
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
+    return PopScope<Object?>(
+      canPop: _allowPop,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _confirmExit();
+      },
+      child: Scaffold(
+        backgroundColor: _lightGreenBg,
+        appBar: AppBar(
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            tooltip: 'Back',
+            onPressed: _confirmExit,
           ),
-        ),
-        centerTitle: true,
-        backgroundColor: _darkGreen,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          if (_isEditing) ...[
-            IconButton(
-              icon: Icon(_isArchived ? Icons.unarchive_outlined : Icons.archive_outlined),
-              tooltip: _isArchived ? 'Restore listing' : 'Archive listing',
-              onPressed: _loading ? null : _toggleArchive,
+          title: Text(
+            _isEditing ? 'Edit Product' : 'Add Product',
+            style: GoogleFonts.montserrat(
+              fontWeight: FontWeight.bold,
+              fontSize: 18,
             ),
-            IconButton(
-              icon: const Icon(Icons.delete_outline),
-              tooltip: 'Delete',
-              onPressed: _loading ? null : _delete,
-            ),
-          ],
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _profileHeader(),
-            if (_isArchived) ...[
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.orange[50],
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.orange[200]!),
+          ),
+          centerTitle: true,
+          backgroundColor: _darkGreen,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          actions: [
+            if (_isEditing) ...[
+              IconButton(
+                icon: Icon(
+                  _isArchived
+                      ? Icons.unarchive_outlined
+                      : Icons.archive_outlined,
                 ),
-                child: Row(
-                  children: [
-                    Icon(Icons.archive_outlined, size: 18, color: Colors.orange[800]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'This listing is archived and hidden from the marketplace.',
-                        style: GoogleFonts.montserrat(fontSize: 12, color: Colors.orange[900]),
-                      ),
-                    ),
-                  ],
-                ),
+                tooltip: _isArchived ? 'Restore listing' : 'Archive listing',
+                onPressed: _loading ? null : _toggleArchive,
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: 'Delete',
+                onPressed: _loading ? null : _delete,
               ),
             ],
-            const SizedBox(height: 18),
-
-            // ---- Single photo slot ----
-            _imageSlot(),
-            const SizedBox(height: 20),
-
-            _label('Product Name'),
-            Autocomplete<String>(
-              textEditingController: _nameController,
-              focusNode: _nameFocusNode,
-              optionsBuilder: (value) {
-                final query = value.text.trim().toLowerCase();
-                if (query.isEmpty) return kSupportedCommodities;
-                return kSupportedCommodities.where((c) => c.toLowerCase().contains(query));
-              },
-              onSelected: (selection) => setState(() => _selectedCommodity = selection),
-              fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
-                return TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  style: GoogleFonts.montserrat(fontSize: 14),
-                  decoration: _inputDecoration('e.g., Eggplant'),
-                );
-              },
-              optionsViewBuilder: (context, onSelected, options) {
-                return Align(
-                  alignment: Alignment.topLeft,
-                  child: Material(
-                    elevation: 4,
-                    borderRadius: BorderRadius.circular(14),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220, maxWidth: 340),
-                      child: ListView.builder(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        shrinkWrap: true,
-                        itemCount: options.length,
-                        itemBuilder: (context, index) {
-                          final option = options.elementAt(index);
-                          return ListTile(
-                            dense: true,
-                            title: Text(option, style: GoogleFonts.montserrat(fontSize: 13.5)),
-                            subtitle: Text(categoryOfCommodity(option) ?? '',
-                                style: GoogleFonts.montserrat(fontSize: 10.5, color: Colors.grey[600])),
-                            onTap: () => onSelected(option),
-                          );
-                        },
-                      ),
-                    ),
+          ],
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _profileHeader(),
+              if (_isArchived) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.orange[50],
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.orange[200]!),
                   ),
-                );
-              },
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Start typing to pick a supported product (e.g., "egg" suggests "Eggplant").',
-              style: GoogleFonts.montserrat(fontSize: 11, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 8),
-            _supportedProductsBanner(),
-            const SizedBox(height: 8),
-            if (_matchedCommodity != null) _unitOfMeasurementDisplay(),
-
-            // ---- Category + Quantity side by side ----
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      _label('Category'),
-                      DropdownButtonFormField<String>(
-                        initialValue: _category,
-                        isExpanded: true,
-                        style: GoogleFonts.montserrat(
-                          color: Colors.black87,
-                          fontSize: 14,
-                        ),
-                        dropdownColor: Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        decoration: _inputDecoration('Select...'),
-                        hint: Text(
-                          'Select...',
+                      Icon(
+                        Icons.archive_outlined,
+                        size: 18,
+                        color: Colors.orange[800],
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'This listing is archived and hidden from the marketplace.',
                           style: GoogleFonts.montserrat(
-                            color: Colors.black38,
-                            fontSize: 13.5,
+                            fontSize: 12,
+                            color: Colors.orange[900],
                           ),
                         ),
-                        items: _categories
-                            .map(
-                              (c) => DropdownMenuItem(
-                                value: c,
-                                child: Text(
-                                  c,
-                                  style: GoogleFonts.montserrat(fontSize: 14),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) => setState(() {
-                          _category = value;
-                          // A deliberate manual pick — stop auto-detect from
-                          // overwriting it until the product name changes to
-                          // a different supported commodity.
-                          _lastAutoDetectedCategory = null;
-                        }),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _label('Available Stock ($_currentUnit)'),
-                      TextField(
-                        controller: _quantityController,
-                        keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
-                        style: GoogleFonts.montserrat(fontSize: 14),
-                        decoration: _inputDecoration('e.g., 50', suffix: Padding(
-                          padding: const EdgeInsets.only(right: 14),
-                          child: Text(_currentUnit,
-                              style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.grey[600])),
-                        )),
                       ),
                     ],
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 18),
+              const SizedBox(height: 18),
 
-            // ---- AI price recommendation (by product name) ----
-            _priceRecommendation(),
-            const SizedBox(height: 18),
+              // ---- Single photo slot ----
+              _imageSlot(),
+              const SizedBox(height: 20),
 
-            // ---- Retail Price ----
-            _label('Retail ${pricePerUnitLabel(_currentUnit)}'),
-            TextField(
-              controller: _priceController,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              style: GoogleFonts.montserrat(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
-              decoration: _inputDecoration(
-                '0.00',
-                prefix: Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text(
-                    '₱',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: _darkGreen,
+              _label('Product Name'),
+              Autocomplete<String>(
+                textEditingController: _nameController,
+                focusNode: _nameFocusNode,
+                optionsBuilder: (value) {
+                  final query = value.text.trim().toLowerCase();
+                  if (query.isEmpty) return kSupportedCommodities;
+                  return kSupportedCommodities.where(
+                    (c) => c.toLowerCase().contains(query),
+                  );
+                },
+                onSelected: (selection) => setState(() {
+                  _selectedCommodity = selection;
+                  _category = categoryOfCommodity(selection);
+                }),
+                fieldViewBuilder:
+                    (context, controller, focusNode, onSubmitted) {
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        style: GoogleFonts.montserrat(fontSize: 14),
+                        decoration: _inputDecoration('e.g., Eggplant'),
+                      );
+                    },
+                optionsViewBuilder: (context, onSelected, options) {
+                  return Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 4,
+                      borderRadius: BorderRadius.circular(14),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxHeight: 220,
+                          maxWidth: 340,
+                        ),
+                        child: ListView.builder(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          shrinkWrap: true,
+                          itemCount: options.length,
+                          itemBuilder: (context, index) {
+                            final option = options.elementAt(index);
+                            return ListTile(
+                              dense: true,
+                              title: Text(
+                                option,
+                                style: GoogleFonts.montserrat(fontSize: 13.5),
+                              ),
+                              subtitle: Text(
+                                categoryOfCommodity(option) ?? '',
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 10.5,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              onTap: () => onSelected(option),
+                            );
+                          },
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                suffix: Padding(
-                  padding: const EdgeInsets.only(right: 14),
-                  child: Text(
-                    'Php / $_currentUnit',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 13,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                ),
+                  );
+                },
               ),
-            ),
-            const SizedBox(height: 12),
-
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                'Offer Wholesale',
-                style: GoogleFonts.montserrat(fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                'Set a lower bulk price once the buyer reaches your minimum quantity.',
-                style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.grey[600]),
-              ),
-              activeThumbColor: _darkGreen,
-              value: _wholesaleEnabled,
-              onChanged: (value) => setState(() {
-                _wholesaleEnabled = value;
-                if (!value) _wholesalePriceController.clear();
-              }),
-            ),
-            if (_wholesaleEnabled) ...[
               const SizedBox(height: 4),
-              _label('Wholesale ${pricePerUnitLabel(_currentUnit)}'),
+              Text(
+                'Start typing to pick a supported product (e.g., "egg" suggests "Eggplant").',
+                style: GoogleFonts.montserrat(
+                  fontSize: 11,
+                  color: Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 8),
+              _supportedProductsBanner(),
+              const SizedBox(height: 8),
+              if (_matchedCommodity != null) _unitOfMeasurementDisplay(),
+
+              // ---- Category + Quantity side by side ----
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _label('Category'),
+                        InputDecorator(
+                          decoration: _inputDecoration(''),
+                          child: Text(
+                            _category ?? 'Select a product name first',
+                            style: GoogleFonts.montserrat(
+                              color: _category == null
+                                  ? Colors.black38
+                                  : Colors.black87,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _label('Available Stock ($_currentUnit)'),
+                        TextField(
+                          controller: _quantityController,
+                          keyboardType: TextInputType.numberWithOptions(
+                            decimal: !_isCountBasedUnit,
+                          ),
+                          style: GoogleFonts.montserrat(fontSize: 14),
+                          decoration: _inputDecoration(
+                            'e.g., 50',
+                            suffix: Padding(
+                              padding: const EdgeInsets.only(right: 14),
+                              child: Text(
+                                _currentUnit,
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 12.5,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+
+              // ---- AI price recommendation (by product name) ----
+              _priceRecommendation(),
+              const SizedBox(height: 18),
+
+              // ---- Retail Price ----
+              _label('Retail ${pricePerUnitLabel(_currentUnit)}'),
               TextField(
-                controller: _wholesalePriceController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                style: GoogleFonts.montserrat(fontSize: 15, fontWeight: FontWeight.w600),
+                controller: _priceController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                style: GoogleFonts.montserrat(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
                 decoration: _inputDecoration(
                   '0.00',
                   prefix: Padding(
@@ -1615,104 +1721,175 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     padding: const EdgeInsets.only(right: 14),
                     child: Text(
                       'Php / $_currentUnit',
-                      style: GoogleFonts.montserrat(fontSize: 13, color: Colors.grey[600]),
+                      style: GoogleFonts.montserrat(
+                        fontSize: 13,
+                        color: Colors.grey[600],
+                      ),
                     ),
                   ),
                 ),
               ),
               const SizedBox(height: 12),
-              _label('Minimum Wholesale Quantity ($_currentUnit)'),
-              TextField(
-                controller: _wholesaleMinimumController,
-                keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
-                style: GoogleFonts.montserrat(fontSize: 14),
-                decoration: _inputDecoration(
-                  'e.g., 20',
-                  suffix: Padding(
-                    padding: const EdgeInsets.only(right: 14),
-                    child: Text(
-                      _currentUnit,
-                      style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.grey[600]),
+
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  'Offer Wholesale',
+                  style: GoogleFonts.montserrat(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                subtitle: Text(
+                  'Set a lower bulk price once the buyer reaches your minimum quantity.',
+                  style: GoogleFonts.montserrat(
+                    fontSize: 11.5,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                activeThumbColor: _darkGreen,
+                value: _wholesaleEnabled,
+                onChanged: (value) => setState(() {
+                  _wholesaleEnabled = value;
+                  if (!value) _wholesalePriceController.clear();
+                }),
+              ),
+              if (_wholesaleEnabled) ...[
+                const SizedBox(height: 4),
+                _label('Wholesale ${pricePerUnitLabel(_currentUnit)}'),
+                TextField(
+                  controller: _wholesalePriceController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  style: GoogleFonts.montserrat(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  decoration: _inputDecoration(
+                    '0.00',
+                    prefix: Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(
+                        '₱',
+                        style: GoogleFonts.montserrat(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _darkGreen,
+                        ),
+                      ),
+                    ),
+                    suffix: Padding(
+                      padding: const EdgeInsets.only(right: 14),
+                      child: Text(
+                        'Php / $_currentUnit',
+                        style: GoogleFonts.montserrat(
+                          fontSize: 13,
+                          color: Colors.grey[600],
+                        ),
+                      ),
                     ),
                   ),
                 ),
+                const SizedBox(height: 12),
+                _label('Minimum Wholesale Quantity ($_currentUnit)'),
+                TextField(
+                  controller: _wholesaleMinimumController,
+                  keyboardType: TextInputType.numberWithOptions(
+                    decimal: !_isCountBasedUnit,
+                  ),
+                  style: GoogleFonts.montserrat(fontSize: 14),
+                  decoration: _inputDecoration(
+                    'e.g., 20',
+                    suffix: Padding(
+                      padding: const EdgeInsets.only(right: 14),
+                      child: Text(
+                        _currentUnit,
+                        style: GoogleFonts.montserrat(
+                          fontSize: 12.5,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+
+              // ---- Description ----
+              _label('Description'),
+              TextField(
+                controller: _descriptionController,
+                maxLines: 3,
+                style: GoogleFonts.montserrat(fontSize: 14),
+                decoration: _inputDecoration(
+                  'Tell buyers about how it was raised or grown...',
+                ),
+              ),
+              const SizedBox(height: 8),
+
+              // ---- Toggles ----
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  'Delivery Available',
+                  style: GoogleFonts.montserrat(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                activeThumbColor: _darkGreen,
+                value: _deliveryAvailable,
+                onChanged: (v) => setState(() => _deliveryAvailable = v),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  'Pick-up Only',
+                  style: GoogleFonts.montserrat(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                activeThumbColor: _darkGreen,
+                value: _pickupOnly,
+                onChanged: (v) => setState(() => _pickupOnly = v),
+              ),
+              const SizedBox(height: 16),
+
+              // ---- Post ----
+              ElevatedButton(
+                onPressed: _loading ? null : _save,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _darkGreen,
+                  disabledBackgroundColor: Colors.grey.shade400,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 15),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  elevation: 0,
+                ),
+                child: _loading
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : Text(
+                        _isEditing ? 'Update' : 'Post',
+                        style: GoogleFonts.montserrat(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
               ),
               const SizedBox(height: 12),
             ],
-
-            // ---- Description ----
-            _label('Description'),
-            TextField(
-              controller: _descriptionController,
-              maxLines: 3,
-              style: GoogleFonts.montserrat(fontSize: 14),
-              decoration: _inputDecoration(
-                'Tell buyers about how it was raised or grown...',
-              ),
-            ),
-            const SizedBox(height: 8),
-
-            // ---- Toggles ----
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                'Delivery Available',
-                style: GoogleFonts.montserrat(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              activeThumbColor: _darkGreen,
-              value: _deliveryAvailable,
-              onChanged: (v) => setState(() => _deliveryAvailable = v),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                'Pick-up Only',
-                style: GoogleFonts.montserrat(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              activeThumbColor: _darkGreen,
-              value: _pickupOnly,
-              onChanged: (v) => setState(() => _pickupOnly = v),
-            ),
-            const SizedBox(height: 16),
-
-            // ---- Post ----
-            ElevatedButton(
-              onPressed: _loading ? null : _save,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _darkGreen,
-                disabledBackgroundColor: Colors.grey.shade400,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 15),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                elevation: 0,
-              ),
-              child: _loading
-                  ? const SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: CircularProgressIndicator(
-                        color: Colors.white,
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : Text(
-                      _isEditing ? 'Update' : 'Post',
-                      style: GoogleFonts.montserrat(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-            ),
-            const SizedBox(height: 12),
-          ],
+          ),
         ),
       ),
     );

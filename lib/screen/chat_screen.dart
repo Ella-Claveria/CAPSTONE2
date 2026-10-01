@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -60,6 +61,14 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _sending = false;
+  Timer? _typingTimer;
+  Timer? _typingExpiryTimer;
+  Timer? _likeHoldTimer;
+  bool _typingActive = false;
+  Map<String, dynamic>? _replyTo;
+  double _horizontalDragDistance = 0;
+  String? _lastReadMarkedMessageId;
+  DateTime? _typingExpiryFor;
 
   String get _myUid => FirebaseAuth.instance.currentUser!.uid;
 
@@ -71,12 +80,154 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _controller.addListener(_onComposerChanged);
     // Zero out this user's unread badge for this thread as soon as they open it.
-    _messageService.markConversationRead(widget.conversationId);
+    _messageService.markConversationRead(widget.conversationId).catchError((_) {});
+  }
+
+  void _onComposerChanged() {
+    final isTyping = _controller.text.trim().isNotEmpty;
+    if (isTyping && !_typingActive) {
+      _typingActive = true;
+      _messageService.setTyping(widget.conversationId, true).catchError((_) {});
+    }
+    _typingTimer?.cancel();
+    if (isTyping) {
+      _typingTimer = Timer(const Duration(seconds: 3), _stopTyping);
+    } else {
+      _stopTyping();
+    }
+  }
+
+  void _stopTyping() {
+    _typingTimer?.cancel();
+    if (!_typingActive) return;
+    _typingActive = false;
+    _messageService.setTyping(widget.conversationId, false).catchError((_) {});
+  }
+
+  void _beginLikeHold(String messageId, Offset position) {
+    _likeHoldTimer?.cancel();
+    // Flutter's long-press recognizer starts after about half a second; this
+    // additional half-second makes the reaction appear after roughly 1s held.
+    _likeHoldTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) _showLikePicker(messageId, position);
+    });
+  }
+
+  Future<void> _showLikePicker(String messageId, Offset position) async {
+    final size = MediaQuery.of(context).size;
+    final reaction = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        (position.dx - 80).clamp(8, size.width - 8).toDouble(),
+        (position.dy - 64).clamp(8, size.height - 8).toDouble(),
+        (size.width - position.dx - 80).clamp(8, size.width - 8).toDouble(),
+        (size.height - position.dy).clamp(8, size.height - 8).toDouble(),
+      ),
+      items: const [
+        PopupMenuItem(value: 'like', child: Text('👍  Like')),
+      ],
+    );
+    if (reaction == 'like') {
+      try {
+        await _messageService.toggleLike(widget.conversationId, messageId);
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not react to this message.')),
+        );
+      }
+    }
+  }
+
+  Widget _lastMessageStatus(DateTime sentAt, bool isPending) {
+    if (isPending) {
+      return Text('Sending…', style: TextStyle(fontSize: 10, color: Colors.grey[500]));
+    }
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _messageService.readReceiptStream(widget.conversationId, widget.otherUserId),
+      builder: (context, snapshot) {
+        final raw = snapshot.data?.data()?['lastReadAt'];
+        final readAt = raw is Timestamp ? raw.toDate() : null;
+        final seen = readAt != null && !readAt.isBefore(sentAt);
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(seen ? Icons.done_all_rounded : Icons.done_rounded,
+                size: 12, color: seen ? Colors.blue : Colors.grey[500]),
+            const SizedBox(width: 3),
+            Text(seen ? 'Seen' : 'Sent',
+                style: TextStyle(fontSize: 10, color: seen ? Colors.blue : Colors.grey[500])),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _withDeliveryStatus(
+    Widget message, {
+    required bool isMe,
+    required bool isLastOutgoing,
+    required bool isPending,
+    required DateTime? time,
+  }) {
+    if (!isMe) return message;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        message,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: isLastOutgoing && time != null
+              ? _lastMessageStatus(time, isPending)
+              : Text(isPending ? 'Sending…' : 'Sent',
+                  style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+        ),
+      ],
+    );
+  }
+
+  Widget _typingIndicator() {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _messageService.typingStream(widget.conversationId, widget.otherUserId),
+      builder: (context, snapshot) {
+        final data = snapshot.data?.data();
+        final updatedAt = data?['updatedAt'];
+        final updated = updatedAt is Timestamp ? updatedAt.toDate() : null;
+        final active = data?['isTyping'] == true &&
+            updated != null &&
+            DateTime.now().difference(updated) < const Duration(seconds: 8);
+        if (active && updated != _typingExpiryFor) {
+          _typingExpiryFor = updated;
+          _typingExpiryTimer?.cancel();
+          final remaining = const Duration(seconds: 8) - DateTime.now().difference(updated);
+          _typingExpiryTimer = Timer(remaining.isNegative ? Duration.zero : remaining, () {
+            if (mounted) setState(() {});
+          });
+        }
+        if (!active) return const SizedBox(height: 4);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(18, 2, 18, 6),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('${widget.otherUserName} is typing…',
+                style: TextStyle(fontSize: 11, color: Colors.grey[600], fontStyle: FontStyle.italic)),
+          ),
+        );
+      },
+    );
   }
 
   @override
   void dispose() {
+    _typingTimer?.cancel();
+    _typingExpiryTimer?.cancel();
+    _likeHoldTimer?.cancel();
+    _controller.removeListener(_onComposerChanged);
+    if (_typingActive) {
+      _messageService.setTyping(widget.conversationId, false).catchError((_) {});
+    }
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -92,10 +243,44 @@ class _ChatScreenState extends State<ChatScreen> {
         conversationId: widget.conversationId,
         otherUserId: widget.otherUserId,
         text: text,
+        replyTo: _replyTo,
+      );
+      if (mounted) setState(() => _replyTo = null);
+    } catch (_) {
+      if (!mounted) return;
+      if (_controller.text.isEmpty) _controller.text = text;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No internet connection. Your message was not sent. Reconnect and try again.')),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  void _setReplyTarget(Map<String, dynamic> message, String messageId) {
+    final senderId = (message['senderId'] ?? '').toString();
+    final isMe = senderId == _myUid;
+    final text = (message['text'] ?? '').toString().trim();
+    final imageUrl = (message['imageUrl'] ?? '').toString();
+    final quote = text.isNotEmpty
+        ? text
+        : imageUrl.isNotEmpty
+            ? 'Photo'
+            : message['type'] == 'location'
+                ? 'Location'
+                : message['type'] == 'pricingOptions'
+                    ? 'Pricing options'
+                    : 'Message';
+    setState(() {
+      _replyTo = {
+        'messageId': messageId,
+        'senderId': senderId,
+        'senderName': isMe
+          ? (FirebaseAuth.instance.currentUser?.displayName ?? 'You')
+          : widget.otherUserName,
+        'text': quote,
+      };
+    });
   }
 
   Future<void> _sendImage() async {
@@ -143,7 +328,9 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to send image: $error')));
+      ).showSnackBar(
+        SnackBar(content: Text('Could not send image. Check your internet connection and try again. ($error)')),
+      );
     } finally {
       if (mounted) setState(() => _sending = false);
     }
@@ -198,7 +385,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not share your location. Please try again.')),
+        const SnackBar(content: Text('Could not share your location. Check your internet connection and try again.')),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -318,7 +505,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not send pricing options.')),
+        const SnackBar(content: Text('Could not send pricing options. Check your internet connection and try again.')),
       );
     }
   }
@@ -448,6 +635,19 @@ class _ChatScreenState extends State<ChatScreen> {
                   }
 
                   final docs = snapshot.data?.docs ?? [];
+                  final latestIncomingIndex = docs.indexWhere(
+                    (doc) => doc.data()['senderId'] != _myUid,
+                  );
+                  if (latestIncomingIndex >= 0 &&
+                      _lastReadMarkedMessageId != docs[latestIncomingIndex].id) {
+                    _lastReadMarkedMessageId = docs[latestIncomingIndex].id;
+                    _messageService
+                        .markConversationRead(widget.conversationId)
+                        .catchError((_) {});
+                  }
+                  final latestOutgoingIndex = docs.indexWhere(
+                    (doc) => doc.data()['senderId'] == _myUid,
+                  );
 
                   return RefreshIndicator(
                     color: _dark,
@@ -483,16 +683,54 @@ class _ChatScreenState extends State<ChatScreen> {
                               final imageUrl = data['imageUrl']?.toString();
                               final ts = data['createdAt'] as Timestamp?;
                               if (data['type'] == 'pricingOptions') {
-                                return _pricingOptionsMessage(data);
+                                return _replyGesture(
+                                  messageId: docs[i].id,
+                                  data: data,
+                                  isMe: isMe,
+                                  child: _withDeliveryStatus(
+                                    _reactableSpecialMessage(
+                                      docs[i].id,
+                                      _pricingOptionsMessage(data),
+                                      Map<String, dynamic>.from(data['likes'] ?? {}),
+                                    ),
+                                    isMe: isMe,
+                                    isLastOutgoing: i == latestOutgoingIndex,
+                                    isPending: docs[i].metadata.hasPendingWrites,
+                                    time: ts?.toDate(),
+                                  ),
+                                );
                               }
                               if (data['type'] == 'location') {
-                                return _locationMessage(data);
+                                return _replyGesture(
+                                  messageId: docs[i].id,
+                                  data: data,
+                                  isMe: isMe,
+                                  child: _withDeliveryStatus(
+                                    _reactableSpecialMessage(
+                                      docs[i].id,
+                                      _locationMessage(data),
+                                      Map<String, dynamic>.from(data['likes'] ?? {}),
+                                    ),
+                                    isMe: isMe,
+                                    isLastOutgoing: i == latestOutgoingIndex,
+                                    isPending: docs[i].metadata.hasPendingWrites,
+                                    time: ts?.toDate(),
+                                  ),
+                                );
                               }
                               return _messageBubble(
+                                docs[i].id,
                                 text,
                                 isMe,
                                 ts?.toDate(),
                                 imageUrl: imageUrl,
+                                isLastOutgoing: i == latestOutgoingIndex,
+                                isPending: docs[i].metadata.hasPendingWrites,
+                                likes: Map<String, dynamic>.from(data['likes'] ?? {}),
+                                replyTo: data['replyTo'] is Map
+                                    ? Map<String, dynamic>.from(data['replyTo'] as Map)
+                                    : null,
+                                onReply: isMe ? null : () => _setReplyTarget(data, docs[i].id),
                               );
                             },
                           ),
@@ -500,6 +738,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             ),
+            _typingIndicator(),
             _composer(),
           ],
         ),
@@ -508,18 +747,35 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _messageBubble(
+    String messageId,
     String text,
     bool isMe,
     DateTime? time, {
     String? imageUrl,
+    bool isLastOutgoing = false,
+    bool isPending = false,
+    Map<String, dynamic> likes = const {},
+    Map<String, dynamic>? replyTo,
+    VoidCallback? onReply,
   }) {
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Column(
-        crossAxisAlignment: isMe
-            ? CrossAxisAlignment.end
-            : CrossAxisAlignment.start,
-        children: [
+    return GestureDetector(
+      onLongPressStart: (details) => _beginLikeHold(messageId, details.globalPosition),
+      onLongPressEnd: (_) => _likeHoldTimer?.cancel(),
+      onHorizontalDragStart: (_) => _horizontalDragDistance = 0,
+      onHorizontalDragUpdate: (details) {
+        if (!isMe) _horizontalDragDistance += details.delta.dx;
+      },
+      onHorizontalDragEnd: (_) {
+        if (!isMe && _horizontalDragDistance > 48) onReply?.call();
+        _horizontalDragDistance = 0;
+      },
+      child: Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Column(
+          crossAxisAlignment: isMe
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+          children: [
           Container(
             margin: const EdgeInsets.symmetric(vertical: 3),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -547,6 +803,35 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (replyTo != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(7),
+                    margin: const EdgeInsets.only(bottom: 7),
+                    decoration: BoxDecoration(
+                      color: isMe ? Colors.white.withValues(alpha: 0.14) : const Color(0xFFEAF4E7),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border(left: BorderSide(color: isMe ? Colors.white70 : _dark, width: 3)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          replyTo['senderId'] == _myUid
+                              ? 'You'
+                              : (replyTo['senderName'] ?? 'Message').toString(),
+                          style: TextStyle(color: isMe ? Colors.white : _dark, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          (replyTo['text'] ?? '').toString(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: isMe ? Colors.white70 : Colors.black54, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 if (imageUrl != null && imageUrl.isNotEmpty)
                   ClipRRect(
                     borderRadius: BorderRadius.circular(14),
@@ -596,10 +881,69 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: TextStyle(fontSize: 10, color: Colors.grey[500]),
               ),
             ),
-        ],
+            if (likes.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(right: 5, bottom: 2),
+                child: Text('👍 ${likes.values.where((value) => value == true).length}',
+                    style: const TextStyle(fontSize: 11)),
+              ),
+            if (isMe)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: isLastOutgoing && time != null
+                    ? _lastMessageStatus(time, isPending)
+                    : Text(
+                        isPending ? 'Sending…' : 'Sent',
+                        style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                      ),
+              ),
+          ],
+        ),
       ),
     );
   }
+
+  Widget _replyGesture({
+    required String messageId,
+    required Map<String, dynamic> data,
+    required bool isMe,
+    required Widget child,
+  }) {
+    return GestureDetector(
+      onHorizontalDragStart: (_) => _horizontalDragDistance = 0,
+      onHorizontalDragUpdate: (details) {
+        if (!isMe) _horizontalDragDistance += details.delta.dx;
+      },
+      onHorizontalDragEnd: (_) {
+        if (!isMe && _horizontalDragDistance > 48) {
+          _setReplyTarget(data, messageId);
+        }
+        _horizontalDragDistance = 0;
+      },
+      child: child,
+    );
+  }
+
+  Widget _reactableSpecialMessage(
+    String messageId,
+    Widget message,
+    Map<String, dynamic> likes,
+  ) => GestureDetector(
+        onLongPressStart: (details) => _beginLikeHold(messageId, details.globalPosition),
+        onLongPressEnd: (_) => _likeHoldTimer?.cancel(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            message,
+            if (likes.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(right: 6, bottom: 2),
+                child: Text('👍 ${likes.values.where((value) => value == true).length}',
+                    style: const TextStyle(fontSize: 11)),
+              ),
+          ],
+        ),
+      );
 
   Widget _productPreview() {
     return InkWell(
@@ -788,12 +1132,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   children: [
                     Icon(Icons.location_on, size: 18, color: isMe ? Colors.white : _dark),
                     const SizedBox(width: 6),
-                    Text(
-                      isMe ? 'You shared your location' : '${widget.otherUserName} shared their location',
-                      style: TextStyle(
-                        color: isMe ? Colors.white : Colors.black87,
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
+                    Expanded(
+                      child: Text(
+                        isMe ? 'You shared your location' : '${widget.otherUserName} shared their location',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: isMe ? Colors.white : Colors.black87,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
                   ],
@@ -862,17 +1210,56 @@ class _ChatScreenState extends State<ChatScreen> {
         color: Colors.white,
         border: Border(top: BorderSide(color: Color(0xFFE0E0E0), width: 1)),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
+          if (_replyTo != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF2F6EF),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.reply_rounded, size: 17, color: _dark),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Replying to ${_replyTo!['senderName']}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                        Text('${_replyTo!['text']}', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: Colors.grey[700])),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Cancel reply',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => _replyTo = null),
+                    icon: const Icon(Icons.close, size: 17),
+                  ),
+                ],
+              ),
+            ),
+          Row(
+            children: [
           IconButton(
             tooltip: 'Send photo',
             onPressed: _sending ? null : _sendImage,
-            icon: const Icon(Icons.camera_alt_outlined, color: _dark),
+            constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+            padding: const EdgeInsets.all(2),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.camera_alt_outlined, color: _dark, size: 18),
           ),
           IconButton(
             tooltip: 'Share location',
             onPressed: _sending ? null : _shareLocation,
-            icon: const Icon(Icons.location_on_outlined, color: _dark),
+            constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+            padding: const EdgeInsets.all(2),
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.location_on_outlined, color: _dark, size: 18),
           ),
           Expanded(
             child: TextField(
@@ -882,6 +1269,7 @@ class _ChatScreenState extends State<ChatScreen> {
               textCapitalization: TextCapitalization.sentences,
               decoration: InputDecoration(
                 hintText: 'Message ${widget.otherUserName}...',
+                isDense: true,
                 filled: true,
                 fillColor: _bg,
                 contentPadding: const EdgeInsets.symmetric(
@@ -913,6 +1301,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 size: 20,
               ),
             ),
+          ),
+            ],
           ),
         ],
       ),

@@ -5,14 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'push_notification_service.dart';
 import '../widgets/permission_rationale_dialog.dart';
 
-/// Watches for the very first tap a logged-in user makes anywhere in the
-/// app and, if this device has never been asked before, that tap is the
-/// moment we explain and request notification access — rather than
-/// surprising a brand-new user with a system dialog before they've done
-/// anything, or waiting until they happen to open the Notifications screen.
-/// Covers both a newly-verified user's first login and an existing user's
-/// first tap on a fresh install (the SharedPreferences flag is per-device,
-/// so a reinstall naturally resets it).
+/// Offers notification access once, immediately after an existing user logs
+/// in on this device. Registration and email verification never call this.
 class NotificationPermissionPrompt {
   NotificationPermissionPrompt._();
   static final instance = NotificationPermissionPrompt._();
@@ -21,8 +15,8 @@ class NotificationPermissionPrompt {
 
   bool _handling = false;
 
-  Future<void> maybeHandleFirstTap(BuildContext? context) async {
-    if (_handling || context == null) return;
+  Future<void> afterLogin(BuildContext context) async {
+    if (_handling) return;
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     // Wait until the account is actually verified (email verification for
@@ -55,25 +49,13 @@ class NotificationPermissionPrompt {
         context,
         icon: Icons.notifications_active_outlined,
         title: 'Stay Updated with AgriTrade+',
-        message: "Enable notifications so you won't miss important activity in your account.",
-        bullets: const [
-          'New orders',
-          'Order status updates',
-          'New messages',
-          'Transaction confirmations',
-          'Farmer verification approval or rejection',
-          'Important admin notices',
-          'Account warnings',
-          'Suspension or ban updates',
-          'Other important marketplace activity',
-          'You can change notification permissions later in your device settings.',
-        ],
+        message: 'Payagan ang notifications para makatanggap ka ng updates tungkol sa orders, messages, verification status, delivery o pick-up, warnings, at ibang importanteng marketplace activities.',
         denyLabel: 'Not Now',
         allowLabel: 'Enable Notifications',
       );
       if (proceed) {
         try {
-          await PushNotificationService().setupFCM();
+          await PushNotificationService().setupFCM(requestPermission: true);
         } catch (_) {}
       }
     } catch (_) {
@@ -84,3 +66,6 @@ class NotificationPermissionPrompt {
     }
   }
 }
+
+
+

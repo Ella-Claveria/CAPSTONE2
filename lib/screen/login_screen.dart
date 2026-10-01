@@ -13,8 +13,15 @@ class LoginScreen extends StatefulWidget {
   // Only the web admin door passes a specific role ('admin'), for the
   // slightly tighter role-mismatch check.
   final String? role;
+  final String? flashMessage;
+  final bool disableBackNavigation;
 
-  const LoginScreen({super.key, this.role});
+  const LoginScreen({
+    super.key,
+    this.role,
+    this.flashMessage,
+    this.disableBackNavigation = false,
+  });
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -37,100 +44,158 @@ class _LoginScreenState extends State<LoginScreen> {
     final screenHeight = MediaQuery.sizeOf(context).height;
     // Keyboard up = give the form the room back instead of overflowing.
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-    final heroHeight = keyboardOpen ? 120.0 : (screenHeight * 0.36).clamp(200.0, 320.0);
+    final heroHeight = keyboardOpen
+        ? 120.0
+        : (screenHeight * 0.36).clamp(200.0, 320.0);
 
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: Stack(
-        children: [
-          // ---- Hero: brand gradient + the AgriTrade+ lockup ----
-          // Swap assets/images/login_hero.png for your own photo whenever
-          // you're ready — it just sits behind the logo lockup below.
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 200),
-            top: 0,
-            left: 0,
-            right: 0,
-            height: heroHeight,
-            child: LoginHero(showBranding: !keyboardOpen),
-          ),
+    return PopScope(
+      canPop: !widget.disableBackNavigation,
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: Stack(
+          children: [
+            // ---- Hero: brand gradient + the AgriTrade+ lockup ----
+            // Swap assets/images/login_hero.png for your own photo whenever
+            // you're ready — it just sits behind the logo lockup below.
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              top: 0,
+              left: 0,
+              right: 0,
+              height: heroHeight,
+              child: LoginHero(showBranding: !keyboardOpen),
+            ),
 
-          // ---- White sheet, overlapping the photo ----
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 200),
-            top: heroHeight - 32,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: DecoratedBox(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 24, offset: Offset(0, -8))],
-              ),
-              child: SafeArea(
-                top: false,
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(28, 36, 28, 24),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: kIsWeb ? 440 : double.infinity),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _LoginHeader(roleLabel: _roleLabel),
-                          const SizedBox(height: 26),
-                          LoginFormFields(role: widget.role),
-                          // Makes no sense for admin accounts (created
-                          // manually via the Firebase Console), so hidden
-                          // for that door.
-                          if (!_isAdmin) ...[
-                            const SizedBox(height: 14),
-                            Center(
-                              child: TextButton(
-                                onPressed: () {
-                                  Navigator.push(
-                                    context,
-                                    slideRoute(widget.role != null
-                                        ? RegisterScreen(initialRole: widget.role!)
-                                        : const RegisterScreen()),
-                                  );
-                                },
-                                child: RichText(
-                                  text: TextSpan(
-                                    style: const TextStyle(color: Colors.black87),
-                                    children: [
-                                      TextSpan(text: AppLocalizations.of(context)!.noAccountSignUp),
-                                      TextSpan(
-                                          text: AppLocalizations.of(context)!.createOne,
-                                          style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.dark)),
-                                    ],
+            // ---- White sheet, overlapping the photo ----
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              top: heroHeight - 32,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 24,
+                      offset: Offset(0, -8),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(28, 36, 28, 24),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: kIsWeb ? 440 : double.infinity,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _LoginHeader(roleLabel: _roleLabel),
+                            if (widget.flashMessage != null) ...[
+                              const SizedBox(height: 14),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.accent.withValues(
+                                    alpha: 0.35,
+                                  ),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Icon(
+                                      Icons.info_outline,
+                                      size: 18,
+                                      color: AppTheme.dark,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        widget.flashMessage!,
+                                        style: AppTheme.body(size: 12.5),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 26),
+                            LoginFormFields(role: widget.role),
+                            // Makes no sense for admin accounts (created
+                            // manually via the Firebase Console), so hidden
+                            // for that door.
+                            if (!_isAdmin) ...[
+                              const SizedBox(height: 14),
+                              Center(
+                                child: TextButton(
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      slideRoute(
+                                        widget.role != null
+                                            ? RegisterScreen(
+                                                initialRole: widget.role!,
+                                              )
+                                            : const RegisterScreen(),
+                                      ),
+                                    );
+                                  },
+                                  child: RichText(
+                                    text: TextSpan(
+                                      style: const TextStyle(
+                                        color: Colors.black87,
+                                      ),
+                                      children: [
+                                        TextSpan(
+                                          text: AppLocalizations.of(
+                                            context,
+                                          )!.noAccountSignUp,
+                                        ),
+                                        TextSpan(
+                                          text: AppLocalizations.of(
+                                            context,
+                                          )!.createOne,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.dark,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
 
-          if (!kIsWeb)
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
+            if (!kIsWeb && !widget.disableBackNavigation)
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -149,12 +214,20 @@ class _LoginHeader extends StatelessWidget {
       children: [
         Text(
           AppLocalizations.of(context)!.loginButton,
-          style: const TextStyle(fontSize: 28, color: AppTheme.dark, fontWeight: FontWeight.bold),
+          style: const TextStyle(
+            fontSize: 28,
+            color: AppTheme.dark,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         const SizedBox(height: 6),
         Text(
           roleLabel ?? AppLocalizations.of(context)!.loginSubtitle,
-          style: TextStyle(fontSize: 14, color: Colors.grey[600], fontWeight: FontWeight.w500),
+          style: TextStyle(
+            fontSize: 14,
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w500,
+          ),
         ),
       ],
     );

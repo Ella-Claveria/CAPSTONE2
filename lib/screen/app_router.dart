@@ -7,6 +7,7 @@ import 'onboarding_screen.dart';
 import 'page_transitions.dart';
 import 'auth_route_handler.dart';
 import '../services/auth_routing_service.dart';
+import '../services/auth_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/push_notification_service.dart';
 import '../services/session_timeout_service.dart';
@@ -111,6 +112,28 @@ class _AppRouterState extends State<AppRouter> {
       return;
     }
 
+    try {
+      await user.reload();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _offline = true);
+      return;
+    }
+    final refreshedUser = FirebaseAuth.instance.currentUser;
+    if (refreshedUser == null) {
+      if (!mounted) return;
+      _goTo(const RoleSelectionScreen());
+      return;
+    }
+    if (refreshedUser.emailVerified) {
+      final verificationError = await AuthService().refreshVerifiedEmailToken();
+      if (verificationError != null) {
+        if (!mounted) return;
+        setState(() => _offline = true);
+        return;
+      }
+    }
+
     // Always a live, server-confirmed read — never Firestore's local cache.
     // A stale cached doc could still show an old approval status or role,
     // which is exactly what this account must never be routed on.
@@ -119,7 +142,7 @@ class _AppRouterState extends State<AppRouter> {
     try {
       final live = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(refreshedUser.uid)
           .get(const GetOptions(source: Source.server))
           .timeout(const Duration(seconds: 8));
       data = live.data();
@@ -144,7 +167,11 @@ class _AppRouterState extends State<AppRouter> {
     // application was rejected after their last session, or — in
     // principle — an admin account somehow still signed in on this
     // device).
-    final result = AuthRoutingService.decideFromData(data);
+    final result = AuthRoutingService.decideFromData(
+      data,
+      emailVerified: refreshedUser.emailVerified,
+      authenticatedEmail: refreshedUser.email,
+    );
     await applyAuthRouteResult(context, result);
   }
 

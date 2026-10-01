@@ -8,9 +8,11 @@ import '../data/commodity_master_list.dart';
 import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
 import 'farmer_edit_profile_screen.dart';
+import 'farmer_reviews_screen.dart';
 import '../widgets/change_password_dialog.dart';
 import '../widgets/shimmer.dart';
 import '../widgets/skeleton_loaders.dart';
+import '../widgets/retry_message.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 class ProfileTab extends StatefulWidget {
@@ -165,10 +167,7 @@ class _ProfileTabState extends State<ProfileTab> {
         final data = snapshot.data?.data();
         final photoUrl = data?['photoUrl']?.toString() ?? user?.photoURL;
 
-        final ImageProvider? imageProvider =
-            (photoUrl != null && photoUrl.isNotEmpty)
-            ? NetworkImage(photoUrl)
-            : null;
+        final hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
 
         return GestureDetector(
           onTap: () => Navigator.push(
@@ -181,10 +180,18 @@ class _ProfileTabState extends State<ProfileTab> {
               CircleAvatar(
                 radius: 46,
                 backgroundColor: _accent,
-                backgroundImage: imageProvider,
-                child: imageProvider == null
-                    ? const Icon(Icons.person, color: _dark, size: 52)
-                    : null,
+                child: hasPhoto
+                    ? ClipOval(
+                        child: Image.network(
+                          photoUrl!,
+                          width: 92,
+                          height: 92,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) =>
+                              const Icon(Icons.person, color: _dark, size: 52),
+                        ),
+                      )
+                    : const Icon(Icons.person, color: _dark, size: 52),
               ),
               Positioned(
                 bottom: -2,
@@ -295,10 +302,19 @@ class _ProfileTabState extends State<ProfileTab> {
                     ),
                   );
                 }
+                if (snap.hasError) {
+                  return RetryMessage(
+                    message:
+                        'Could not load your listings. Check your connection and retry.',
+                    onRetry: () => setState(() {}),
+                  );
+                }
 
                 final showArchived = _productFilter == 'archived';
                 final docs = (snap.data?.docs ?? [])
-                    .where((d) => (d.data()['isArchived'] == true) == showArchived)
+                    .where(
+                      (d) => (d.data()['isArchived'] == true) == showArchived,
+                    )
                     .toList();
                 if (docs.isEmpty) {
                   return Padding(
@@ -362,7 +378,8 @@ class _ProfileTabState extends State<ProfileTab> {
     final quantity = data['quantity'];
     final unit = (data['unit'] as String?) ?? unitForProductName(name);
     final isArchived = data['isArchived'] == true;
-    final isOutOfStock = !isArchived && ((quantity as num?)?.toDouble() ?? 0) <= 0;
+    final isOutOfStock =
+        !isArchived && ((quantity as num?)?.toDouble() ?? 0) <= 0;
 
     final imageUrls =
         (data['imageUrls'] as List?)?.map((e) => e.toString()).toList() ?? [];
@@ -370,7 +387,9 @@ class _ProfileTabState extends State<ProfileTab> {
         ? imageUrls.first
         : data['imageUrl']?.toString();
 
-    final stockText = quantity is num ? 'Available Stock: ${formatStock(quantity, unit)}' : '';
+    final stockText = quantity is num
+        ? 'Available Stock: ${formatStock(quantity, unit)}'
+        : '';
     final subtitle = price != null
         ? '${formatPriceWithUnit(price, unit)}${stockText.isEmpty ? '' : ' · $stockText'}'
         : stockText;
@@ -386,6 +405,16 @@ class _ProfileTabState extends State<ProfileTab> {
                     width: 46,
                     height: 46,
                     fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Container(
+                      width: 46,
+                      height: 46,
+                      color: _accent,
+                      child: const Icon(
+                        Icons.eco_outlined,
+                        color: _dark,
+                        size: 22,
+                      ),
+                    ),
                   )
                 : Container(
                     width: 46,
@@ -404,13 +433,19 @@ class _ProfileTabState extends State<ProfileTab> {
                 child: Text(
                   name,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
               if (isArchived || isOutOfStock) ...[
                 const SizedBox(width: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: isArchived ? Colors.grey[300] : Colors.orange[100],
                     borderRadius: BorderRadius.circular(6),
@@ -435,7 +470,9 @@ class _ProfileTabState extends State<ProfileTab> {
               : null,
           trailing: PopupMenuButton<String>(
             icon: Icon(Icons.more_vert, color: Colors.grey[500]),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
             onSelected: (value) {
               switch (value) {
                 case 'edit':
@@ -469,7 +506,10 @@ class _ProfileTabState extends State<ProfileTab> {
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.inventory_2_outlined, color: _dark),
-                  title: Text('Update Quantity', style: TextStyle(fontSize: 14)),
+                  title: Text(
+                    'Update Quantity',
+                    style: TextStyle(fontSize: 14),
+                  ),
                 ),
               ),
               PopupMenuItem(
@@ -477,7 +517,9 @@ class _ProfileTabState extends State<ProfileTab> {
                 child: ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
-                    isArchived ? Icons.unarchive_outlined : Icons.archive_outlined,
+                    isArchived
+                        ? Icons.unarchive_outlined
+                        : Icons.archive_outlined,
                     color: isArchived ? _dark : Colors.orange[800],
                   ),
                   title: Text(
@@ -512,11 +554,33 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  Future<void> _setArchived(BuildContext context, String id, bool archive) async {
+  Future<void> _setArchived(
+    BuildContext context,
+    String id,
+    bool archive,
+  ) async {
     final error = archive
         ? await _productService.archiveProduct(id)
         : await _productService.unarchiveProduct(id);
     if (!context.mounted) return;
+    if (archive && error == ProductService.archiveBlockedByOrdersMessage) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Cannot archive product'),
+          content: const Text(
+            'This product has orders that are not finished yet. Resolve or complete those orders before archiving this product.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     _snack(
       context,
       error ??
@@ -537,11 +601,13 @@ class _ProfileTabState extends State<ProfileTab> {
     String unit,
   ) async {
     final countBased = isCountBasedUnit(unit);
-    final current = (currentQuantity as num?) ?? 0;
+    final current = currentQuantity is num
+        ? currentQuantity
+        : num.tryParse(currentQuantity?.toString() ?? '') ?? 0;
     final controller = TextEditingController(
       text: countBased ? current.toStringAsFixed(0) : current.toString(),
     );
-    final newQuantity = await showDialog<num>(
+    final newQuantity = await showDialog<num?>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -555,7 +621,9 @@ class _ProfileTabState extends State<ProfileTab> {
             TextField(
               controller: controller,
               autofocus: true,
-              keyboardType: TextInputType.numberWithOptions(decimal: !countBased),
+              keyboardType: TextInputType.numberWithOptions(
+                decimal: !countBased,
+              ),
               decoration: InputDecoration(
                 labelText: 'Available Stock ($unit)',
                 border: const OutlineInputBorder(),
@@ -565,32 +633,44 @@ class _ProfileTabState extends State<ProfileTab> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
+            onPressed: () => Navigator.of(dialogContext).pop<num?>(null),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               final parsed = num.tryParse(controller.text.trim());
               if (parsed == null || parsed < 0) {
-                _snack(dialogContext, 'Please enter a valid, non-negative quantity.');
+                _snack(
+                  dialogContext,
+                  'Please enter a valid, non-negative quantity.',
+                );
                 return;
               }
               if (countBased && parsed != parsed.roundToDouble()) {
-                _snack(dialogContext, 'Available Stock for $unit must be a whole number.');
+                _snack(
+                  dialogContext,
+                  'Available Stock for $unit must be a whole number.',
+                );
                 return;
               }
-              Navigator.pop(dialogContext, parsed);
+              Navigator.of(dialogContext).pop<num?>(parsed);
             },
-            child: const Text('Save', style: TextStyle(color: _dark, fontWeight: FontWeight.w600)),
+            child: const Text(
+              'Save',
+              style: TextStyle(color: _dark, fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),
     );
     controller.dispose();
-    if (newQuantity == null) return;
+    if (!context.mounted || newQuantity == null) return;
     final error = await _productService.updateQuantity(id, newQuantity);
     if (!context.mounted) return;
-    _snack(context, error ?? 'Available Stock updated to ${formatStock(newQuantity, unit)}.');
+    _snack(
+      context,
+      error ?? 'Available Stock updated to ${formatStock(newQuantity, unit)}.',
+    );
   }
 
   Widget _productReviews(String productId) {
@@ -603,10 +683,27 @@ class _ProfileTabState extends State<ProfileTab> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const SizedBox.shrink();
         }
+        if (snapshot.hasError) {
+          return const Padding(
+            padding: EdgeInsets.fromLTRB(72, 0, 16, 12),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Could not load reviews.'),
+            ),
+          );
+        }
         final reviews =
             snapshot.data?.docs ??
             const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-        if (reviews.isEmpty) {
+        final validReviews = reviews.where((review) {
+          final data = review.data();
+          final rating = data['rating'];
+          return data['moderationStatus'] != 'removed' &&
+              rating is num &&
+              rating >= 0.5 &&
+              rating <= 5;
+        }).toList();
+        if (validReviews.isEmpty) {
           return const Padding(
             padding: EdgeInsets.fromLTRB(72, 0, 16, 12),
             child: Align(
@@ -618,48 +715,123 @@ class _ProfileTabState extends State<ProfileTab> {
             ),
           );
         }
+        final ratingTotal = validReviews.fold<num>(
+          0,
+          (total, review) => total + (review.data()['rating'] as num),
+        );
+        final averageRating = ratingTotal / validReviews.length;
+
         return Padding(
           padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: reviews.take(3).map((review) {
-              final data = review.data();
-              final rating = (data['rating'] as num?)?.toInt() ?? 0;
-              final comment = data['comment']?.toString() ?? '';
-              return Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: List.generate(
-                        5,
-                        (index) => Icon(
-                          index < rating
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
+                  const SizedBox(width: 3),
+                  Text(
+                    '${averageRating.toStringAsFixed(1)} · ${validReviews.length} ${validReviews.length == 1 ? 'review' : 'reviews'}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+              ...validReviews.take(3).map((review) {
+                final data = review.data();
+                final rating = (data['rating'] as num).toDouble();
+                final comment = data['comment']?.toString() ?? '';
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: List.generate(
+                          5,
+                          (index) => Icon(
+                            rating >= index + 1
                               ? Icons.star_rounded
-                              : Icons.star_border_rounded,
-                          size: 14,
-                          color: index < rating
-                              ? Colors.amber
-                              : Colors.grey[400],
+                              : rating >= index + 0.5
+                                ? Icons.star_half_rounded
+                                : Icons.star_border_rounded,
+                            size: 14,
+                            color: rating >= index + 0.5
+                                ? Colors.amber
+                                : Colors.grey[400],
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        comment.isEmpty ? 'Rated by buyer' : comment,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black87,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          comment.isEmpty ? 'Rated by buyer' : comment,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.black87,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              );
-            }).toList(),
+                    ],
+                  ),
+                );
+              }),
+            ],
           ),
+        );
+      },
+    );
+  }
+
+  Widget _farmerRatingSummary() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return const SizedBox.shrink();
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('products')
+          .where('farmerId', isEqualTo: uid)
+          .snapshots(),
+      builder: (context, snapshot) {
+        var ratingPoints = 0.0;
+        var reviewCount = 0;
+        for (final product in snapshot.data?.docs ?? const []) {
+          final data = product.data();
+          final productRating = (data['rating'] as num?)?.toDouble() ?? 0;
+          final productReviewCount =
+              (data['reviewCount'] as num?)?.toInt() ?? 0;
+          if (productReviewCount <= 0 ||
+              productRating < 1 ||
+              productRating > 5) {
+            continue;
+          }
+          ratingPoints += productRating * productReviewCount;
+          reviewCount += productReviewCount;
+        }
+        final rating = reviewCount == 0 ? 0 : ratingPoints / reviewCount;
+        return Column(
+          children: [
+            Text(
+              reviewCount == 0
+                  ? 'No reviews yet'
+                  : '${rating.toStringAsFixed(1)} ★',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            if (reviewCount > 0)
+              Text(
+                '$reviewCount ${reviewCount == 1 ? 'Review' : 'Reviews'}',
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+            TextButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const FarmerReviewsScreen()),
+              ),
+              child: const Text('View All Reviews'),
+            ),
+          ],
         );
       },
     );
@@ -679,74 +851,79 @@ class _ProfileTabState extends State<ProfileTab> {
               child: ProfileTabSkeleton(),
             )
           : SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 90),
-        child: Column(
-          children: [
-            // ---- Hamburger menu (top right) — Account Settings / Help / Log Out ----
-            Padding(
-              padding: const EdgeInsets.only(right: 8, top: 4),
-              child: Align(
-                alignment: Alignment.topRight,
-                child: _menuButton(context),
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(bottom: 90),
+              child: Column(
+                children: [
+                  // ---- Hamburger menu (top right) — Account Settings / Help / Log Out ----
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8, top: 4),
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: _menuButton(context),
+                    ),
+                  ),
+
+                  // ---- Avatar with edit badge ----
+                  _avatarWithEditBadge(context),
+                  const SizedBox(height: 10),
+
+                  // ---- Name ----
+                  Text(
+                    name,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+
+                  // ---- Location ----
+                  StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user?.uid ?? 'unknown')
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final data = snap.data?.data();
+                      final barangay = data?['barangay']?.toString();
+                      final muni =
+                          data?['municipality']?.toString() ?? 'Laurel';
+                      final prov = data?['province']?.toString() ?? 'Batangas';
+                      final location = (barangay != null && barangay.isNotEmpty)
+                          ? '$barangay, $muni, $prov'
+                          : '$muni, $prov';
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.location_on_outlined,
+                            size: 15,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            location,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  _farmerRatingSummary(),
+                  const SizedBox(height: 24),
+
+                  // ---- My Products ----
+                  _myProductsSection(context),
+                  const SizedBox(height: 24),
+                ],
               ),
             ),
-
-            // ---- Avatar with edit badge ----
-            _avatarWithEditBadge(context),
-            const SizedBox(height: 10),
-
-            // ---- Name ----
-            Text(
-              name,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 6),
-
-            // ---- Location ----
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(user?.uid ?? 'unknown')
-                  .snapshots(),
-              builder: (context, snap) {
-                final data = snap.data?.data();
-                final barangay = data?['barangay']?.toString();
-                final muni = data?['municipality']?.toString() ?? 'Laurel';
-                final prov = data?['province']?.toString() ?? 'Batangas';
-                final location = (barangay != null && barangay.isNotEmpty)
-                    ? '$barangay, $muni, $prov'
-                    : '$muni, $prov';
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.location_on_outlined,
-                      size: 15,
-                      color: Colors.grey[600],
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      location,
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 24),
-
-            // ---- My Products ----
-            _myProductsSection(context),
-            const SizedBox(height: 24),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -5,7 +5,7 @@ import '../data/laurel_barangays.dart';
 import '../services/location_permission_prompt.dart';
 import '../theme/app_theme.dart';
 
-/// Farmer-only barangay picker (buyers use MyLocationField instead, since
+/// Farmer-only barangay picker (buyers use BuyerLocationField instead, since
 /// buyer registration isn't restricted to Laurel): a dropdown
 /// (kLaurelBarangays) plus a "Use my current location" action that
 /// requests GPS and snaps to the nearest real barangay via
@@ -133,11 +133,23 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
           decoration: AppTheme.inputBox(
             hint: 'Select your barangay',
             icon: Icons.location_on_outlined,
-            errorText: widget.errorText,
           ),
           items: kLaurelBarangays.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
           onChanged: widget.onChanged,
         ),
+        if (widget.errorText != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(widget.errorText!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+              ),
+            ],
+          ),
+        ],
         const SizedBox(height: 16),
       ],
     );

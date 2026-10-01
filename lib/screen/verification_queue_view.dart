@@ -4,10 +4,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert'; // Decodes Base64-embedded verification document images
 
-import '../services/auth_service.dart';
 import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/dashboard_analytics_service.dart';
+import '../services/dashboard_data_service.dart';
 import '../services/market_price_helpers.dart';
 import 'admin_dashboard_screen.dart' show AdminThemeScope;
 
@@ -24,68 +24,73 @@ class VerificationQueueView extends StatelessWidget {
     final c = AdminThemeScope.of(context).palette;
 
     return Padding(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(28.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Verification Queue',
-            style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: c.textPrimary),
+            style: TextStyle(fontSize: 30, height: 1.15, letterSpacing: -0.6, fontWeight: FontWeight.w800, color: c.textPrimary),
           ),
           Text(
             'Review and approve agricultural credentials for new farmers.',
-            style: TextStyle(color: c.textSecondary),
+            style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5),
           ),
           const SizedBox(height: 24),
 
           Expanded(
-            // Sourced from users (role == 'farmer' && approvalStatus ==
-            // 'pending') — the same canonical query as
-            // AuthService.getPendingFarmers() and the dashboard's pending
-            // count — NOT from verificationDocs. A farmer whose
-            // verificationDocs record is missing or malformed (an older
-            // registration, an interrupted upload, etc.) still has a real
-            // users/{uid} document, so they still need to show up here for
-            // an admin to act on; querying verificationDocs directly would
-            // silently exclude them, leaving no way to approve them short of
-            // the Firebase Console.
+            // Sourced from DashboardDataService's shared `users` stream (see
+            // its class doc) instead of a separate getPendingFarmers()
+            // listener — role == 'farmer' && approvalStatus == 'pending' (or
+            // missing — the same "missing defaults to pending" convention
+            // used everywhere else in the app) filtered client-side from the
+            // already-shared full collection. verificationDocs is read the
+            // same way — one shared stream, looked up per row — instead of
+            // this screen previously opening a brand-new live listener on
+            // verificationDocs/{uid} for every single pending farmer, torn
+            // down and resubscribed en masse on every unrelated update.
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: AuthService().getPendingFarmers(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+              stream: DashboardDataService.instance.usersStream,
+              builder: (context, usersSnap) {
+                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: DashboardDataService.instance.verificationDocsStream,
+                  builder: (context, verifSnap) {
+                    if (usersSnap.connectionState == ConnectionState.waiting) {
+                      return Center(child: CircularProgressIndicator(color: c.green));
+                    }
 
-                if (snapshot.hasError) {
-                  return Center(child: Text('Error loading queue.', style: TextStyle(color: c.textSecondary)));
-                }
+                    if (usersSnap.hasError) {
+                      return Center(child: Text('Error loading queue.', style: TextStyle(color: c.textSecondary)));
+                    }
 
-                // "Pending" here means approvalStatus == 'pending' OR the
-                // field is missing entirely (a legacy farmer account from
-                // before this field existed) — the same "missing defaults
-                // to pending" convention used everywhere else in the app,
-                // so a legacy account is never invisible/stuck with no way
-                // for an admin to ever approve them.
-                final docs = (snapshot.data?.docs ?? []).where((d) {
-                  final status = d.data()['approvalStatus'];
-                  return status == null || status == 'pending';
-                }).toList();
+                    final docs = (usersSnap.data?.docs ?? []).where((d) {
+                      final data = d.data();
+                      if (data['role'] != 'farmer') return false;
+                      final status = data['approvalStatus'];
+                      return status == null || status == 'pending';
+                    }).toList();
 
-                if (docs.isEmpty) {
-                  return Center(
-                    child: Text(
-                      'No pending verifications at this time.',
-                      style: TextStyle(fontSize: 18, color: c.textSecondary),
-                    ),
-                  );
-                }
+                    final verifByUid = <String, Map<String, dynamic>>{
+                      for (final d in verifSnap.data?.docs ?? const []) d.id: d.data(),
+                    };
 
-                return ListView.builder(
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final uid = docs[index].id;
-                    final profile = docs[index].data();
-                    return _farmerApplicationCard(context, uid, profile);
+                    if (docs.isEmpty) {
+                      return Center(
+                        child: Text(
+                          'No pending verifications at this time.',
+                          style: TextStyle(fontSize: 15, color: c.textSecondary),
+                        ),
+                      );
+                    }
+
+                    return ListView.builder(
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final uid = docs[index].id;
+                        final profile = docs[index].data();
+                        return _farmerApplicationCard(context, uid, profile, verifByUid[uid]);
+                      },
+                    );
                   },
                 );
               },
@@ -100,31 +105,24 @@ class VerificationQueueView extends StatelessWidget {
     BuildContext context,
     String uid,
     Map<String, dynamic> profile,
+    Map<String, dynamic>? verif,
   ) {
-    // Supplementary only — submission date and the document image live on
-    // verificationDocs, but the row (and the Approve/Reject actions below)
-    // must never depend on this document existing.
-    final verifStream =
-        FirebaseFirestore.instance.collection('verificationDocs').doc(uid).snapshots();
+    // verif (from DashboardDataService's shared verificationDocsStream, see
+    // caller) is supplementary only — submission date and the document
+    // image live on verificationDocs, but the row (and the Approve/Reject
+    // actions below) must never depend on this document existing.
+    final fullName = _firstNonEmpty([verif?['fullName'], profile['fullName'], profile['name']]) ??
+        'Unknown Farmer';
+    final email = (profile['email'] ?? '—').toString();
+    final rawBarangay = profile['barangay']?.toString().trim();
+    final barangay = (rawBarangay == null || rawBarangay.isEmpty) ? '—' : rawBarangay;
+    final submittedAt = verif?['submittedAt'] as Timestamp?;
+    final dateSubmitted = submittedAt != null ? DateFormat('MMM d, y').format(submittedAt.toDate()) : '—';
+    final document = (verif?['document'] ?? '').toString();
+    final farmerId = uid.length > 8 ? uid.substring(0, 8) : uid;
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: verifStream,
-      builder: (context, verifSnap) {
-        final verif = verifSnap.data?.data();
-
-        final fullName = _firstNonEmpty([verif?['fullName'], profile['fullName'], profile['name']]) ??
-            'Unknown Farmer';
-        final email = (profile['email'] ?? '—').toString();
-        final rawBarangay = profile['barangay']?.toString().trim();
-        final barangay = (rawBarangay == null || rawBarangay.isEmpty) ? '—' : rawBarangay;
-        final submittedAt = verif?['submittedAt'] as Timestamp?;
-        final dateSubmitted =
-            submittedAt != null ? DateFormat('MMM d, y').format(submittedAt.toDate()) : '—';
-        final document = (verif?['document'] ?? '').toString();
-        final farmerId = uid.length > 8 ? uid.substring(0, 8) : uid;
-
-        return Card(
-          margin: const EdgeInsets.only(bottom: 16),
+    return Card(
+          margin: const EdgeInsets.only(bottom: 14),
           child: ListTile(
             contentPadding: const EdgeInsets.all(16),
             leading: CircleAvatar(
@@ -166,8 +164,6 @@ class VerificationQueueView extends StatelessWidget {
             ),
           ),
         );
-      },
-    );
   }
 }
 
@@ -374,6 +370,7 @@ Future<void> _setFarmerApproval(
       // see buyer_explore_screen.dart / buyer_search_screen.dart).
       'isVerified': approved,
     };
+    if (approved) userUpdate['verifiedAt'] = FieldValue.serverTimestamp();
     await FirebaseFirestore.instance.collection('users').doc(uid).update(userUpdate);
 
     final docUpdate = <String, dynamic>{

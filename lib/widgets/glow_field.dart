@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme/app_theme.dart';
 
 /// A pill-shaped field styled after the reference design: icon, a thin
@@ -16,11 +17,14 @@ class GlowField extends StatefulWidget {
   final Widget? suffix;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
-  final String? errorText;
   // e.g. [AutofillHints.email] / [AutofillHints.password] — lets the OS's
   // own password manager (Google/iCloud) recognize and offer to save or
   // fill this field, instead of the app remembering anything itself.
   final Iterable<String>? autofillHints;
+  final List<TextInputFormatter>? inputFormatters;
+  // A fixed, non-editable label shown before the editable text — e.g.
+  // "+63 " for a Philippines-only mobile number field.
+  final String? prefixText;
 
   const GlowField({
     super.key,
@@ -32,8 +36,9 @@ class GlowField extends StatefulWidget {
     this.suffix,
     this.textInputAction,
     this.onSubmitted,
-    this.errorText,
     this.autofillHints,
+    this.inputFormatters,
+    this.prefixText,
   });
 
   @override
@@ -72,6 +77,14 @@ class _GlowFieldState extends State<GlowField> {
             child: Icon(widget.icon, color: AppTheme.mid, size: 20),
           ),
           Container(height: 22, width: 1, color: Colors.black12),
+          if (widget.prefixText != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 12),
+              child: Text(
+                widget.prefixText!,
+                style: const TextStyle(color: AppTheme.dark, fontSize: 15, fontWeight: FontWeight.w600),
+              ),
+            ),
           Expanded(
             child: TextField(
               controller: widget.controller,
@@ -81,10 +94,10 @@ class _GlowFieldState extends State<GlowField> {
               textInputAction: widget.textInputAction,
               onSubmitted: widget.onSubmitted,
               autofillHints: widget.autofillHints,
+              inputFormatters: widget.inputFormatters,
               decoration: InputDecoration(
                 hintText: widget.hint,
                 suffixIcon: widget.suffix,
-                errorText: widget.errorText,
                 filled: false,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,

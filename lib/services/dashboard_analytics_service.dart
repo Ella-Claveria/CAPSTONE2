@@ -6,14 +6,15 @@ import '../data/laurel_barangays.dart';
 import 'farmer_revenue_service.dart';
 
 /// A buyer's location, resolved for demand analytics — the buyer's own
-/// saved pin (MyLocationField, anywhere in the Philippines — see
-/// register_screen.dart's "the location of the buyer is the one they
-/// entered in registration"), never the farmer's, product's, or seller's.
+/// saved location (anywhere in the Philippines, set via BuyerLocationField
+/// when placing an order — see place_order_screen.dart), never the
+/// farmer's, product's, or seller's.
 ///
-/// A legacy account (registered before the free map pin existed) only has
-/// a Laurel barangay name instead of coordinates. Either way this resolves
-/// to one real, plottable point plus a human-readable "Barangay,
-/// Municipality" label:
+/// A legacy account (registered before buyers could pick a readable
+/// address, or that simply hasn't placed an order yet) only has a Laurel
+/// barangay name instead of coordinates, or nothing at all. Either way
+/// this resolves to one real, plottable point plus a human-readable
+/// "Barangay, Municipality" label:
 /// - within Laurel (isWithinLaurel): the nearest Laurel barangay, "name,
 ///   Laurel" — cheap and always available offline, no geocoding needed.
 /// - outside Laurel, with barangay/municipality/province already on the
@@ -35,17 +36,25 @@ import 'farmer_revenue_service.dart';
     if (isWithinLaurel(lat, lng)) {
       return (area: '${nearestLaurelBarangay(lat, lng).name}, Laurel', lat: lat, lng: lng);
     }
+    // Outside Laurel there's no barangay-centroid lookup to snap to, so
+    // round the buyer's real pin to ~1.1km before it ever reaches an
+    // analytics consumer — every caller of this function is heatmap/ranked-
+    // list analytics (never the buyer's own distance calc, which reads live
+    // GPS directly), so a buyer's exact home coordinate must never be the
+    // thing plotted, even for an admin-only view.
+    final roundedLat = double.parse(lat.toStringAsFixed(2));
+    final roundedLng = double.parse(lng.toStringAsFixed(2));
     final barangay = (user['barangay'] ?? '').toString().trim();
     final municipality = (user['municipality'] ?? '').toString().trim();
     final province = (user['province'] ?? '').toString().trim();
     final label = [barangay, municipality.isNotEmpty ? municipality : province]
         .where((s) => s.isNotEmpty)
         .join(', ');
-    if (label.isNotEmpty) return (area: label, lat: lat, lng: lng);
+    if (label.isNotEmpty) return (area: label, lat: roundedLat, lng: roundedLng);
     return (
       area: 'Unresolved area (${lat.toStringAsFixed(2)}, ${lng.toStringAsFixed(2)})',
-      lat: lat,
-      lng: lng,
+      lat: roundedLat,
+      lng: roundedLng,
     );
   }
 

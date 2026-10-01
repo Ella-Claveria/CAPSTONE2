@@ -38,7 +38,7 @@ class ReviewService {
     required String productId,
     required String productName,
     required String sellerId,
-    required int rating,
+    required double rating,
     required String comment,
     String? imageUrl,
   }) async {
@@ -51,7 +51,10 @@ class ReviewService {
         return 'Please log in again before submitting a review.';
       }
 
-      final normalizedRating = rating.clamp(1, 5);
+      if (rating < 0.5 || rating > 5 || rating * 2 != (rating * 2).round()) {
+        return 'Choose a rating from 0.5 to 5 stars in half-star steps.';
+      }
+      final normalizedRating = rating;
       final trimmedComment = comment.trim();
       if (trimmedComment.isEmpty) {
         return 'Please add a short review description.';
@@ -63,13 +66,10 @@ class ReviewService {
       // the existing review instead of creating a duplicate.
       final reviewRef = _reviews.doc(orderId);
       final orderRef = _db.collection('orders').doc(orderId);
-      final productRef = _db.collection('products').doc(productId);
 
       await _db.runTransaction((transaction) async {
         final existingReview = await transaction.get(reviewRef);
-        final productSnap = await transaction.get(productRef);
         final isEdit = existingReview.exists;
-        final oldRating = (existingReview.data()?['rating'] as num?)?.toInt();
 
         transaction.set(reviewRef, {
           'orderId': orderId,
@@ -91,34 +91,7 @@ class ReviewService {
           'reviewRating': normalizedRating,
         });
 
-        // Keep the product's aggregate rating/reviewCount in sync — these
-        // fields are displayed on the marketplace grid and product detail
-        // screen but, before this fix, were never actually written by
-        // anything (see docs/firestore-schema-migration.md).
-        if (productSnap.exists) {
-          final productData = productSnap.data() ?? const <String, dynamic>{};
-          final currentAverage =
-              (productData['rating'] as num?)?.toDouble() ?? 0.0;
-          final currentCount = (productData['reviewCount'] as num?)?.toInt() ?? 0;
-
-          final int newCount;
-          final double newAverage;
-          if (isEdit && oldRating != null) {
-            newCount = currentCount == 0 ? 1 : currentCount;
-            newAverage =
-                (currentAverage * newCount - oldRating + normalizedRating) /
-                    newCount;
-          } else {
-            newCount = currentCount + 1;
-            newAverage =
-                (currentAverage * currentCount + normalizedRating) / newCount;
-          }
-
-          transaction.update(productRef, {
-            'rating': newAverage,
-            'reviewCount': newCount,
-          });
-        }
+        // Aggregate rating fields are maintained by a trusted server trigger.
       });
 
       return null;

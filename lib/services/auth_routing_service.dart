@@ -1,5 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+
+const String _adminEmailWithoutVerification = 'admin@agritrade.com';
 
 /// Where an authenticated user belongs, decided from their `users/{uid}`
 /// Firestore document and the current platform.
@@ -18,6 +21,7 @@ enum AuthRouteDecision {
   // farmerHome once approved — so both non-approved cases route here.
   farmerPendingReview,
   buyerHome,
+  emailVerificationRequired,
   adminDashboard,
   blockedAdminOnMobile,
   blockedNonAdminOnWeb,
@@ -73,13 +77,34 @@ class AuthRoutingService {
         message: 'Could not verify your account. Check your connection and try again.',
       );
     }
-    return decideFromData(data);
+    final currentUser = FirebaseAuth.instance.currentUser;
+    final isCurrentUser = currentUser?.uid == uid;
+    final emailVerified = isCurrentUser && currentUser!.emailVerified;
+    return decideFromData(
+      data,
+      emailVerified: emailVerified,
+      authenticatedEmail: isCurrentUser ? currentUser!.email : null,
+    );
   }
 
   /// Pure decision logic — no Firestore I/O — given a user document's data
   /// (or null/missing, which is handled the same as a missing document).
-  static AuthRouteResult decideFromData(Map<String, dynamic>? data) {
+  static AuthRouteResult decideFromData(
+    Map<String, dynamic>? data, {
+    bool emailVerified = true,
+    String? authenticatedEmail,
+  }) {
     if (data == null) {
+      // No users/{uid} doc yet is expected (not an error) for an account
+      // that hasn't finished verifying its email — that doc is only
+      // written post-verification now (see AuthService.completeRegistration
+      // and EmailVerificationScreen). Role is unknown without the doc, so
+      // EmailVerificationScreen falls back to its role-agnostic copy; the
+      // real profile write still has the right role from registration
+      // (see PendingRegistrationProfile), unaffected by this fallback.
+      if (!emailVerified) {
+        return const AuthRouteResult(decision: AuthRouteDecision.emailVerificationRequired);
+      }
       return const AuthRouteResult(
         decision: AuthRouteDecision.missingProfile,
         message: 'We could not find your account details. Please contact support.',
@@ -92,6 +117,16 @@ class AuthRoutingService {
         decision: AuthRouteDecision.missingRole,
         role: role,
         message: 'Your account is missing a role. Please contact support.',
+      );
+    }
+
+    final isApprovedAdminIdentity = role == 'admin' &&
+        authenticatedEmail?.trim().toLowerCase() == _adminEmailWithoutVerification;
+    if (!emailVerified && !isApprovedAdminIdentity) {
+      return AuthRouteResult(
+        decision: AuthRouteDecision.emailVerificationRequired,
+        role: role,
+        message: 'Please verify your email before using AgriTrade+.',
       );
     }
 

@@ -9,7 +9,6 @@ import 'buyer_explore_screen.dart';
 import 'chat_list_screen.dart';
 import 'buyer_orders_screen.dart';
 import 'buyer_profile_screen.dart';
-import 'buyer_market_view.dart';
 import 'notifications_screen.dart';
 import '../l10n/app_localizations.dart';
 import '../l10n/locale_controller.dart';
@@ -21,10 +20,7 @@ final ValueNotifier<int> globalMarketplaceIndex = ValueNotifier<int>(0);
 class BuyerMarketplaceScreen extends StatefulWidget {
   final int initialIndex;
 
-  const BuyerMarketplaceScreen({
-    super.key,
-    this.initialIndex = 0,
-  });
+  const BuyerMarketplaceScreen({super.key, this.initialIndex = 0});
 
   @override
   State<BuyerMarketplaceScreen> createState() => _BuyerMarketplaceScreenState();
@@ -42,7 +38,8 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   @override
   void initState() {
     super.initState();
-    _navIndex = widget.initialIndex; // Properly initializes to index 1 (Messages) when passed from chat
+    _navIndex = widget
+        .initialIndex; // Properly initializes to index 1 (Messages) when passed from chat
     // If the app was launched (cold start) by tapping a push notification,
     // this replays that navigation now that routing has actually finished.
     PushNotificationService.consumePendingNavigation();
@@ -77,7 +74,8 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         CoachMarkStep(
           targetKey: _ordersTabKey,
           title: 'Track your orders',
-          message: 'Everything you order shows up here, from pending to delivered.',
+          message:
+              'Everything you order shows up here, from pending to delivered.',
         ),
       ],
     );
@@ -90,7 +88,10 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         title: const Text('Log Out'),
         content: const Text('Are you sure you want to log out?'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Log Out', style: TextStyle(color: Colors.red)),
@@ -113,8 +114,9 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     final pages = <Widget>[
       const BuyerExploreScreen(),
       const ChatListScreen(),
-      BuyerOrdersScreen(onBrowseMarketplace: () => setState(() => _navIndex = 0)),
-      const BuyerMapView(),
+      BuyerOrdersScreen(
+        onBrowseMarketplace: () => setState(() => _navIndex = 0),
+      ),
       BuyerProfileScreen(onLogout: () => _logout(context)),
     ];
 
@@ -156,7 +158,8 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
                 width: 36,
                 height: 36,
                 fit: BoxFit.cover,
-                errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark, size: 26),
+                errorBuilder: (c, e, s) =>
+                    const Icon(Icons.agriculture, color: _dark, size: 26),
               ),
             ),
           ),
@@ -177,10 +180,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
           ],
         ),
         body: SafeArea(
-          child: IndexedStack(
-            index: _navIndex,
-            children: pages,
-          ),
+          child: IndexedStack(index: _navIndex, children: pages),
         ),
         bottomNavigationBar: _buildBottomNavBar(),
       ),
@@ -197,21 +197,42 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         child: Row(
           children: [
             _navItem(0, Icons.explore_outlined, Icons.explore, t.navExplore),
-            _navItem(1, Icons.mail_outline, Icons.mail, t.navMessages, showUnreadDot: true),
-            _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag, t.navOrders, key: _ordersTabKey),
-            _navItem(3, Icons.map_outlined, Icons.map, t.navMap),
-            _navItem(4, Icons.person_outline, Icons.person, t.navProfile),
+            _navItem(
+              1,
+              Icons.mail_outline,
+              Icons.mail,
+              t.navMessages,
+              showUnreadDot: true,
+            ),
+            _navItem(
+              2,
+              Icons.shopping_bag_outlined,
+              Icons.shopping_bag,
+              t.navOrders,
+              key: _ordersTabKey,
+            ),
+            _navItem(3, Icons.person_outline, Icons.person, t.navProfile),
           ],
         ),
       ),
     );
   }
 
-  Widget _navItem(int index, IconData icon, IconData activeIcon, String label,
-      {Key? key, bool showUnreadDot = false}) {
+  Widget _navItem(
+    int index,
+    IconData icon,
+    IconData activeIcon,
+    String label, {
+    Key? key,
+    bool showUnreadDot = false,
+  }) {
     final selected = _navIndex == index;
     final color = selected ? _dark : Colors.grey;
-    final iconWidget = Icon(selected ? activeIcon : icon, color: color, size: 24);
+    final iconWidget = Icon(
+      selected ? activeIcon : icon,
+      color: color,
+      size: 24,
+    );
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => _navIndex = index),
@@ -253,8 +274,13 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
                 padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(t.selectLanguage,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  child: Text(
+                    t.selectLanguage,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
                 ),
               ),
               RadioGroup<String>(
@@ -294,7 +320,9 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         backgroundColor: _dark,
-        content: Text(AppLocalizations.of(context)!.languageChanged(languageName)),
+        content: Text(
+          AppLocalizations.of(context)!.languageChanged(languageName),
+        ),
       ),
     );
   }

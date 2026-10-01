@@ -28,25 +28,56 @@ class _BuyerMapViewState extends State<BuyerMapView> {
 
   StreamSubscription? _usersSub;
   StreamSubscription? _productsSub;
+  StreamSubscription? _clustersSub;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _farmerDocs = [];
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _productDocs = [];
+  Map<String, LatLng> _clusterPoints = {};
+  final Set<String> _loadedStreams = {};
+  bool _streamError = false;
 
   @override
   void initState() {
     super.initState();
     _determinePosition();
-    _usersSub = FirebaseFirestore.instance.collection('users').snapshots().listen((snap) {
-      if (mounted) setState(() => _farmerDocs = snap.docs);
-    });
+    _subscribeMapStreams();
+  }
+
+  void _subscribeMapStreams() {
+    _usersSub?.cancel();
+    _productsSub?.cancel();
+    _clustersSub?.cancel();
+    _loadedStreams.clear();
+    _streamError = false;
+    _usersSub = FirebaseFirestore.instance.collection('publicProfiles').snapshots().listen((snap) {
+      if (mounted) setState(() { _farmerDocs = snap.docs; _loadedStreams.add('users'); });
+    }, onError: (_) { if (mounted) setState(() => _streamError = true); });
     _productsSub = FirebaseFirestore.instance.collection('products').snapshots().listen((snap) {
-      if (mounted) setState(() => _productDocs = snap.docs);
-    });
+      if (mounted) setState(() { _productDocs = snap.docs; _loadedStreams.add('products'); });
+    }, onError: (_) { if (mounted) setState(() => _streamError = true); });
+    // Server-aggregated, PII-free per-barangay average (see functions/
+    // index.js's recomputeBarangayCluster) — this screen never reads a
+    // farmer's exact coordinate directly; only this collection, which
+    // holds a barangay name, one averaged point, and a count.
+    _clustersSub = FirebaseFirestore.instance.collection('barangayClusters').snapshots().listen((snap) {
+      if (!mounted) return;
+      setState(() {
+        _loadedStreams.add('clusters');
+        _clusterPoints = {
+          for (final doc in snap.docs)
+            doc.id: LatLng(
+              (doc.data()['lat'] as num).toDouble(),
+              (doc.data()['lng'] as num).toDouble(),
+            ),
+        };
+      });
+    }, onError: (_) { if (mounted) setState(() => _streamError = true); });
   }
 
   @override
   void dispose() {
     _usersSub?.cancel();
     _productsSub?.cancel();
+    _clustersSub?.cancel();
     super.dispose();
   }
 
@@ -119,24 +150,13 @@ class _BuyerMapViewState extends State<BuyerMapView> {
   }
 
   /// The real, privacy-preserving cluster center for a barangay: the
-  /// average of that barangay's farmers' pinned GPS locations where any
-  /// have set one, otherwise the illustrative ring position. Buyers only
-  /// ever see this cluster point, never an individual farm's exact pin.
-  LatLng _clusterPointFor(
-    LaurelBarangayLocation loc,
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> farmers,
-  ) {
-    final realPoints = <LatLng>[];
-    for (final doc in farmers) {
-      final data = doc.data();
-      final lat = (data['latitude'] as num?)?.toDouble();
-      final lng = (data['longitude'] as num?)?.toDouble();
-      if (lat != null && lng != null) realPoints.add(LatLng(lat, lng));
-    }
-    if (realPoints.isEmpty) return LatLng(loc.lat, loc.lng);
-    final avgLat = realPoints.map((p) => p.latitude).reduce((a, b) => a + b) / realPoints.length;
-    final avgLng = realPoints.map((p) => p.longitude).reduce((a, b) => a + b) / realPoints.length;
-    return LatLng(avgLat, avgLng);
+  /// server-computed average of that barangay's farmers' pinned GPS
+  /// locations (functions/index.js's recomputeBarangayCluster), or the
+  /// illustrative ring position if that hasn't been computed yet. Buyers
+  /// only ever see this cluster point, never an individual farm's exact
+  /// pin or the raw coordinates this average was built from.
+  LatLng _clusterPointFor(LaurelBarangayLocation loc) {
+    return _clusterPoints[loc.name] ?? LatLng(loc.lat, loc.lng);
   }
 
   Set<Circle> _buildCircles(
@@ -147,7 +167,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
       final farmers = farmersByBarangay[loc.name];
       if (farmers == null || farmers.isEmpty) continue;
 
-      final point = _clusterPointFor(loc, farmers);
+      final point = _clusterPointFor(loc);
       // Radius in meters, not pixels — scales with farmer count but stays
       // wide enough to read as "this barangay", never a single address.
       final radius = 180.0 + math.min(farmers.length, 5) * 60.0;
@@ -326,7 +346,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
           ),
           if (_locationNotice != null)
             Positioned(
-              bottom: 24,
+              top: 112,
               left: 16,
               right: 16,
               child: Container(
@@ -350,6 +370,29 @@ class _BuyerMapViewState extends State<BuyerMapView> {
                       child: const Text('Retry'),
                     ),
                   ],
+                ),
+              ),
+            ),
+          if (_loadedStreams.length < 3 && !_streamError)
+            const Center(child: CircularProgressIndicator()),
+          if (_streamError)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 24,
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(children: [
+                    const Expanded(child: Text('Could not load marketplace map data. Check your connection and retry.')),
+                    TextButton(
+                      onPressed: () {
+                        setState(() { _loadedStreams.clear(); _streamError = false; });
+                        _subscribeMapStreams();
+                      },
+                      child: const Text('Retry'),
+                    ),
+                  ]),
                 ),
               ),
             ),

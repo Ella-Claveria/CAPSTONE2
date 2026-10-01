@@ -6,7 +6,6 @@ import 'screen/app_bootstrap.dart';
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_controller.dart';
 import 'widgets/connectivity_banner.dart';
-import 'services/notification_permission_prompt.dart';
 import 'services/session_timeout_service.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -54,21 +53,42 @@ class AgriTradeApp extends StatelessWidget {
             GlobalCupertinoLocalizations.delegate,
           ],
           supportedLocales: AppLocalizations.supportedLocales,
-
-          // A brand-new, never-asked user gets the notification-permission
-          // explanation on their very first tap anywhere in the app — not
-          // tied to any one screen — rather than at launch (too early) or
-          // only when they happen to open Notifications (too late/hidden).
+          home: const AppBootstrap(),
+          // `builder` wraps whatever route the Navigator is currently
+          // showing — unlike `home` (which only wraps the FIRST route ever
+          // pushed), this keeps running for every screen reached via
+          // Navigator.push/pushReplacement/pushAndRemoveUntil afterward,
+          // which in practice is almost the entire app (login, role
+          // selection, Farmer/Buyer Home, ...). Both ConnectivityBanner and
+          // the activity-tracking Listener/Focus below used to live inside
+          // `home` instead, which meant they only ever saw AppBootstrap's
+          // own brief splash screen — the connectivity banner could never
+          // show once the user navigated past boot, and recordActivity()
+          // never fired again after the very first route change, so
+          // SessionTimeoutService's 15-minute idle timer kept counting
+          // down from that single call no matter how much the user kept
+          // actively using the app, eventually signing them out from
+          // right in the middle of a session. Wrapping the Navigator's
+          // own current child here, instead of one specific route's
+          // content, is what actually makes both of these span every
+          // screen.
           builder: (context, child) {
-            return Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (_) => NotificationPermissionPrompt.instance
-                  .maybeHandleFirstTap(rootNavigatorKey.currentContext),
-              child: child,
+            return ConnectivityBanner(
+              child: Listener(
+                onPointerDown: (_) => SessionTimeoutService.instance.recordActivity(),
+                onPointerMove: (_) => SessionTimeoutService.instance.recordActivity(),
+                onPointerSignal: (_) => SessionTimeoutService.instance.recordActivity(),
+                child: Focus(
+                  autofocus: true,
+                  onKeyEvent: (node, event) {
+                    SessionTimeoutService.instance.recordActivity();
+                    return KeyEventResult.ignored;
+                  },
+                  child: child ?? const SizedBox.shrink(),
+                ),
+              ),
             );
           },
-
-          home: const ConnectivityBanner(child: AppBootstrap()),
         );
       },
     );

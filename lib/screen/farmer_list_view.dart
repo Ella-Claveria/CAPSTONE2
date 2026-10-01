@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import '../services/audit_log_service.dart';
 import '../services/dashboard_analytics_service.dart';
+import '../services/dashboard_data_service.dart';
 import '../services/market_price_helpers.dart';
 import '../services/pdf_report_service.dart';
 import 'admin_dashboard_screen.dart'
@@ -194,10 +195,11 @@ class _FarmerListViewState extends State<FarmerListView> {
 
   @override
   Widget build(BuildContext context) {
+    DashboardDataService.instance.ensureLoaded();
     final c = AdminThemeScope.of(context).palette;
 
     return Padding(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(28.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -208,9 +210,9 @@ class _FarmerListViewState extends State<FarmerListView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('Farmer List',
-                      style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: c.textPrimary)),
+                      style: TextStyle(fontSize: 30, height: 1.15, letterSpacing: -0.6, fontWeight: FontWeight.w800, color: c.textPrimary)),
                   Text('View and manage approved farmer accounts registered in AgriTrade+.',
-                      style: TextStyle(color: c.textSecondary)),
+                      style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5)),
                 ],
               ),
               AdminQuickActionButton(
@@ -223,31 +225,35 @@ class _FarmerListViewState extends State<FarmerListView> {
           const SizedBox(height: 20),
 
           Expanded(
+            // users/products/orders are shared, app-session-lifetime reads
+            // via DashboardDataService (see its class doc) instead of this
+            // screen opening its own live listeners — previously those were
+            // created fresh inline in build(), so every setState from the
+            // search box / filter dropdowns below tore down and resubscribed
+            // all three on every keystroke, re-reading the full products and
+            // orders collections each time.
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('users')
-                  .where('role', isEqualTo: 'farmer')
-                  .where('approvalStatus', isEqualTo: 'approved')
-                  .snapshots(),
-              builder: (context, farmerSnap) {
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: FirebaseFirestore.instance.collection('products').snapshots(),
-                  builder: (context, productSnap) {
-                    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                      stream: FirebaseFirestore.instance.collection('orders').snapshots(),
-                      builder: (context, orderSnap) {
-                        final snapshots = [farmerSnap, productSnap, orderSnap];
-                        if (snapshots.any((s) => s.hasError)) {
-                          return const AdminStreamError();
-                        }
-                        if (snapshots.any((s) => !s.hasData)) {
-                          return const AdminLoadingSpinner();
-                        }
+              stream: DashboardDataService.instance.usersStream,
+              builder: (context, usersSnap) {
+                return ListenableBuilder(
+                  listenable: DashboardDataService.instance,
+                  builder: (context, _) {
+                    final svc = DashboardDataService.instance;
+                    if (usersSnap.hasError || svc.lastError != null) {
+                      return const AdminStreamError();
+                    }
+                    if (!usersSnap.hasData || !svc.hasLoadedOnce) {
+                      return const AdminLoadingSpinner();
+                    }
 
+                        final farmerDocs = usersSnap.data!.docs
+                            .where((d) =>
+                                d.data()['role'] == 'farmer' && d.data()['approvalStatus'] == 'approved')
+                            .toList();
                         final allRows = _computeFarmerRows(
-                          farmerSnap.data!.docs,
-                          productSnap.data!.docs,
-                          orderSnap.data!.docs,
+                          farmerDocs,
+                          svc.products,
+                          svc.allOrders,
                         );
 
                         final totalFarmers = allRows.length;
@@ -356,8 +362,6 @@ class _FarmerListViewState extends State<FarmerListView> {
                             ],
                           ),
                         );
-                      },
-                    );
                   },
                 );
               },

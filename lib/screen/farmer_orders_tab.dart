@@ -4,6 +4,7 @@ import '../services/order_service.dart';
 import '../services/market_price_helpers.dart';
 import '../widgets/shimmer.dart';
 import '../widgets/skeleton_loaders.dart';
+import '../widgets/retry_message.dart';
 
 // Body-only widget — it renders inside the FarmerHomeScreen Scaffold
 // (which already provides the AgriTrade+ app bar and bottom nav).
@@ -108,29 +109,45 @@ class _OrdersTabState extends State<OrdersTab> {
     final neededBy = d['neededBy'] as Timestamp?;
     final unit = d['unit']?.toString() ?? '';
     final unitPrice = (d['pricePerUnit'] as num?) ?? (d['unitPrice'] as num?);
+    final quantity =
+        d['quantityLabel']?.toString() ?? '${d['quantity'] ?? ''} $unit'.trim();
+    final total = (d['total'] as num?) ?? (d['subtotal'] as num?) ?? 0;
+    final createdAt = d['createdAt'] as Timestamp?;
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(name),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Buyer: $buyer'),
-            const SizedBox(height: 6),
-            Text('Status: ${status[0].toUpperCase()}${status.substring(1)}'),
-            const SizedBox(height: 6),
-            Text('Pricing: ${pricingType == 'wholesale' ? 'Wholesale' : 'Retail'}'),
-            if (unitPrice != null) ...[
-              const SizedBox(height: 6),
-              Text('Price: ${formatPriceWithUnit(unitPrice, unit)}'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Current status: ${status.toUpperCase()}'),
+              const SizedBox(height: 8),
+              Text('Buyer: $buyer'),
+              Text('Product: $name'),
+              Text('Quantity: $quantity'),
+              Text(
+                'Order type: ${pricingType == 'wholesale' ? 'Wholesale' : 'Retail'}',
+              ),
+              if (unitPrice != null)
+                Text('Price per unit: ${formatPriceWithUnit(unitPrice, unit)}'),
+              Text('Total: ${_peso(total)}'),
+              if ((d['deliveryMethod'] ?? '').toString().isNotEmpty)
+                Text('Delivery method: ${d['deliveryMethod']}'),
+              if ((d['buyerAddress'] ?? '').toString().isNotEmpty)
+                Text('Delivery address: ${d['buyerAddress']}'),
+              if (createdAt != null)
+                Text(
+                  'Ordered: ${createdAt.toDate().month}/${createdAt.toDate().day}/${createdAt.toDate().year}',
+                ),
+              if (neededBy != null)
+                Text(
+                  'Needed by: ${neededBy.toDate().month}/${neededBy.toDate().day}/${neededBy.toDate().year}',
+                ),
             ],
-            if (neededBy != null) ...[
-              const SizedBox(height: 6),
-              Text('Needed by: ${neededBy.toDate().month}/${neededBy.toDate().day}/${neededBy.toDate().year}'),
-            ],
-          ],
+          ),
         ),
         actions: [
           TextButton(
@@ -170,6 +187,23 @@ class _OrdersTabState extends State<OrdersTab> {
                       StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                         stream: _orderService.farmerOrdersStream(),
                         builder: (context, snapshot) {
+                          if (snapshot.hasError) {
+                            return RetryMessage(
+                              message:
+                                  'Could not load order totals. Check your connection and retry.',
+                              onRetry: () => setState(() {}),
+                            );
+                          }
+                          if (!snapshot.hasData) {
+                            return const SizedBox(
+                              height: 44,
+                              child: Center(
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            );
+                          }
                           final counts = <String, int>{
                             'pending': 0,
                             'confirmed': 0,
@@ -187,16 +221,35 @@ class _OrdersTabState extends State<OrdersTab> {
 
                           return Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: Row(
-                              children: [
-                                _filterTab('Pending', 'pending', counts['pending']!),
-                                const SizedBox(width: 8),
-                                _filterTab('Confirmed', 'confirmed', counts['confirmed']!),
-                                const SizedBox(width: 8),
-                                _filterTab('Shipped', 'shipped', counts['shipped']!),
-                                const SizedBox(width: 8),
-                                _filterTab('Completed', 'completed', counts['completed']!),
-                              ],
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  _filterTab(
+                                    'Pending',
+                                    'pending',
+                                    counts['pending']!,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _filterTab(
+                                    'Confirmed',
+                                    'confirmed',
+                                    counts['confirmed']!,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _filterTab(
+                                    'Shipped',
+                                    'shipped',
+                                    counts['shipped']!,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _filterTab(
+                                    'Completed',
+                                    'completed',
+                                    counts['completed']!,
+                                  ),
+                                ],
+                              ),
                             ),
                           );
                         },
@@ -206,10 +259,16 @@ class _OrdersTabState extends State<OrdersTab> {
                         child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                           stream: _orderService.farmerOrdersStream(),
                           builder: (context, snap) {
-                            if (snap.connectionState == ConnectionState.waiting) {
+                            if (snap.connectionState ==
+                                ConnectionState.waiting) {
                               return Shimmer(
                                 child: ListView.builder(
-                                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    0,
+                                    16,
+                                    90,
+                                  ),
                                   itemCount: 4,
                                   itemBuilder: (context, i) => const Padding(
                                     padding: EdgeInsets.only(bottom: 14),
@@ -219,16 +278,41 @@ class _OrdersTabState extends State<OrdersTab> {
                               );
                             }
                             if (snap.hasError) {
-                              return const Center(child: Text('Could not load orders.'));
+                              return RetryMessage(
+                                message:
+                                    'Could not load orders. Check your connection and retry.',
+                                onRetry: () => setState(() {}),
+                              );
                             }
                             final all = snap.data?.docs ?? [];
                             final docs = all
                                 .where(
                                   (d) =>
-                                      (d.data()['status'] ?? 'pending').toString() ==
+                                      (d.data()['status'] ?? 'pending')
+                                          .toString() ==
                                       _filter,
                                 )
                                 .toList();
+                            docs.sort((a, b) {
+                              final aData = a.data();
+                              final bData = b.data();
+                              if (_filter == 'pending') {
+                                final aNeed = aData['neededBy'] as Timestamp?;
+                                final bNeed = bData['neededBy'] as Timestamp?;
+                                if (aNeed != null || bNeed != null) {
+                                  if (aNeed == null) return 1;
+                                  if (bNeed == null) return -1;
+                                  final dueCompare = aNeed.compareTo(bNeed);
+                                  if (dueCompare != 0) return dueCompare;
+                                }
+                              }
+                              final aCreated = aData['createdAt'] as Timestamp?;
+                              final bCreated = bData['createdAt'] as Timestamp?;
+                              return (bCreated?.millisecondsSinceEpoch ?? 0)
+                                  .compareTo(
+                                    aCreated?.millisecondsSinceEpoch ?? 0,
+                                  );
+                            });
                             if (docs.isEmpty) return _emptyState();
                             return ListView.builder(
                               padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
@@ -250,7 +334,8 @@ class _OrdersTabState extends State<OrdersTab> {
     final selected = _filter == value;
     final seenCount = _seenOrderCounts[value] ?? 0;
     final unreadCount = count > seenCount ? count - seenCount : 0;
-    return Expanded(
+    return SizedBox(
+      width: 96,
       child: GestureDetector(
         onTap: () => setState(() {
           _filter = value;
@@ -355,8 +440,11 @@ class _OrdersTabState extends State<OrdersTab> {
     final total = totalRaw is num ? totalRaw : (num.tryParse('$totalRaw') ?? 0);
     final status = (d['status'] ?? 'pending').toString();
     final pricingType = (d['pricingType'] ?? 'retail').toString();
-    final pricePerUnit = (d['pricePerUnit'] as num?) ?? (d['unitPrice'] as num?);
+    final pricePerUnit =
+        (d['pricePerUnit'] as num?) ?? (d['unitPrice'] as num?);
     final imageUrl = d['imageUrl']?.toString();
+    final createdAt = d['createdAt'] as Timestamp?;
+    final neededBy = d['neededBy'] as Timestamp?;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -417,9 +505,14 @@ class _OrdersTabState extends State<OrdersTab> {
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
-                            color: pricingType == 'wholesale' ? Colors.green[50] : Colors.grey[100],
+                            color: pricingType == 'wholesale'
+                                ? Colors.green[50]
+                                : Colors.grey[100],
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Text(
@@ -427,14 +520,19 @@ class _OrdersTabState extends State<OrdersTab> {
                             style: TextStyle(
                               fontSize: 9.5,
                               fontWeight: FontWeight.w700,
-                              color: pricingType == 'wholesale' ? Colors.green[800] : Colors.grey[700],
+                              color: pricingType == 'wholesale'
+                                  ? Colors.green[800]
+                                  : Colors.grey[700],
                             ),
                           ),
                         ),
                         if (pricePerUnit != null)
                           Text(
                             formatPriceWithUnit(pricePerUnit, unit),
-                            style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey[600],
+                            ),
                           ),
                       ],
                     ),
@@ -452,6 +550,26 @@ class _OrdersTabState extends State<OrdersTab> {
                         ),
                       ],
                     ),
+                    if (createdAt != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'Ordered ${MaterialLocalizations.of(context).formatMediumDate(createdAt.toDate())} · ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(createdAt.toDate()))}',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                    if (neededBy != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Needed by ${MaterialLocalizations.of(context).formatMediumDate(neededBy.toDate())}',
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: Colors.orange[800],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -509,13 +627,17 @@ class _OrdersTabState extends State<OrdersTab> {
     switch (status) {
       case 'pending':
         return [
+          detailsButton,
+          const SizedBox(width: 8),
           OutlinedButton(
             onPressed: () => _reject(id),
             style: OutlinedButton.styleFrom(
               foregroundColor: Colors.red,
               side: const BorderSide(color: Colors.red),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: const Text('Reject'),
           ),
@@ -527,7 +649,9 @@ class _OrdersTabState extends State<OrdersTab> {
               foregroundColor: Colors.white,
               elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: const Text('Confirm'),
           ),
@@ -543,7 +667,9 @@ class _OrdersTabState extends State<OrdersTab> {
               foregroundColor: Colors.white,
               elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: const Text('Mark Shipped'),
           ),
@@ -559,7 +685,9 @@ class _OrdersTabState extends State<OrdersTab> {
               foregroundColor: Colors.white,
               elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: const Text('Mark Complete'),
           ),

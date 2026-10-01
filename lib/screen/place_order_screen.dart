@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
+import '../services/auth_service.dart';
 import '../services/order_service.dart';
 import '../services/market_price_helpers.dart';
 import '../services/pricing_tier_service.dart';
+import '../services/connectivity_service.dart';
 import '../data/commodity_master_list.dart';
+import '../widgets/buyer_location_field.dart';
+import '../widgets/buyer_location_picker.dart';
 
 class PlaceOrderScreen extends StatefulWidget {
   final String sellerId;
@@ -56,12 +61,20 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   final _addressController = TextEditingController();
   late final TextEditingController _quantityController;
   final _orderService = OrderService();
+  final _authService = AuthService();
 
   bool _submitting = false;
   late String _deliveryMethod;
   DateTime? _neededBy;
   Map<String, dynamic>? _liveProduct;
   bool _loadingProduct = true;
+
+  // The buyer's structured location for this order — see BuyerLocationField.
+  // _addressController.text (used by OrderService.createOrder's
+  // buyerAddress) is kept in sync with this, so the rest of the form
+  // doesn't need to know this field exists.
+  BuyerLocationResult? _buyerLocation;
+  bool _locationTouched = false;
 
   @override
   void initState() {
@@ -74,6 +87,75 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
         : (widget.pickupAvailable ? 'pickup' : 'unspecified');
     _quantityController.addListener(_onQuantityChanged);
     _loadProduct();
+    _prefillLocation();
+  }
+
+  // Best-effort: reuses whatever location the buyer last set on an earlier
+  // order (saved via AuthService.saveBuyerLocation) so they don't have to
+  // redo the Region/Province/City/Barangay picker every single order.
+  Future<void> _prefillLocation() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final data = userDoc.data();
+      final province = data?['province']?.toString();
+      final city = data?['municipality']?.toString();
+      final barangay = data?['barangay']?.toString();
+      if (province == null || province.isEmpty || city == null || city.isEmpty || barangay == null || barangay.isEmpty) {
+        return;
+      }
+      final region = data?['region']?.toString();
+
+      double? lat;
+      double? lng;
+      try {
+        final geoDoc =
+            await FirebaseFirestore.instance.collection('users').doc(uid).collection('private').doc('geo').get();
+        lat = (geoDoc.data()?['latitude'] as num?)?.toDouble();
+        lng = (geoDoc.data()?['longitude'] as num?)?.toDouble();
+      } catch (_) {
+        // Non-fatal — the readable address still prefills without a pin.
+      }
+
+      if (!mounted) return;
+      final result = BuyerLocationResult(
+        region: (region != null && region.isNotEmpty) ? region : province,
+        province: province,
+        city: city,
+        barangay: barangay,
+        latitude: lat,
+        longitude: lng,
+      );
+      setState(() {
+        _buyerLocation = result;
+        _addressController.text = result.readable;
+      });
+    } catch (_) {
+      // Prefill is best-effort only — the buyer can still pick fresh.
+    }
+  }
+
+  void _onLocationPicked(BuyerLocationResult result) {
+    setState(() {
+      _buyerLocation = result;
+      _addressController.text = result.readable;
+      _locationTouched = false;
+    });
+    // Fire-and-forget: also keeps users/{uid} up to date, so the admin
+    // Demand Heatmap and the next order's prefill both stay current.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      _authService.saveBuyerLocation(
+        uid: uid,
+        latitude: result.latitude,
+        longitude: result.longitude,
+        region: result.region,
+        province: result.province,
+        city: result.city,
+        barangay: result.barangay,
+      );
+    }
   }
 
   @override
@@ -147,6 +229,13 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   Future<void> _submit() async {
     if (_submitting) return;
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_addressController.text.trim().isEmpty) {
+      setState(() => _locationTouched = true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please set your location.')),
+      );
+      return;
+    }
     if (widget.sellerId.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -157,6 +246,16 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     }
 
     final qty = num.tryParse(_quantityController.text.trim()) ?? 1;
+    setState(() => _submitting = true);
+
+    if (!await ConnectivityService.instance.checkNow()) {
+      if (!mounted) return;
+      setState(() => _submitting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(kNoInternetActionMessage)),
+      );
+      return;
+    }
 
     // Proactive stock check so the buyer gets a friendly message instead of
     // filling out the whole form only to have the server-side transaction
@@ -173,6 +272,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
           data['isArchived'] == true ||
           data['isSuspended'] == true) {
         if (!mounted) return;
+        setState(() => _submitting = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('This listing is no longer available.')),
         );
@@ -181,6 +281,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       final available = (data['quantity'] as num?) ?? 0;
       if (qty > available) {
         if (!mounted) return;
+        setState(() => _submitting = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -197,7 +298,6 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       // Firestore transaction in OrderService still enforces this.
     }
 
-    setState(() => _submitting = true);
     final quote = _currentQuote;
 
     final err = await _orderService.createOrder(
@@ -358,15 +458,12 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                     ? 'Enter a contact number'
                     : null,
               ),
-              const SizedBox(height: 10),
-              TextFormField(
-                controller: _addressController,
-                decoration: const InputDecoration(labelText: 'Address'),
-                validator: (value) => (value == null || value.trim().isEmpty)
-                    ? 'Enter address'
-                    : null,
+              BuyerLocationField(
+                label: 'Address',
+                value: _buyerLocation,
+                errorText: _locationTouched && _buyerLocation == null ? 'Please set your location.' : null,
+                onPicked: _onLocationPicked,
               ),
-              const SizedBox(height: 10),
               TextFormField(
                 controller: _quantityController,
                 keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),

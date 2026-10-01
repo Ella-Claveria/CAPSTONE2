@@ -236,7 +236,7 @@ class _AuditLogViewState extends State<AuditLogView> {
     final entries = _visibleEntries;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(28.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -247,10 +247,10 @@ class _AuditLogViewState extends State<AuditLogView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('Audit Log',
-                      style: TextStyle(color: c.textPrimary, fontSize: 24, fontWeight: FontWeight.bold)),
+                      style: TextStyle(color: c.textPrimary, fontSize: 30, height: 1.15, letterSpacing: -0.6, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 4),
                   Text('Every admin login and action on this portal — append-only, cannot be edited.',
-                      style: TextStyle(color: c.textSecondary, fontSize: 13)),
+                      style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5)),
                 ],
               ),
               AdminQuickActionButton(
@@ -285,7 +285,7 @@ class _AuditLogViewState extends State<AuditLogView> {
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: c.surface,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(color: c.border),
             ),
             child: Column(
@@ -396,7 +396,7 @@ class _FilterBar extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: c.surface,
-        borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(18),
         border: Border.all(color: c.border),
       ),
       child: Wrap(

@@ -2,9 +2,69 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function emailVerified() {
+      return signedIn() && request.auth.token.email_verified == true;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function activeAccount(uid) {
+      return exists(userPath(uid)) &&
+        get(userPath(uid)).data.get('accountStatus', 'active') == 'active';
+    }
+
+    function isAdmin() {
+      return signedIn() && activeAccount(request.auth.uid) &&
+        get(userPath(request.auth.uid)).data.role == 'admin' &&
+        (request.auth.token.email_verified == true ||
+          request.auth.token.email == 'admin@agritrade.com');
+    }
+
+    function isBuyer() {
+      return emailVerified() && activeAccount(request.auth.uid) &&
+        get(userPath(request.auth.uid)).data.role == 'buyer';
+    }
+
+    function isApprovedFarmer() {
+      return emailVerified() && activeAccount(request.auth.uid) &&
+        get(userPath(request.auth.uid)).data.role == 'farmer' &&
+        get(userPath(request.auth.uid)).data.get('approvalStatus', 'pending') == 'approved';
+    }
+
+    function approvedFarmer(uid) {
+      return activeAccount(uid) &&
+        get(userPath(uid)).data.role == 'farmer' &&
+        get(userPath(uid)).data.get('approvalStatus', 'pending') == 'approved';
+    }
+
+    function canReserveProductStock(productId) {
+      let orderId = request.resource.data.get('lastOrderId', '');
+      let orderPath = /databases/$(database)/documents/orders/$(orderId);
+      let before = resource.data.get('quantity', 0);
+      let after = request.resource.data.get('quantity', 0);
+      return orderId is string && orderId.size() > 0 &&
+        after >= 0 &&
+        existsAfter(orderPath) &&
+        getAfter(orderPath).data.buyerId == request.auth.uid &&
+        getAfter(orderPath).data.productId == productId &&
+        getAfter(orderPath).data.sellerId == resource.data.farmerId &&
+        getAfter(orderPath).data.status == 'pending' &&
+        getAfter(orderPath).data.quantity == before - after;
+    }
+
+    function marketplaceUser() {
+      return isAdmin() || isBuyer() || isApprovedFarmer();
+    }
+
     // ---- Products ----
     match /products/{productId} {
-      allow read: if true;
+      allow read: if marketplaceUser();
       // A farmer under a confirmed-violation suspension/ban may not create
       // new listings — see Moderation Queue (accountStatus on users/{uid}).
       // Only an Approved farmer may create a listing at all — the Flutter
@@ -14,25 +74,47 @@ service cloud.firestore {
       // call from a farmer who never got approved (missing approvalStatus
       // defaults to 'pending', same "not approved" convention used
       // everywhere else in this app).
-      allow create: if request.auth != null &&
+      allow create: if isApprovedFarmer() &&
         request.auth.uid == request.resource.data.farmerId &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('accountStatus', 'active') == 'active' &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('approvalStatus', 'pending') == 'approved';
+        request.resource.data.isSuspended == false;
       // The owning farmer can edit their own listing; an admin may also
       // update (never delete) a listing — this is what backs Moderation
       // Queue's Hide/Remove Listing actions (isSuspended toggle).
-      allow update: if request.auth != null && (
-        request.auth.uid == resource.data.farmerId ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-      );
-      allow delete: if request.auth != null &&
-        request.auth.uid == resource.data.farmerId;
+      allow update: if isAdmin() ||
+        (isApprovedFarmer() && request.auth.uid == resource.data.farmerId &&
+          request.resource.data.farmerId == resource.data.farmerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'category', 'commodity', 'unit', 'price', 'retailPrice',
+            'wholesaleEnabled', 'wholesalePrice', 'wholesaleMinimumQuantity',
+            'retailMaximumQuantity', 'quantity', 'description', 'imageUrls',
+            'imageUrl', 'deliveryAvailable', 'pickupOnly', 'updatedAt',
+            'isArchived', 'archivedAt'
+          ])) ||
+        (isBuyer() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewCount']) &&
+          request.resource.data.get('viewCount', 0) == resource.data.get('viewCount', 0) + 1) ||
+        (isBuyer() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantity', 'lastOrderId']) &&
+          request.resource.data.get('quantity', 0) < resource.data.get('quantity', 0) &&
+          canReserveProductStock(productId));
+      allow delete: if isApprovedFarmer() && request.auth.uid == resource.data.farmerId;
     }
 
     // ---- Users ----
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow create: if request.auth != null && request.auth.uid == userId;
+      // Private account records contain email, contact and moderation data.
+      // Other marketplace users must use the allow-listed publicProfiles view.
+      allow read: if (signedIn() && request.auth.uid == userId) || isAdmin();
+      // Client registration may create only a normal Buyer or pending Farmer.
+      // Admin records must be provisioned out-of-band with the Admin SDK.
+      allow create: if signedIn() && request.auth.uid == userId &&
+        request.resource.data.role in ['buyer', 'farmer'] &&
+        request.resource.data.approvalStatus == (request.resource.data.role == 'buyer' ? 'approved' : 'pending') &&
+        request.resource.data.isVerified == (request.resource.data.role == 'buyer') &&
+        request.resource.data.get('accountStatus', 'active') == 'active' &&
+        !request.resource.data.keys().hasAny([
+          'reviewedBy', 'reviewedAt', 'suspensionReason', 'suspendedUntil',
+          'banReason', 'moderationUpdatedBy', 'moderationUpdatedAt',
+          'emailVerified', 'emailVerifiedAt'
+        ]);
       // A user may only edit their own profile fields — approvalStatus,
       // role, and the admin-review audit trail (reviewedBy/reviewedAt) must
       // all stay exactly as they were, so a Farmer account cannot bypass
@@ -47,6 +129,14 @@ service cloud.firestore {
         (request.auth.uid == userId &&
           request.resource.data.approvalStatus == resource.data.approvalStatus &&
           request.resource.data.role == resource.data.role &&
+          request.resource.data.get('isVerified', null) == resource.data.get('isVerified', null) &&
+          request.resource.data.get('authProvider', null) == resource.data.get('authProvider', null) &&
+          request.resource.data.get('emailVerified', null) == resource.data.get('emailVerified', null) &&
+          request.resource.data.get('emailVerifiedAt', null) == resource.data.get('emailVerifiedAt', null) &&
+          request.resource.data.get('rating', null) == resource.data.get('rating', null) &&
+          request.resource.data.get('reviewCount', null) == resource.data.get('reviewCount', null) &&
+          request.resource.data.get('trustedBuyer', null) == resource.data.get('trustedBuyer', null) &&
+          request.resource.data.get('trustedBuyerReviewCount', null) == resource.data.get('trustedBuyerReviewCount', null) &&
           request.resource.data.get('reviewedBy', null) == resource.data.get('reviewedBy', null) &&
           request.resource.data.get('reviewedAt', null) == resource.data.get('reviewedAt', null) &&
           request.resource.data.get('accountStatus', null) == resource.data.get('accountStatus', null) &&
@@ -55,8 +145,58 @@ service cloud.firestore {
           request.resource.data.get('banReason', null) == resource.data.get('banReason', null) &&
           request.resource.data.get('moderationUpdatedBy', null) == resource.data.get('moderationUpdatedBy', null) &&
           request.resource.data.get('moderationUpdatedAt', null) == resource.data.get('moderationUpdatedAt', null)) ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        isAdmin()
       );
+
+      // Exact GPS coordinates only — never barangay/municipality/province,
+      // which stay on the doc above (public, needed for marketplace
+      // display). The doc above is readable by any signed-in user, so an
+      // exact pin can never live there; only the account's own owner or an
+      // admin (who already has full moderation access to users/{}) may
+      // read this. Buyers never get a farmer's exact pin this way — the
+      // marketplace map instead reads /barangayClusters (a server-computed,
+      // PII-free average), and the order-flow reveal reads a snapshot
+      // Cloud Functions copies onto the order doc once confirmed (see
+      // functions/index.js's notifyOrderStatusChange and
+      // recomputeBarangayCluster).
+      match /private/{privateDocId} {
+        allow read: if request.auth != null && (
+          request.auth.uid == userId ||
+          isAdmin()
+        );
+        allow write: if request.auth != null && request.auth.uid == userId &&
+          (isBuyer() || isApprovedFarmer());
+      }
+    }
+
+    // Collection-group counterpart of users/{uid}/private above. A
+    // fixed-path match only secures direct subcollection access
+    // (users/{uid}/private/geo) — Firestore requires this separate
+    // {path=**} rule before a collectionGroup('private') query is
+    // authorized at all, which is how the admin Demand Heatmap reads
+    // every buyer's exact pin at once (see dashboard_analytics_service.dart
+    // / admin_dashboard_screen.dart). Admin-only: the owner's own doc is
+    // already covered by the nested rule above.
+    match /{path=**}/private/{privateDocId} {
+      allow read: if isAdmin();
+    }
+
+    // Public, minimal profile projection maintained by a trusted Function.
+    // No client writes and no email, phone, precise location or moderation data.
+    match /publicProfiles/{userId} {
+      allow read: if marketplaceUser();
+      allow write: if false;
+    }
+
+    // ---- Barangay farmer-density clusters (aggregated, PII-free) ----
+    // One averaged point + a farmer count per barangay, written only by
+    // recomputeBarangayCluster in Cloud Functions (Admin SDK bypasses these
+    // rules) — never which specific farmers contribute to it. This is what
+    // the buyer marketplace map reads instead of any individual farmer's
+    // exact coordinates.
+    match /barangayClusters/{barangay} {
+      allow read: if marketplaceUser();
+      allow write: if false;
     }
 
     // ---- Verification documents ----
@@ -69,72 +209,129 @@ service cloud.firestore {
     match /verificationDocs/{userId} {
       allow read: if request.auth != null && (
         request.auth.uid == userId ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        isAdmin()
       );
       allow create, update: if request.auth != null && (
-        (request.auth.uid == userId && request.resource.data.status == 'pending') ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        (request.auth.uid == userId &&
+          get(userPath(userId)).data.role == 'farmer' &&
+          request.resource.data.status == 'pending') ||
+        isAdmin()
       );
       allow delete: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        isAdmin();
     }
 
     // ---- Conversations & messages ----
     match /conversations/{conversationId} {
-      allow read: if request.auth != null && (
+      allow read: if marketplaceUser() && (
         resource == null ||
         request.auth.uid in resource.data.participants
       );
 
-      allow create: if request.auth != null &&
-        request.auth.uid in request.resource.data.participants;
+      allow create: if marketplaceUser() &&
+        request.auth.uid in request.resource.data.participants &&
+        request.resource.data.participants.size() == 2;
 
-      allow update: if request.auth != null &&
-        request.auth.uid in resource.data.participants;
+      allow update: if marketplaceUser() &&
+        request.auth.uid in resource.data.participants &&
+        request.resource.data.participants == resource.data.participants &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastMessage', 'lastMessageTime', 'participantNames', 'unreadCount', 'lastSenderId',
+          'farmerId', 'farmerName', 'productId', 'productName', 'productImageUrl',
+          'productPrice', 'unit', 'deliveryAvailable', 'pickupOnly', 'farmerImage',
+          'retailPrice', 'wholesalePrice', 'wholesaleMinimumQuantity', 'retailMaximumQuantity'
+        ]);
 
       match /messages/{messageId} {
-        allow read: if request.auth != null;
-        allow create: if request.auth != null &&
-          request.resource.data.senderId == request.auth.uid;
+        allow read: if marketplaceUser() && request.auth.uid in
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create: if marketplaceUser() &&
+          request.resource.data.senderId == request.auth.uid &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow update: if marketplaceUser() &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']) &&
+          request.resource.data.get('likes', {}).diff(resource.data.get('likes', {}))
+            .affectedKeys().hasOnly([request.auth.uid]) &&
+          request.resource.data.get('likes', {}).get(request.auth.uid, false) is bool;
+      }
+
+      match /typing/{uid} {
+        allow read: if marketplaceUser() && request.auth.uid in
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create, update: if marketplaceUser() && request.auth.uid == uid &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
+          request.resource.data.keys().hasOnly(['isTyping', 'updatedAt']) &&
+          request.resource.data.isTyping is bool &&
+          request.resource.data.updatedAt is timestamp;
+      }
+
+      match /reads/{uid} {
+        allow read: if marketplaceUser() && request.auth.uid in
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow create, update: if marketplaceUser() && request.auth.uid == uid &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
+          request.resource.data.keys().hasOnly(['lastReadAt']) &&
+          request.resource.data.lastReadAt is timestamp;
       }
     }
 
     // ---- Orders ----
     match /orders/{orderId} {
-      allow create: if request.auth != null
+      allow create: if isBuyer()
         && request.resource.data.buyerId == request.auth.uid
         && request.resource.data.sellerId is string
-        && request.resource.data.sellerId.size() > 0
-        && request.resource.data.status == 'pending';
+        && approvedFarmer(request.resource.data.sellerId)
+        && request.resource.data.status == 'pending'
+        && request.resource.data.quantity is number
+        && request.resource.data.quantity > 0
+        && request.resource.data.productId is string
+        && get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.farmerId == request.resource.data.sellerId
+        && get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.get('isArchived', false) == false
+        && get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.get('isSuspended', false) == false
+        && getAfter(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.lastOrderId == orderId
+        && get(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.quantity -
+          getAfter(/databases/$(database)/documents/products/$(request.resource.data.productId)).data.quantity == request.resource.data.quantity;
 
-      allow read: if request.auth != null
+      allow read: if marketplaceUser()
         && (
           resource.data.buyerId == request.auth.uid
           || resource.data.sellerId == request.auth.uid
-          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          || isAdmin()
         );
 
       // Buyer can edit details while pending.
-      allow update: if request.auth != null
+      allow update: if isBuyer()
         && resource.data.buyerId == request.auth.uid
         && resource.data.status == 'pending'
         && request.resource.data.status == resource.data.status
         && request.resource.data.sellerId == resource.data.sellerId
-        && request.resource.data.buyerId == resource.data.buyerId;
+        && request.resource.data.buyerId == resource.data.buyerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'buyerName', 'buyerContact', 'buyerAddress', 'deliveryMethod', 'neededBy', 'updatedAt'
+        ]);
 
       // Buyer can only attach review markers after completion.
-      allow update: if request.auth != null
+      allow update: if isBuyer()
         && resource.data.buyerId == request.auth.uid
         && resource.data.status == 'completed'
         && request.resource.data.sellerId == resource.data.sellerId
         && request.resource.data.buyerId == resource.data.buyerId
-        && request.resource.data.status == resource.data.status;
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reviewedAt', 'reviewRating'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasAll(['reviewedAt', 'reviewRating'])
+        && existsAfter(/databases/$(database)/documents/productReviews/$(orderId))
+        && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.buyerId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.orderId == orderId
+        && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.productId == resource.data.productId
+        && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.rating == request.resource.data.reviewRating;
 
       // Seller controls status transitions.
-      allow update: if request.auth != null
+      allow update: if isApprovedFarmer()
         && resource.data.sellerId == request.auth.uid
         && request.resource.data.buyerId == resource.data.buyerId
         && request.resource.data.sellerId == resource.data.sellerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'completedAt'])
         && (
           (resource.data.status == 'pending' &&
             (request.resource.data.status == 'confirmed' || request.resource.data.status == 'rejected'))
@@ -155,7 +352,7 @@ service cloud.firestore {
     // seasonal/demand insights — unlike orders/{}, which must stay
     // restricted to that order's own buyer/seller/admin. ----
     match /market_sales/{saleId} {
-      allow read: if request.auth != null;
+      allow read: if marketplaceUser();
       allow write: if false;
     }
 
@@ -164,41 +361,78 @@ service cloud.firestore {
       allow read: if true;
 
       // Buyer can create one review doc per completed order (reviewId == orderId).
-      allow create: if request.auth != null
+      allow create: if isBuyer()
         && request.resource.data.buyerId == request.auth.uid
         && reviewId == request.resource.data.orderId
         && request.resource.data.productId is string
         && request.resource.data.productId.size() > 0
         && request.resource.data.sellerId is string
         && request.resource.data.sellerId.size() > 0
-        && request.resource.data.rating is int
-        && request.resource.data.rating >= 1
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 0.5
         && request.resource.data.rating <= 5
+        && (request.resource.data.rating * 2) % 1 == 0
         && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.buyerId == request.auth.uid
+        && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.productId == request.resource.data.productId
+        && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.sellerId == request.resource.data.sellerId
         && get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.status == 'completed';
 
-      allow update, delete: if false;
+      allow update: if isBuyer() &&
+        resource.data.buyerId == request.auth.uid &&
+        resource.data.orderId == reviewId &&
+        request.resource.data.buyerId == resource.data.buyerId &&
+        request.resource.data.orderId == resource.data.orderId &&
+        request.resource.data.productId == resource.data.productId &&
+        request.resource.data.sellerId == resource.data.sellerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rating', 'comment', 'imageUrl']) &&
+        request.resource.data.rating is number &&
+        request.resource.data.rating >= 0.5 &&
+        request.resource.data.rating <= 5 &&
+        (request.resource.data.rating * 2) % 1 == 0 &&
+        get(/databases/$(database)/documents/orders/$(reviewId)).data.buyerId == request.auth.uid &&
+        get(/databases/$(database)/documents/orders/$(reviewId)).data.status == 'completed';
+      allow update: if isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'moderationStatus', 'moderatedBy', 'moderatedAt'
+        ]) &&
+        request.resource.data.moderationStatus == 'removed' &&
+        request.resource.data.moderatedBy == request.auth.uid;
+      allow delete: if false;
     }
 
     // ---- Moderation reports (flagged listings / users) ----
     match /reports/{reportId} {
       allow read: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        isAdmin();
 
-      allow create: if request.auth != null &&
+      allow create: if marketplaceUser() &&
         request.resource.data.reporterId == request.auth.uid &&
-        request.resource.data.status == 'pending';
+        request.resource.data.status == 'pending' &&
+        request.resource.data.keys().hasOnly([
+          'issueType', 'description', 'reporterId', 'reporterName',
+          'reportedUserId', 'reportedUserName', 'targetType', 'farmerId',
+          'productId', 'productName', 'reviewId', 'conversationId', 'status', 'createdAt'
+        ]) &&
+        (request.resource.data.get('targetType', '') != 'review' || (
+          request.resource.data.get('reviewId', '') is string &&
+          request.resource.data.reviewId.size() > 0 &&
+          exists(/databases/$(database)/documents/productReviews/$(request.resource.data.reviewId)) &&
+          get(/databases/$(database)/documents/productReviews/$(request.resource.data.reviewId)).data.productId == request.resource.data.productId &&
+          get(/databases/$(database)/documents/productReviews/$(request.resource.data.reviewId)).data.sellerId == request.resource.data.farmerId &&
+          get(/databases/$(database)/documents/productReviews/$(request.resource.data.reviewId)).data.buyerId == request.resource.data.reportedUserId &&
+          request.auth.uid != request.resource.data.reportedUserId
+        ));
 
       allow update, delete: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        isAdmin();
 
       // Append-only moderation audit trail — an admin-confirmed decision on
       // this report is never edited or removed after the fact, only added to.
       match /history/{entryId} {
         allow read: if request.auth != null &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+          isAdmin();
         allow create: if request.auth != null &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' &&
+          isAdmin() &&
           request.resource.data.adminId == request.auth.uid;
         allow update, delete: if false;
       }
@@ -208,18 +442,21 @@ service cloud.firestore {
     match /supportRequests/{requestId} {
       // The requester can read back their own submitted requests; an admin
       // can read all of them to (eventually) triage/respond.
-      allow read: if request.auth != null &&
+      allow read: if marketplaceUser() &&
         (resource.data.userId == request.auth.uid ||
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin');
+         isAdmin());
 
-      allow create: if request.auth != null &&
+      allow create: if marketplaceUser() &&
         request.resource.data.userId == request.auth.uid &&
-        request.resource.data.status == 'open';
+        request.resource.data.status == 'open' &&
+        request.resource.data.keys().hasOnly([
+          'userId', 'userName', 'userEmail', 'subject', 'message', 'status', 'createdAt'
+        ]);
 
       // Only an admin marks a request resolved/in-progress — the requester
       // can't edit their own request after sending it.
       allow update: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        isAdmin();
 
       allow delete: if false;
     }
@@ -228,7 +465,7 @@ service cloud.firestore {
     match /market_prices/{commodityId} {
       allow read: if true;
       allow write: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        isAdmin();
     }
 
     // ---- In-app notification history, written by Cloud Functions
@@ -237,9 +474,10 @@ service cloud.firestore {
     // (title, body, type, data, recipient) is client-editable, so no one
     // can rewrite their own history or impersonate a system notification. ----
     match /notifications/{uid}/items/{itemId} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow update: if request.auth != null && request.auth.uid == uid &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow read: if marketplaceUser() && request.auth.uid == uid;
+      allow update: if marketplaceUser() && request.auth.uid == uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+        request.resource.data.read is bool;
       allow create, delete: if false;
     }
 
@@ -247,29 +485,10 @@ service cloud.firestore {
     // buyer-facing "Trending Searches" row — query text isn't sensitive,
     // so any signed-in user can read it, not just admins) ----
     match /searchEvents/{eventId} {
-      allow create: if request.auth != null &&
+      allow create: if isBuyer() &&
         request.resource.data.userId == request.auth.uid;
-      allow read: if request.auth != null;
+      allow read: if marketplaceUser();
       allow update, delete: if false;
-    }
-
-    // ---- One role per device: which role (farmer/buyer) each device has
-    // already registered, keyed by a random id generated on-device (see
-    // DeviceRoleService). Read must stay open even to signed-out clients —
-    // the sign-up form checks this before the Firebase Auth account itself
-    // is created, so there's no auth token yet at that point. Holds no PII
-    // beyond that opaque id, a role string, and the uid that claimed it. ----
-    match /deviceRoles/{deviceId} {
-      allow read: if true;
-      allow create: if request.auth != null &&
-        request.resource.data.uid == request.auth.uid;
-      // A device that already claimed a role can't silently flip to the
-      // other one — only a same-role re-claim (e.g. a second account of
-      // the same role) may overwrite it.
-      allow update: if request.auth != null &&
-        request.resource.data.uid == request.auth.uid &&
-        request.resource.data.role == resource.data.role;
-      allow delete: if false;
     }
 
     // ---- Admin Portal audit log — written only by the logAuditEvent
@@ -279,7 +498,7 @@ service cloud.firestore {
     // since there is no client write path into this collection at all. ----
     match /audit_logs/{logId} {
       allow read: if request.auth != null &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        isAdmin();
       allow write: if false;
     }
   }

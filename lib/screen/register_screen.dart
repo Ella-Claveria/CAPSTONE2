@@ -1,20 +1,16 @@
-import 'dart:typed_data';
-
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:image_picker/image_picker.dart';
 import '../services/auth_service.dart';
 import '../services/cloudinary_service.dart';
-import '../services/device_role_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import 'email_verification_screen.dart';
 import '../services/connectivity_service.dart';
-import '../services/location_permission_prompt.dart';
 import '../widgets/barangay_location_field.dart';
 import '../widgets/glow_field.dart';
-import '../widgets/my_location_field.dart';
 import '../widgets/permission_rationale_dialog.dart';
 import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
@@ -28,7 +24,11 @@ class RegisterScreen extends StatefulWidget {
   // used, but the toggle is always live — the user can switch it right
   // there on the form and the fields below adjust accordingly.
   final String initialRole;
-  const RegisterScreen({super.key, this.initialRole = 'buyer'});
+  // Pre-fills the Email field — used by the login form's "Email not
+  // registered? Create One" prompt, so the email they already typed there
+  // doesn't need to be retyped.
+  final String? initialEmail;
+  const RegisterScreen({super.key, this.initialRole = 'buyer', this.initialEmail});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -38,23 +38,24 @@ class _RegisterScreenState extends State<RegisterScreen>
     with SingleTickerProviderStateMixin {
   // ---------- What the user types ----------
   final _fullNameController = TextEditingController();
-  final _emailController = TextEditingController();
+  late final _emailController = TextEditingController(text: widget.initialEmail ?? '');
+  // Holds only the 10 local digits (e.g. "9123456789") — the fixed "+63 "
+  // prefix is display-only (see GlowField's prefixText), never part of what
+  // the user types or what's stored in this controller. Required for
+  // farmers (order/delivery/pick-up coordination); optional for buyers, who
+  // can also give it later per-order (see place_order_screen.dart's own
+  // Contact Number field).
+  final _mobileController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmController = TextEditingController();
 
   // Barangay applies to both roles now; the certificate is farmer-only.
   String? _selectedBarangay;
-  // Only set when BarangayLocationField's "Use my location" actually got a
-  // GPS fix — a manually-picked barangay leaves these null, same as how a
-  // farmer's precise pin is a separate, optional step from their barangay.
-  double? _pickedLat;
-  double? _pickedLng;
   XFile? _certFile;        // the picked certificate (uploaded on submit)
   Uint8List? _certBytes;   // preview of the certificate
 
   final _authService = AuthService();
   final _cloudinaryService = CloudinaryService();
-  final _deviceRoleService = DeviceRoleService();
   final _imagePicker = ImagePicker();
 
   bool _loading = false;
@@ -86,7 +87,8 @@ class _RegisterScreenState extends State<RegisterScreen>
   late final Animation<double> _fade;
   late final Animation<Offset> _slide;
 
-  final _emailPattern = RegExp(r'^[\w\.\-]+@([\w\-]+\.)+[a-zA-Z]{2,}$');
+  // Only Gmail addresses are accepted for registration.
+  final _emailPattern = RegExp(r'^[\w\.\-]+@gmail\.com$', caseSensitive: false);
 
   bool get _isFarmer => _selectedRole == 'farmer';
 
@@ -97,6 +99,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     // Rebuild on every keystroke so errors + the button update live.
     _fullNameController.addListener(_onChange);
     _emailController.addListener(_onChange);
+    _mobileController.addListener(_onChange);
     _passwordController.addListener(_onChange);
     _confirmController.addListener(_onChange);
 
@@ -143,6 +146,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   void dispose() {
     _fullNameController.dispose();
     _emailController.dispose();
+    _mobileController.dispose();
     _passwordController.dispose();
     _confirmController.dispose();
     _animController.dispose();
@@ -160,23 +164,57 @@ class _RegisterScreenState extends State<RegisterScreen>
   bool _hasSymbol(String p) => RegExp(r'''[!@#$%^&*(),.?":{}|<>_+\-=\[\]]''').hasMatch(p);
 
   bool _passwordMeetsRules(String p) =>
-      p.length >= 8 &&
+      p.length >= 12 &&
       _hasUppercase(p) &&
       _hasLowercase(p) &&
       _hasNumber(p) &&
       _hasSymbol(p);
 
+  bool _nameHasDigits(String name) => RegExp(r'[0-9]').hasMatch(name);
+
   String? get _nameError {
     final name = _fullNameController.text.trim();
     if (name.isEmpty) return null;
     if (name.length < 3) return 'That name looks too short.';
+    if (_nameHasDigits(name)) return 'Full name cannot contain numbers.';
     return null;
   }
 
   String? get _emailError {
     final email = _emailController.text.trim();
     if (email.isEmpty) return null;
-    if (!_emailPattern.hasMatch(email)) return "That doesn't look like a valid email.";
+    if (!_emailPattern.hasMatch(email)) return 'Please enter a valid email address.';
+    return null;
+  }
+
+  bool _mobileNumberValid(String digits) => digits.length == 10 && digits.startsWith('9');
+
+  // The "+63 " prefix is fixed/display-only (see GlowField's prefixText) —
+  // the controller only ever holds the 10 local digits, and inputFormatters
+  // on the field itself already reject anything but digits and cap the
+  // length at 10, so there's no separate "no special characters" check
+  // needed here. "Must start with 9" shows live (useful the moment they
+  // type a wrong first digit); "required"/"incomplete" only after a submit
+  // attempt, so mid-typing never looks like an error.
+  String? get _mobileError {
+    final digits = _mobileController.text.trim();
+    if (digits.isEmpty) {
+      if (_isFarmer && _triedSubmit) return 'Mobile number is required.';
+      return null;
+    }
+    if (!digits.startsWith('9')) return 'Mobile number must start with 9.';
+    if (digits.length != 10 && _triedSubmit) return 'Enter all 10 digits.';
+    return null;
+  }
+
+  // Shown only after a submit attempt — the live checklist under the
+  // password field (_passwordRequirements) already gives per-rule feedback
+  // while typing, so this would be redundant noise before they've tried to
+  // submit.
+  String? get _passwordError {
+    if (!_triedSubmit) return null;
+    final p = _passwordController.text;
+    if (!_passwordMeetsRules(p)) return 'Password must meet all the requirements above.';
     return null;
   }
 
@@ -190,11 +228,20 @@ class _RegisterScreenState extends State<RegisterScreen>
   bool get _isFormValid {
     final name = _fullNameController.text.trim();
     final email = _emailController.text.trim();
+    final mobile = _mobileController.text.trim();
     final pass = _passwordController.text;
     final confirm = _confirmController.text;
 
     if (name.length < 3) return false;
+    if (_nameHasDigits(name)) return false;
     if (!_emailPattern.hasMatch(email)) return false;
+    if (_isFarmer) {
+      // Required for farmers — order/delivery/pick-up coordination.
+      if (!_mobileNumberValid(mobile)) return false;
+    } else if (mobile.isNotEmpty && !_mobileNumberValid(mobile)) {
+      // Optional for buyers, but whatever they typed must still be valid.
+      return false;
+    }
     if (!_passwordMeetsRules(pass)) return false;
     if (confirm.isEmpty || confirm != pass) return false;
 
@@ -202,8 +249,6 @@ class _RegisterScreenState extends State<RegisterScreen>
       if (_selectedBarangay == null) return false;
       if (_certFile == null) return false;
       if (!_supportedProductsAcknowledged) return false;
-    } else {
-      if (_pickedLat == null || _pickedLng == null) return false;
     }
     if (!_agreedToTerms) return false;
     return true;
@@ -214,7 +259,10 @@ class _RegisterScreenState extends State<RegisterScreen>
   // ==========================================================
   Future<void> _register() async {
     setState(() => _triedSubmit = true);
-    if (!_isFormValid) return;
+    if (!_isFormValid) {
+      _showMessage('Please fix the errors below before continuing.');
+      return;
+    }
 
     // ── Internet check ──
     if (!await hasInternet()) {
@@ -224,23 +272,20 @@ class _RegisterScreenState extends State<RegisterScreen>
 
     setState(() => _loading = true);
 
-    // ---- Step 1: this device can only ever hold one role ----
-    final registeredRole = await _deviceRoleService.getRegisteredRole();
-    if (!mounted) return;
-    if (registeredRole != null && registeredRole != _selectedRole) {
-      setState(() => _loading = false);
-      _showMessage('This device already has a $registeredRole account. '
-          'Only one role is allowed per device.');
-      return;
-    }
+    // One role per account is already guaranteed by Firebase Auth itself —
+    // an email can only ever back one account/uid, and a role is fixed to
+    // that account at creation and immutable afterward (see firestore
+    // .rules' users/{userId} update rule). signUp below surfaces
+    // "email-already-in-use" if this email is already registered under
+    // any role.
 
-    // ---- Step 2: create the account ----
+    // ---- Step 1: create the Firebase Auth account only — no Firestore
+    // profile yet. That's written in one shot, after email verification
+    // actually succeeds, by EmailVerificationScreen (see
+    // AuthService.completeRegistration's doc comment for why).
     final error = await _authService.signUp(
-      fullName: _fullNameController.text.trim(),
       email: _emailController.text.trim(),
       password: _passwordController.text,
-      role: _selectedRole,
-      supportedProductsAcknowledged: _isFarmer && _supportedProductsAcknowledged,
     );
 
     if (!mounted) return;
@@ -250,68 +295,51 @@ class _RegisterScreenState extends State<RegisterScreen>
       return;
     }
 
-    final newUid = FirebaseAuth.instance.currentUser?.uid;
-    if (newUid != null) {
-      await _deviceRoleService.claimDevice(role: _selectedRole, uid: newUid);
-    }
+    final uid = FirebaseAuth.instance.currentUser?.uid;
 
-    // ---- Step 3: farmers only — upload the certificate ----
-    if (_isFarmer) {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid != null && _certFile != null) {
-        final certUrl = await _cloudinaryService.uploadImage(
-          _certFile!,
-          folder: 'agritrade/certificates',
-        );
-
-        if (!mounted) return;
-        if (certUrl == null) {
-          setState(() => _loading = false);
-          _showMessage('Certificate upload failed. Please try again.');
-          return;
-        }
-
-        final docError = await _authService.saveVerificationDocument(
-          uid: uid,
-          documentUrl: certUrl,
-          barangay: _selectedBarangay!,
-          fullName: _fullNameController.text.trim(),
-        );
-
-        if (!mounted) return;
-        if (docError != null) {
-          setState(() => _loading = false);
-          _showMessage(docError);
-          return;
-        }
-
-      }
-    } else {
-      final uid = FirebaseAuth.instance.currentUser?.uid;
-      if (uid != null && _pickedLat != null && _pickedLng != null) {
-        await _authService.saveBuyerLocation(
-          uid: uid,
-          latitude: _pickedLat!,
-          longitude: _pickedLng!,
-        );
-      }
-      // Also primes the separate, ongoing "sort nearby farms by distance"
-      // permission used later in the marketplace — a no-op prompt-wise if
-      // MyLocationField's "Use my location" already granted it above.
-      if (mounted) {
-        await requestBuyerLocationPermission(context);
+    // ---- Step 2: farmers only — upload the certificate now (Cloudinary,
+    // not Firestore), so its URL can travel with the rest of the profile
+    // to be written post-verification.
+    String? certUrl;
+    if (_isFarmer && uid != null && _certFile != null) {
+      certUrl = await _cloudinaryService.uploadImage(
+        _certFile!,
+        folder: 'agritrade/certificates',
+      );
+      if (!mounted) return;
+      if (certUrl == null) {
+        setState(() => _loading = false);
+        _showMessage('Certificate upload failed. Please try again.');
+        return;
       }
     }
+    // Buyers no longer set a location at registration — they set it later,
+    // per order, when placing one (see place_order_screen.dart).
+
+    final mobileDigits = _mobileController.text.trim();
+    final pendingProfile = PendingRegistrationProfile(
+      role: _selectedRole,
+      fullName: _fullNameController.text.trim(),
+      mobileNumber: mobileDigits.isEmpty ? null : '+63$mobileDigits',
+      supportedProductsAcknowledged: _isFarmer && _supportedProductsAcknowledged,
+      barangay: _isFarmer ? _selectedBarangay : null,
+      certificateUrl: certUrl,
+    );
+    // Durable (survives the app being closed while they check their
+    // email), not just an in-memory navigation argument — see
+    // PendingRegistrationProfile's doc comment.
+    if (uid != null) await _authService.savePendingProfile(uid, pendingProfile);
 
     if (!mounted) return;
     setState(() => _loading = false);
 
-    // ---- Step 4: go verify the email ----
+    // ---- Step 3: go verify the email ----
     Navigator.pushReplacement(
       context,
       slideRoute(EmailVerificationScreen(
         role: _selectedRole,
         email: _emailController.text.trim(),
+        pendingProfile: pendingProfile,
       )),
     );
   }
@@ -324,6 +352,9 @@ class _RegisterScreenState extends State<RegisterScreen>
   // ==========================================================
   // Certificate picker
   // ==========================================================
+  static const int _maxCertBytes = 5 * 1024 * 1024; // 5MB
+  static const List<String> _allowedCertExtensions = ['.png', '.jpg', '.jpeg'];
+
   Future<void> _pickCertificate() async {
     // Explain why before the OS photo-library prompt appears, instead of
     // surprising them with a permission dialog the moment they tap this.
@@ -346,8 +377,20 @@ class _RegisterScreenState extends State<RegisterScreen>
       imageQuality: 75,
     );
     if (picked == null) return;
+
+    final name = picked.name.toLowerCase();
+    if (!_allowedCertExtensions.any(name.endsWith)) {
+      _showMessage('Please attach a PNG or JPG image.');
+      return;
+    }
+
     final bytes = await picked.readAsBytes();
     if (!mounted) return;
+    if (bytes.length > _maxCertBytes) {
+      _showMessage('That image is too large. Please attach one under 5MB.');
+      return;
+    }
+
     setState(() {
       _certFile = picked;
       _certBytes = bytes;
@@ -417,8 +460,11 @@ class _RegisterScreenState extends State<RegisterScreen>
     required String hint,
     required IconData icon,
     String? errorText,
+    String? caption,
     bool obscure = false,
     Widget? suffix,
+    String? prefixText,
+    List<TextInputFormatter>? inputFormatters,
     TextInputType keyboard = TextInputType.text,
   }) {
     return Column(
@@ -433,8 +479,29 @@ class _RegisterScreenState extends State<RegisterScreen>
           hint: hint,
           icon: icon,
           suffix: suffix,
-          errorText: errorText,
+          prefixText: prefixText,
+          inputFormatters: inputFormatters,
         ),
+        // Rendered as its own line below the field, not inside it (GlowField
+        // no longer accepts an errorText of its own) — keeps every field's
+        // error visually outside the input itself.
+        if (errorText != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(errorText, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+              ),
+            ],
+          ),
+        ],
+        if (errorText == null && caption != null) ...[
+          const SizedBox(height: 6),
+          Text(caption, style: TextStyle(color: Colors.grey[600], fontSize: 11.5)),
+        ],
         const SizedBox(height: 16),
       ],
     );
@@ -449,7 +516,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (p.isEmpty) return const SizedBox(height: 16);
 
     final requirements = <(String, bool)>[
-      ('8+ characters', p.length >= 8),
+      ('12+ characters', p.length >= 12),
       ('Uppercase letter', _hasUppercase(p)),
       ('Lowercase letter', _hasLowercase(p)),
       ('Number', _hasNumber(p)),
@@ -522,96 +589,171 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   // ==========================================================
-  // Farmer supported-product awareness — shown during Farmer setup, before
-  // registration completes, so a farmer knows the marketplace scope before
-  // they ever try to list something. The acknowledgment checkbox below is
-  // required and never pre-checked; its state is stored on the account via
-  // AuthService.signUp's supportedProductsAcknowledged field.
+  // Farmer supported-product awareness — a farmer must know the
+  // marketplace scope before they ever try to list something, but the
+  // full explanation is too long to sit inline in an already-long form.
+  // So the form itself only shows this one-line banner; tapping it opens
+  // _showSupportedProductsSheet with the full explanation, the "View
+  // Supported Products" link, and the acknowledgment checkbox itself —
+  // required and never pre-checked, same as before. Its state is stored
+  // on the account via AuthService.signUp's supportedProductsAcknowledged
+  // field.
   // ==========================================================
   Widget _supportedProductsSection() {
     final showError = _triedSubmit && !_supportedProductsAcknowledged;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.accent.withValues(alpha: 0.20),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: showError ? Colors.red : AppTheme.mid, width: 1.2),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Icon(Icons.eco_outlined, color: AppTheme.dark, size: 18),
-              const SizedBox(width: 6),
-              Text('Supported Products in AgriTrade+',
-                  style: AppTheme.body(color: AppTheme.dark, size: 13.5).copyWith(fontWeight: FontWeight.bold)),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'AgriTrade+ currently supports selected agricultural commodities based on '
-            'the products identified with the agricultural office. Only supported '
-            'products can be posted in the marketplace.',
-            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Please review the supported products before continuing.',
-            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.w600),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SupportedProductsScreen()),
-              ),
-              style: TextButton.styleFrom(
-                foregroundColor: AppTheme.dark,
-                padding: EdgeInsets.zero,
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('View Supported Products', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
-            ),
-          ),
-          const SizedBox(height: 4),
           InkWell(
-            onTap: () => setState(() => _supportedProductsAcknowledged = !_supportedProductsAcknowledged),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Checkbox(
-                  value: _supportedProductsAcknowledged,
-                  onChanged: (v) => setState(() => _supportedProductsAcknowledged = v ?? false),
-                  activeColor: AppTheme.dark,
-                  visualDensity: VisualDensity.compact,
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 12),
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _showSupportedProductsSheet(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppTheme.accent.withValues(alpha: 0.20),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: showError ? Colors.red : AppTheme.mid, width: 1.2),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _supportedProductsAcknowledged ? Icons.check_circle : Icons.eco_outlined,
+                    color: _supportedProductsAcknowledged ? Colors.green[700] : AppTheme.dark,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
                     child: Text(
-                      'I understand that AgriTrade+ currently supports only selected '
-                      'agricultural commodities and that I can only post products '
-                      'included in the Supported Products list.',
-                      style: AppTheme.body(color: Colors.black87, size: 12).copyWith(height: 1.4),
+                      _supportedProductsAcknowledged
+                          ? 'Supported Products reviewed'
+                          : 'Supported Products apply — tap to review',
+                      style: AppTheme.body(color: AppTheme.dark, size: 13).copyWith(fontWeight: FontWeight.w600),
                     ),
                   ),
+                  const Icon(Icons.chevron_right, color: AppTheme.mid),
+                ],
+              ),
+            ),
+          ),
+          if (showError) ...[
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+                const SizedBox(width: 4),
+                const Expanded(
+                  child: Text('Please review and confirm the supported products scope.',
+                      style: TextStyle(color: Colors.red, fontSize: 11)),
                 ),
               ],
             ),
-          ),
-          if (showError)
-            const Padding(
-              padding: EdgeInsets.only(left: 12),
-              child: Text('Please confirm you understand the supported products scope.',
-                  style: TextStyle(color: Colors.red, fontSize: 11.5)),
-            ),
+          ],
         ],
       ),
     );
+  }
+
+  Future<void> _showSupportedProductsSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: 20 + MediaQuery.of(sheetContext).viewInsets.bottom,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.eco_outlined, color: AppTheme.dark, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text('Supported Products in AgriTrade+',
+                            style: AppTheme.body(color: AppTheme.dark, size: 14.5).copyWith(fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'AgriTrade+ currently supports selected agricultural commodities based on '
+                    'the products identified with the agricultural office. Only supported '
+                    'products can be posted in the marketplace.',
+                    style: AppTheme.body(color: Colors.black87, size: 13).copyWith(height: 1.4),
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SupportedProductsScreen()),
+                      ),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.dark,
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('View Supported Products', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  InkWell(
+                    onTap: () => setSheetState(
+                        () => _supportedProductsAcknowledged = !_supportedProductsAcknowledged),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Checkbox(
+                          value: _supportedProductsAcknowledged,
+                          onChanged: (v) => setSheetState(() => _supportedProductsAcknowledged = v ?? false),
+                          activeColor: AppTheme.dark,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Text(
+                              'I understand that AgriTrade+ currently supports only selected '
+                              'agricultural commodities and that I can only post products '
+                              'included in the Supported Products list.',
+                              style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      style: AppTheme.primaryButton(),
+                      child: const Text('Close'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+    if (mounted) setState(() {});
   }
 
   // ==========================================================
@@ -763,7 +905,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                       Text('Attach your certificate',
                           style: AppTheme.body(size: 13)),
                       const SizedBox(height: 2),
-                      Text('(photo of the document)',
+                      Text('PNG or JPG only, up to 5MB',
                           style: AppTheme.body(
                               color: Colors.black45, size: 11.5)),
                     ],
@@ -894,13 +1036,36 @@ class _RegisterScreenState extends State<RegisterScreen>
                             errorText: _emailError,
                           ),
 
+                          // ---- Mobile Number ----
+                          // Required for farmers (order/delivery/pick-up
+                          // coordination); optional for buyers, who can also
+                          // give it later per order instead. Fixed +63
+                          // prefix — no country dropdown, PH-only scope.
+                          _buildField(
+                            label: _isFarmer ? 'Mobile Number' : 'Mobile Number (optional)',
+                            controller: _mobileController,
+                            hint: '912 345 6789',
+                            icon: Icons.phone_outlined,
+                            keyboard: TextInputType.phone,
+                            prefixText: '+63 ',
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                              LengthLimitingTextInputFormatter(10),
+                            ],
+                            errorText: _mobileError,
+                            caption: _isFarmer
+                                ? 'For order, delivery, and pick-up coordination only.'
+                                : null,
+                          ),
+
                           // ---- Password ----
                           _buildField(
                             label: AppLocalizations.of(context)!.password,
                             controller: _passwordController,
-                            hint: 'At least 8 characters',
+                            hint: 'At least 12 characters',
                             icon: Icons.lock_outline,
                             obscure: _obscurePassword,
+                            errorText: _passwordError,
                             suffix: IconButton(
                               icon: Icon(
                                 _obscurePassword
@@ -935,15 +1100,16 @@ class _RegisterScreenState extends State<RegisterScreen>
                           ),
 
                           // ================================================
-                          // LOCATION — farmers are restricted to Laurel
-                          // (BarangayLocationField, for verification);
-                          // buyers can be anywhere in the Philippines
-                          // (MyLocationField, a free map pin).
+                          // LOCATION — farmers only (BarangayLocationField,
+                          // for verification), restricted to Laurel. Buyers
+                          // no longer set a location at registration at
+                          // all — they set it later, per order, when
+                          // placing one (see place_order_screen.dart).
                           // The certificate stays farmer-only below.
                           // ================================================
-                          const Divider(height: 8),
-                          const SizedBox(height: 14),
                           if (_isFarmer) ...[
+                            const Divider(height: 8),
+                            const SizedBox(height: 14),
                             _laurelNotice(),
                             const SizedBox(height: 14),
                             _supportedProductsSection(),
@@ -953,25 +1119,10 @@ class _RegisterScreenState extends State<RegisterScreen>
                                   ? 'Please select a barangay in Laurel.'
                                   : null,
                               onChanged: (value) => setState(() => _selectedBarangay = value),
-                              onLocationDetected: (lat, lng) {
-                                _pickedLat = lat;
-                                _pickedLng = lng;
-                              },
                             ),
                             _publicLocationPreview(),
                             _buildCertificatePicker(),
-                          ] else
-                            MyLocationField(
-                              latitude: _pickedLat,
-                              longitude: _pickedLng,
-                              errorText: _triedSubmit && (_pickedLat == null || _pickedLng == null)
-                                  ? 'Please set your location.'
-                                  : null,
-                              onPicked: (latLng) => setState(() {
-                                _pickedLat = latLng.latitude;
-                                _pickedLng = latLng.longitude;
-                              }),
-                            ),
+                          ],
                           const SizedBox(height: 4),
                           _consentCheckbox(),
                         ],
@@ -1069,3 +1220,4 @@ class _RegisterScreenState extends State<RegisterScreen>
     );
   }
 }
+

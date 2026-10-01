@@ -52,6 +52,48 @@ class FarmerRevenueService {
       _toDateTime(order['updatedAt']) ??
       _toDateTime(order['createdAt']);
 
+  /// Returns one completed-order revenue total for each eligible day in the
+  /// selected month. The first eligible day is never earlier than verification.
+  static List<({DateTime date, double revenue})> dailyRevenueForMonth({
+    required List<Map<String, dynamic>> orders,
+    required DateTime month,
+    required DateTime verifiedAt,
+  }) {
+    final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
+    final now = DateTime.now();
+    final lastEligibleDay = month.year == now.year && month.month == now.month
+        ? now.day
+        : daysInMonth;
+    final firstDay =
+        month.year == verifiedAt.year && month.month == verifiedAt.month
+        ? verifiedAt.day
+        : 1;
+    final daily = <({DateTime date, double revenue})>[];
+
+    for (var day = firstDay; day <= lastEligibleDay; day++) {
+      final date = DateTime(month.year, month.month, day);
+      var revenue = 0.0;
+      for (final order in orders) {
+        if ((order['status'] ?? '').toString().toLowerCase() != 'completed')
+          continue;
+        final completedAt = _completionDate(order);
+        if (completedAt == null || completedAt.isBefore(verifiedAt)) continue;
+        if (completedAt.year != date.year ||
+            completedAt.month != date.month ||
+            completedAt.day != date.day) {
+          continue;
+        }
+        revenue += _asNum(order['total']).toDouble();
+      }
+      daily.add((date: date, revenue: revenue));
+    }
+    return daily;
+  }
+
+  static double totalRevenueForDays(
+    List<({DateTime date, double revenue})> days,
+  ) => days.fold(0.0, (total, day) => total + day.revenue);
+
   static num totalRevenueForRange({
     required List<Map<String, dynamic>> orders,
     required FarmerRevenueView view,
@@ -207,10 +249,14 @@ class FarmerRevenueService {
     for (final order in orders) {
       final status = (order['status'] ?? '').toString().toLowerCase();
       if (status != 'completed') continue;
-      final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
+      final name = (order['productName'] ?? order['name'] ?? '')
+          .toString()
+          .trim();
       if (name.isEmpty) continue;
-      revenueByProduct[name] = (revenueByProduct[name] ?? 0) + _asNum(order['total']);
-      qtyByProduct[name] = (qtyByProduct[name] ?? 0) + _asNum(order['quantity']);
+      revenueByProduct[name] =
+          (revenueByProduct[name] ?? 0) + _asNum(order['total']);
+      qtyByProduct[name] =
+          (qtyByProduct[name] ?? 0) + _asNum(order['quantity']);
     }
     if (revenueByProduct.isEmpty) return const [];
 
@@ -218,8 +264,48 @@ class FarmerRevenueService {
       ..sort((a, b) => b.value.compareTo(a.value));
     return ranked
         .take(limit)
-        .map((e) => (name: e.key, revenue: e.value, quantity: qtyByProduct[e.key] ?? 0))
+        .map(
+          (e) => (
+            name: e.key,
+            revenue: e.value,
+            quantity: qtyByProduct[e.key] ?? 0,
+          ),
+        )
         .toList();
+  }
+
+  /// Platform-wide products ranked by total quantity in completed sales.
+  /// Market sale records contain no buyer identity; unit is preserved so
+  /// unlike measures are not combined in the ranking.
+  static List<({String name, String unit, num quantity, int orderCount})>
+  topMarketplaceProducts({
+    required List<Map<String, dynamic>> sales,
+    int limit = 3,
+  }) {
+    final aggregates =
+        <String, ({String name, String unit, num quantity, int orderCount})>{};
+    for (final sale in sales) {
+      if ((sale['status'] ?? '').toString().toLowerCase() != 'completed') {
+        continue;
+      }
+      final name = (sale['productName'] ?? '').toString().trim();
+      if (name.isEmpty) continue;
+      final unitValue = sale['unit']?.toString().trim();
+      final unit = unitValue == null || unitValue.isEmpty
+          ? unitForProductName(name)
+          : unitValue;
+      final key = '${name.toLowerCase()}|${unit.toLowerCase()}';
+      final previous = aggregates[key];
+      aggregates[key] = (
+        name: previous?.name ?? name,
+        unit: unit,
+        quantity: (previous?.quantity ?? 0) + _asNum(sale['quantity']),
+        orderCount: (previous?.orderCount ?? 0) + 1,
+      );
+    }
+    final ranked = aggregates.values.toList()
+      ..sort((a, b) => b.quantity.compareTo(a.quantity));
+    return ranked.take(limit).toList();
   }
 
   /// Market insights for the "Market Objective" card — entirely derived
@@ -246,15 +332,20 @@ class FarmerRevenueService {
     // QueryDocumentSnapshots.
     final activePricesByCommodity = <String, List<double>>{};
     for (final product in products) {
-      if (product['isArchived'] == true || product['isSuspended'] == true) continue;
+      if (product['isArchived'] == true || product['isSuspended'] == true)
+        continue;
       final rawQuantity = product['quantity'];
       final quantity = rawQuantity is num
           ? rawQuantity.toDouble()
           : num.tryParse(rawQuantity?.toString() ?? '')?.toDouble();
       if (quantity == null || quantity <= 0) continue;
-      final price = _asNum(product['retailPrice'] ?? product['price']).toDouble();
+      final price = _asNum(
+        product['retailPrice'] ?? product['price'],
+      ).toDouble();
       if (price <= 0) continue;
-      final rawName = (product['commodity'] ?? product['name'] ?? '').toString().trim();
+      final rawName = (product['commodity'] ?? product['name'] ?? '')
+          .toString()
+          .trim();
       if (rawName.isEmpty) continue;
       final commodity = matchSupportedCommodity(rawName) ?? rawName;
       activePricesByCommodity.putIfAbsent(commodity, () => []).add(price);
@@ -270,9 +361,11 @@ class FarmerRevenueService {
     final double? marketAverage = topCommodity == null
         ? null
         : activePricesByCommodity[topCommodity]!.reduce((a, b) => a + b) /
-            activePricesByCommodity[topCommodity]!.length;
+              activePricesByCommodity[topCommodity]!.length;
     final String? marketAverageCommodity = topCommodity;
-    final String? marketAverageUnit = topCommodity == null ? null : unitForCommodity(topCommodity!);
+    final String? marketAverageUnit = topCommodity == null
+        ? null
+        : unitForCommodity(topCommodity!);
 
     final completedOrders = orders.where((order) {
       final status = (order['status'] ?? '').toString().toLowerCase();
@@ -288,12 +381,16 @@ class FarmerRevenueService {
     final seasonalQuantities = <String, num>{};
     for (final order in completedOrders) {
       final createdAt = _completionDate(order)!;
-      if (createdAt.isBefore(seasonRange.start) || createdAt.isAfter(seasonRange.end)) {
+      if (createdAt.isBefore(seasonRange.start) ||
+          createdAt.isAfter(seasonRange.end)) {
         continue;
       }
-      final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
+      final name = (order['productName'] ?? order['name'] ?? '')
+          .toString()
+          .trim();
       if (name.isEmpty) continue;
-      seasonalQuantities[name] = (seasonalQuantities[name] ?? 0) + _asNum(order['quantity']);
+      seasonalQuantities[name] =
+          (seasonalQuantities[name] ?? 0) + _asNum(order['quantity']);
     }
     final seasonalPick = _topByQuantity(seasonalQuantities);
 
@@ -306,9 +403,12 @@ class FarmerRevenueService {
     for (final order in completedOrders) {
       final createdAt = _completionDate(order)!;
       if (now.difference(createdAt).inDays > _recentWindowDays) continue;
-      final name = (order['productName'] ?? order['name'] ?? '').toString().trim();
+      final name = (order['productName'] ?? order['name'] ?? '')
+          .toString()
+          .trim();
       if (name.isEmpty) continue;
-      recentQuantities[name] = (recentQuantities[name] ?? 0) + _asNum(order['quantity']);
+      recentQuantities[name] =
+          (recentQuantities[name] ?? 0) + _asNum(order['quantity']);
     }
     final marketPick = _topByQuantity(recentQuantities);
 

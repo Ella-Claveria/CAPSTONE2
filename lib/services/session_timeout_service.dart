@@ -28,6 +28,7 @@ class SessionTimeoutService extends WidgetsBindingObserver {
   static const kIdleTimeout = Duration(minutes: 15);
 
   GlobalKey<NavigatorState>? _navigatorKey;
+  Timer? _idleTimer;
 
   /// Call once from main(), before runApp — [navigatorKey] is used to force
   /// the app back to the login flow if the timeout fires while the app is
@@ -35,6 +36,29 @@ class SessionTimeoutService extends WidgetsBindingObserver {
   void start(GlobalKey<NavigatorState> navigatorKey) {
     _navigatorKey = navigatorKey;
     WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// Starts or refreshes the active-session inactivity clock. Lifecycle
+  /// timestamps separately cover a suspended app and process restarts.
+  void recordActivity() {
+    if (FirebaseAuth.instance.currentUser == null) {
+      _idleTimer?.cancel();
+      _idleTimer = null;
+      return;
+    }
+    _idleTimer?.cancel();
+    _idleTimer = Timer(kIdleTimeout, _expireActiveSession);
+  }
+
+  Future<void> _expireActiveSession() async {
+    if (FirebaseAuth.instance.currentUser == null) return;
+    await AuthService().signOut();
+    final navState = _navigatorKey?.currentState;
+    if (navState == null) return;
+    navState.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AppBootstrap()),
+      (route) => false,
+    );
   }
 
   @override
@@ -58,7 +82,10 @@ class SessionTimeoutService extends WidgetsBindingObserver {
 
   Future<void> _resumeAndMaybeSignOut() async {
     final timedOut = await signOutIfIdleTooLong();
-    if (!timedOut) return;
+    if (!timedOut) {
+      recordActivity();
+      return;
+    }
     // The process survived the background period, so whatever screen was
     // on screen (Farmer/Buyer Home, a product page, etc.) is still on the
     // Navigator stack — this is the one path that needs to force its own

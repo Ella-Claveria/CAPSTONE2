@@ -34,7 +34,7 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
   final _picker = ImagePicker();
   final _commentController = TextEditingController();
 
-  int _rating = 5;
+  double _rating = 0;
   bool _submitting = false;
   XFile? _selectedImage;
 
@@ -83,6 +83,12 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
 
   Future<void> _submit() async {
     if (_submitting) return;
+    if (_rating == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please choose a star rating.')),
+      );
+      return;
+    }
     final comment = _commentController.text.trim();
     if (comment.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -134,13 +140,31 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
   }
 
   Widget _star(int index) {
-    final filled = index <= _rating;
-    return IconButton(
-      onPressed: () => setState(() => _rating = index),
-      icon: Icon(
-        filled ? Icons.star_rounded : Icons.star_border_rounded,
-        color: filled ? Colors.amber : Colors.grey,
-        size: 32,
+    final fill = (_rating - (index - 1)).clamp(0.0, 1.0);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (details) {
+        final half = details.localPosition.dx < 18;
+        setState(() => _rating = index - (half ? 0.5 : 0));
+      },
+      child: SizedBox(
+        width: 36,
+        height: 44,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            const Icon(Icons.star_border_rounded, color: Colors.grey, size: 32),
+            if (fill > 0)
+              ClipRect(
+                clipper: _StarFillClipper(fill),
+                child: const Icon(
+                  Icons.star_rounded,
+                  color: Colors.amber,
+                  size: 32,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -185,12 +209,18 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
                               fit: BoxFit.cover,
                               errorBuilder: (_, _, _) => Container(
                                 color: _accent,
-                                child: const Icon(Icons.shopping_basket, color: _dark),
+                                child: const Icon(
+                                  Icons.shopping_basket,
+                                  color: _dark,
+                                ),
                               ),
                             )
                           : Container(
                               color: _accent,
-                              child: const Icon(Icons.shopping_basket, color: _dark),
+                              child: const Icon(
+                                Icons.shopping_basket,
+                                color: _dark,
+                              ),
                             ),
                     ),
                   ),
@@ -198,18 +228,32 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
                   Expanded(
                     child: Text(
                       widget.productName,
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 20),
-            const Text('Your Rating', style: TextStyle(fontWeight: FontWeight.w700)),
+            const Text(
+              'Your Rating (required)',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(5, (i) => _star(i + 1)),
+            ),
+            Center(
+              child: Text(
+                _rating == 0
+                    ? 'Choose 0.5 to 5 stars'
+                    : '${_rating.toStringAsFixed(1)} out of 5',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12),
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -219,14 +263,20 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
               decoration: InputDecoration(
                 labelText: 'Description',
                 hintText: 'Share your experience with this product...',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: _pickImage,
               icon: const Icon(Icons.add_a_photo_outlined),
-              label: Text(_selectedImage == null ? 'Add Image (Optional)' : 'Change Image'),
+              label: Text(
+                _selectedImage == null
+                    ? 'Add Image (Optional)'
+                    : 'Change Image',
+              ),
             ),
             if (_selectedImage != null) ...[
               const SizedBox(height: 8),
@@ -271,4 +321,17 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
       ),
     );
   }
+}
+
+class _StarFillClipper extends CustomClipper<Rect> {
+  final double fill;
+  const _StarFillClipper(this.fill);
+
+  @override
+  Rect getClip(Size size) =>
+      Rect.fromLTWH(0, 0, size.width * fill, size.height);
+
+  @override
+  bool shouldReclip(covariant _StarFillClipper oldClipper) =>
+      oldClipper.fill != fill;
 }

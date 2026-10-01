@@ -70,12 +70,13 @@ Future<bool> requestFarmerLocationPermission(
   return maybeRequestLocationPermission(
     context,
     title: 'Set Your Farm Location',
-    message: 'AgriTrade+ uses your location to help buyers discover products '
-        'near them and understand the general area where your farm or '
-        'selling location is located.',
+    message: 'AgriTrade+ uses your location to estimate distance between '
+        'buyers and farmers, support delivery or pick-up coordination, and '
+        'improve location-based marketplace analytics.',
     bullets: [
-      'Your public profile may show your barangay, municipality/city, and province.',
-      'Your precise location will not be displayed publicly.',
+      'Your general farm area may be shown to Buyers to help them understand '
+          'where products are located — your barangay, municipality/city, and province.',
+      'Exact location information is not publicly displayed unless required for an order.',
       'Location may also be used for distance calculation, nearby marketplace '
           'features, maps, and aggregated analytics.',
       'Location is required for Farmer accounts to use location-based marketplace features.',
@@ -93,10 +94,12 @@ Future<bool> requestBuyerLocationPermission(BuildContext context) {
   return maybeRequestLocationPermission(
     context,
     title: 'Find Products Near You',
-    message: 'Allow AgriTrade+ to use your location to show nearby farmers '
-        'and products, estimate distance, and improve location-based '
-        'marketplace features.',
+    message: 'AgriTrade+ uses your location to estimate distance between '
+        'buyers and farmers, support delivery or pick-up coordination, and '
+        'improve location-based marketplace analytics.',
     bullets: [
+      'Used to show nearby farmers and products and estimate approximate distance.',
+      'Used to support delivery and pick-up coordination for your orders.',
       'Your location may also be used in aggregated demand analytics to help '
           'administrators understand which areas have higher purchasing demand.',
       'Your precise location will not be displayed publicly to other users.',

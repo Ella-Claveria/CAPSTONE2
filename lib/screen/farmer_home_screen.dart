@@ -196,28 +196,21 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           elevation: 1,
           iconTheme: const IconThemeData(color: _dark),
           titleSpacing: 16,
-          title: Container(
-            width: 46,
-            height: 46,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _bg,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
+          title: Semantics(
+            button: true,
+            label: 'Go to Market tab',
+            child: InkWell(
+              onTap: () => setState(() => _selectedIndex = 0),
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: Image.asset(
+                  'assets/images/logo.png',
+                  width: 40,
+                  height: 40,
+                  fit: BoxFit.contain,
+                  errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark, size: 28),
                 ),
-              ],
-            ),
-            child: ClipOval(
-              child: Image.asset(
-                'assets/images/logo.png',
-                width: 36,
-                height: 36,
-                fit: BoxFit.cover,
-                errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark, size: 26),
               ),
             ),
           ),

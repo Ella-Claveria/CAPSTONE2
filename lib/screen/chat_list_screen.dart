@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/message_service.dart';
+import '../widgets/retry_message.dart';
 import 'chat_screen.dart';
 import 'message_order_screen.dart';
 
@@ -59,8 +60,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 );
               }
               if (snapshot.hasError) {
-                return const Center(
-                  child: Text('Something went wrong loading messages.'),
+                return RetryMessage(
+                  message: 'Could not load messages. Check your connection and try again.',
+                  onRetry: () => setState(() {}),
                 );
               }
 
@@ -191,7 +193,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         otherName.trim().isEmpty) {
       return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
-            .collection('users')
+            .collection('publicProfiles')
             .doc(otherUid)
             .snapshots(),
         builder: (context, snapshot) {

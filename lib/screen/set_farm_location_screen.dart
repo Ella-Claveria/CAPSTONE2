@@ -80,8 +80,20 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
 
     setState(() => _saving = true);
     try {
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set(
-        {'latitude': _picked.latitude, 'longitude': _picked.longitude},
+      // Exact coordinates live under users/{uid}/private/geo, not on the
+      // main user doc — that doc is readable by any signed-in user, so an
+      // exact pin must never be a field on it (see firestore.rules).
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('private')
+          .doc('geo')
+          .set(
+        {
+          'latitude': _picked.latitude,
+          'longitude': _picked.longitude,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
         SetOptions(merge: true),
       );
       if (!mounted) return;

@@ -1,18 +1,14 @@
-import 'dart:typed_data';
-
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/auth_routing_service.dart';
 import '../services/auth_service.dart';
 import '../services/cloudinary_service.dart';
-import '../services/device_role_service.dart';
-import '../services/location_permission_prompt.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import '../widgets/barangay_location_field.dart';
-import '../widgets/my_location_field.dart';
 import '../widgets/permission_rationale_dialog.dart';
 import 'auth_route_handler.dart';
 import 'privacy_policy_screen.dart';
@@ -47,20 +43,19 @@ class GoogleCompleteProfileScreen extends StatefulWidget {
 
 class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScreen> {
   late final _fullNameController = TextEditingController(text: widget.initialName ?? '');
+  // Holds only the 10 local digits — see RegisterScreen._mobileController's
+  // doc for the full rationale (fixed "+63 " prefix, required for farmers,
+  // optional for buyers).
+  final _mobileController = TextEditingController();
   late String _selectedRole = widget.initialRole == 'farmer' ? 'farmer' : 'buyer';
 
   String? _selectedBarangay;
-  // Only set when BarangayLocationField's "Use my location" got a real GPS
-  // fix — a manually-picked barangay leaves these null.
-  double? _pickedLat;
-  double? _pickedLng;
   XFile? _certFile;
   Uint8List? _certBytes;
   bool _photoPromptShown = false;
 
   final _authService = AuthService();
   final _cloudinaryService = CloudinaryService();
-  final _deviceRoleService = DeviceRoleService();
   final _imagePicker = ImagePicker();
 
   bool _loading = false;
@@ -74,20 +69,52 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
   @override
   void dispose() {
     _fullNameController.dispose();
+    _mobileController.dispose();
     super.dispose();
   }
 
+  bool _nameHasDigits(String name) => RegExp(r'[0-9]').hasMatch(name);
+  bool _mobileNumberValid(String digits) => digits.length == 10 && digits.startsWith('9');
+
   bool get _isFormValid {
-    if (_fullNameController.text.trim().length < 3) return false;
+    final name = _fullNameController.text.trim();
+    final mobile = _mobileController.text.trim();
+    if (name.length < 3) return false;
+    if (_nameHasDigits(name)) return false;
     if (_isFarmer) {
+      if (!_mobileNumberValid(mobile)) return false;
       if (_selectedBarangay == null) return false;
       if (_certFile == null) return false;
       if (!_supportedProductsAcknowledged) return false;
     } else {
-      if (_pickedLat == null || _pickedLng == null) return false;
+      if (mobile.isNotEmpty && !_mobileNumberValid(mobile)) return false;
     }
     if (!_agreedToTerms) return false;
     return true;
+  }
+
+  // Shown only after a submit attempt, matching the other field errors
+  // on this screen.
+  String? get _nameError {
+    if (!_triedSubmit) return null;
+    final name = _fullNameController.text.trim();
+    if (name.length < 3) return 'That name looks too short.';
+    if (_nameHasDigits(name)) return 'Full name cannot contain numbers.';
+    return null;
+  }
+
+  // Required for farmers (order/delivery/pick-up coordination); optional
+  // for buyers. "Must start with 9" shows live; "required"/"incomplete"
+  // only after a submit attempt — same rationale as RegisterScreen.
+  String? get _mobileError {
+    final digits = _mobileController.text.trim();
+    if (digits.isEmpty) {
+      if (_isFarmer && _triedSubmit) return 'Mobile number is required.';
+      return null;
+    }
+    if (!digits.startsWith('9')) return 'Mobile number must start with 9.';
+    if (digits.length != 10 && _triedSubmit) return 'Enter all 10 digits.';
+    return null;
   }
 
   void _selectRole(String role) {
@@ -102,6 +129,9 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
       }
     });
   }
+
+  static const int _maxCertBytes = 5 * 1024 * 1024; // 5MB
+  static const List<String> _allowedCertExtensions = ['.png', '.jpg', '.jpeg'];
 
   Future<void> _pickCertificate() async {
     if (!_photoPromptShown) {
@@ -123,8 +153,20 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
       imageQuality: 75,
     );
     if (picked == null) return;
+
+    final name = picked.name.toLowerCase();
+    if (!_allowedCertExtensions.any(name.endsWith)) {
+      _showMessage('Please attach a PNG or JPG image.');
+      return;
+    }
+
     final bytes = await picked.readAsBytes();
     if (!mounted) return;
+    if (bytes.length > _maxCertBytes) {
+      _showMessage('That image is too large. Please attach one under 5MB.');
+      return;
+    }
+
     setState(() {
       _certFile = picked;
       _certBytes = bytes;
@@ -149,26 +191,25 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
 
   Future<void> _finish() async {
     setState(() => _triedSubmit = true);
-    if (!_isFormValid) return;
-
-    setState(() => _loading = true);
-
-    // This device can only ever hold one role — checked here too, since
-    // Google sign-up comes through this screen instead of RegisterScreen.
-    final registeredRole = await _deviceRoleService.getRegisteredRole();
-    if (!mounted) return;
-    if (registeredRole != null && registeredRole != _selectedRole) {
-      setState(() => _loading = false);
-      _showMessage('This device already has a $registeredRole account. '
-          'Only one role is allowed per device.');
+    if (!_isFormValid) {
+      _showMessage('Please fix the errors below before continuing.');
       return;
     }
 
+    setState(() => _loading = true);
+
+    // One role per account: this Google account only reaches this screen
+    // at all when it has no users/{uid} doc yet (see AuthService
+    // .signInWithGoogle's needsProfile outcome), so whatever role they
+    // pick here is this account's first and only role — already enforced,
+    // nothing further to check.
+    final mobileDigits = _mobileController.text.trim();
     final profileError = await _authService.completeGoogleProfile(
       uid: widget.uid,
       fullName: _fullNameController.text.trim(),
       email: widget.email,
       role: _selectedRole,
+      mobileNumber: mobileDigits.isEmpty ? null : '+63$mobileDigits',
       supportedProductsAcknowledged: _isFarmer && _supportedProductsAcknowledged,
     );
     if (!mounted) return;
@@ -177,8 +218,6 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
       _showMessage(profileError);
       return;
     }
-
-    await _deviceRoleService.claimDevice(role: _selectedRole, uid: widget.uid);
 
     if (_isFarmer) {
       final certUrl = await _cloudinaryService.uploadImage(
@@ -203,19 +242,9 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
         _showMessage(docError);
         return;
       }
-    } else {
-      await _authService.saveBuyerLocation(
-        uid: widget.uid,
-        latitude: _pickedLat!,
-        longitude: _pickedLng!,
-      );
-      // Also primes the separate, ongoing "sort nearby farms by distance"
-      // permission used later in the marketplace — a no-op prompt-wise if
-      // MyLocationField's "Use my location" already granted it above.
-      if (mounted) {
-        await requestBuyerLocationPermission(context);
-      }
     }
+    // Buyers no longer set a location here — they set it later, per
+    // order, when placing one (see place_order_screen.dart).
 
     if (!mounted) return;
     final result = await AuthRoutingService.decide(widget.uid);
@@ -466,11 +495,66 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         decoration: AppTheme.inputBox(
                           hint: 'Juan F. Santos',
                           icon: Icons.person_outline,
-                          errorText: _triedSubmit && _fullNameController.text.trim().length < 3
-                              ? 'That name looks too short.'
-                              : null,
                         ),
                       ),
+                      // Rendered as its own line below the field, not inside
+                      // it, so every error on this form reads consistently
+                      // outside the input itself.
+                      if (_nameError != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(_nameError!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+
+                      // ---- Mobile Number ----
+                      // Required for farmers (order/delivery/pick-up
+                      // coordination); optional for buyers, who can also
+                      // give it later per order instead. Fixed +63 prefix —
+                      // no country dropdown, PH-only scope.
+                      Text(_isFarmer ? 'Mobile Number' : 'Mobile Number (optional)',
+                          style: AppTheme.label()),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _mobileController,
+                        keyboardType: TextInputType.phone,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(10),
+                        ],
+                        decoration: AppTheme.inputBox(
+                          hint: '912 345 6789',
+                          icon: Icons.phone_outlined,
+                          prefixText: '+63 ',
+                        ),
+                      ),
+                      if (_mobileError != null) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(_mobileError!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+                            ),
+                          ],
+                        ),
+                      ] else if (_isFarmer) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'For order, delivery, and pick-up coordination only.',
+                          style: TextStyle(color: Colors.grey[600], fontSize: 11.5),
+                        ),
+                      ],
                       const SizedBox(height: 16),
 
                       Text('I am a...', style: AppTheme.label()),
@@ -527,22 +611,6 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                               ? 'Please select a barangay in Laurel.'
                               : null,
                           onChanged: (value) => setState(() => _selectedBarangay = value),
-                          onLocationDetected: (lat, lng) {
-                            _pickedLat = lat;
-                            _pickedLng = lng;
-                          },
-                        )
-                      else
-                        MyLocationField(
-                          latitude: _pickedLat,
-                          longitude: _pickedLng,
-                          errorText: _triedSubmit && (_pickedLat == null || _pickedLng == null)
-                              ? 'Please set your location.'
-                              : null,
-                          onPicked: (latLng) => setState(() {
-                            _pickedLat = latLng.latitude;
-                            _pickedLng = latLng.longitude;
-                          }),
                         ),
                       if (_isFarmer) _publicLocationPreview(),
                       if (_isFarmer) ...[
@@ -569,7 +637,7 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                                       const SizedBox(height: 8),
                                       Text('Attach your certificate', style: AppTheme.body(size: 13)),
                                       const SizedBox(height: 2),
-                                      Text('(photo of the document)', style: AppTheme.body(color: Colors.black45, size: 11.5)),
+                                      Text('PNG or JPG only, up to 5MB', style: AppTheme.body(color: Colors.black45, size: 11.5)),
                                     ],
                                   )
                                 : Stack(
@@ -670,3 +738,4 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
     );
   }
 }
+

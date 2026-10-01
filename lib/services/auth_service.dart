@@ -1,7 +1,61 @@
+import 'dart:convert';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'push_notification_service.dart';
+
+/// Everything collected on the registration form that still needs to be
+/// written to Firestore once email verification actually succeeds — see
+/// AuthService.completeRegistration/EmailVerificationScreen. Persisted
+/// locally (AuthService.savePendingProfile) the moment the Firebase Auth
+/// account is created, so it survives the app being closed/killed while
+/// the user is off checking their email, not just an in-memory navigation
+/// argument.
+class PendingRegistrationProfile {
+  // Stored here (not just read from EmailVerificationScreen.role) because
+  // that widget field falls back to a guessed 'buyer' default when this
+  // screen is reached by resuming an unverified session from a fresh app
+  // launch (see AuthRoutingService.decideFromData) — the role actually
+  // registered must always come from this authoritative, originally-typed
+  // value instead, or a resumed farmer could get mis-registered as an
+  // auto-approved buyer.
+  final String role;
+  final String fullName;
+  final String? mobileNumber;
+  final bool supportedProductsAcknowledged;
+  // Farmer-only.
+  final String? barangay;
+  final String? certificateUrl;
+
+  const PendingRegistrationProfile({
+    required this.role,
+    required this.fullName,
+    this.mobileNumber,
+    this.supportedProductsAcknowledged = false,
+    this.barangay,
+    this.certificateUrl,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'role': role,
+        'fullName': fullName,
+        'mobileNumber': mobileNumber,
+        'supportedProductsAcknowledged': supportedProductsAcknowledged,
+        'barangay': barangay,
+        'certificateUrl': certificateUrl,
+      };
+
+  static PendingRegistrationProfile fromJson(Map<String, dynamic> json) => PendingRegistrationProfile(
+        role: json['role'] as String? ?? 'buyer',
+        fullName: json['fullName'] as String? ?? '',
+        mobileNumber: json['mobileNumber'] as String?,
+        supportedProductsAcknowledged: json['supportedProductsAcknowledged'] as bool? ?? false,
+        barangay: json['barangay'] as String?,
+        certificateUrl: json['certificateUrl'] as String?,
+      );
+}
 
 /// What happened when the user tapped "Continue with Google".
 enum GoogleSignInOutcome { signedIn, needsProfile, cancelled, error }
@@ -40,34 +94,92 @@ class GoogleSignInResult {
 }
 
 class AuthService {
+  static const String adminEmailWithoutVerification = 'admin@agritrade.com';
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final _users = FirebaseFirestore.instance.collection('users');
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
   bool _googleSignInReady = false;
 
+  Future<String?> refreshVerifiedEmailToken() async {
+    final user = _auth.currentUser;
+    if (user == null) return 'Please sign in again.';
+    try {
+      await user.reload();
+      final refreshed = _auth.currentUser;
+      if (refreshed == null) return 'Please sign in again.';
+      final isAdminAccount =
+          refreshed.email?.trim().toLowerCase() == adminEmailWithoutVerification;
+      if (!refreshed.emailVerified && !isAdminAccount) {
+        return 'Verify your email before continuing.';
+      }
+      // Firestore Rules validate the refreshed Firebase email_verified
+      // token claim directly. Login must not depend on a separately
+      // deployed callable just to refresh verification state.
+      await refreshed.getIdToken(true);
+      return null;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-not-found' || e.code == 'user-disabled') {
+        return 'Please sign in again.';
+      }
+      return e.code == 'network-request-failed'
+          ? 'Check your internet connection and try again.'
+          : 'Could not verify your account right now. Please try again.';
+    } catch (_) {
+      return 'Could not verify your account right now. Please try again.';
+    }
+  }
+
   // The signed-in user's UID, or null if nobody's logged in.
   String? get currentUid => _auth.currentUser?.uid;
 
-  // Create an account with a role ('farmer' or 'buyer').
+  // Creates ONLY the Firebase Auth account — no users/{uid} Firestore
+  // document yet. That document (role, name, barangay, certificate, etc.)
+  // is written later, in one shot, by completeRegistration() once email
+  // verification actually succeeds — see EmailVerificationScreen. This is
+  // deliberate: an account that never gets verified should never leave a
+  // half-registered profile sitting in Firestore, and Firebase itself has
+  // no concept of "verify an email" for an account that doesn't exist yet,
+  // so creating the Auth account first is unavoidable either way.
   Future<String?> signUp({
-    required String fullName,
     required String email,
     required String password,
-    required String role,
-    // Registration's consent checkbox already gates whether this method is
-    // ever called (see RegisterScreen._isFormValid) — recorded here purely
-    // as an audit trail of what the user agreed to. supportedProductsAcknowledged
-    // is Farmer-only (see RegisterScreen's Supported Products section).
-    bool supportedProductsAcknowledged = false,
   }) async {
     try {
-      final cred = await _auth.createUserWithEmailAndPassword(
+      await _auth.createUserWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
-      await FirebaseAuth.instance.currentUser?.sendEmailVerification();
-      await cred.user?.updateDisplayName(fullName.trim());
-      await _users.doc(cred.user!.uid).set({
+      return null;
+    } on FirebaseAuthException catch (e) {
+      return _messageFromCode(e.code);
+    } catch (e) {
+      return 'Something went wrong. Please try again.';
+    }
+  }
+
+  // The one, consolidated write that used to happen immediately inside
+  // signUp() (plus, for farmers, a second write from saveVerificationDocument)
+  // — now deferred until EmailVerificationScreen confirms the email was
+  // actually verified. Safe to call more than once with the same data
+  // (merge: true), so a retry after a transient failure never duplicates
+  // anything.
+  Future<String?> completeRegistration({
+    required String uid,
+    required String fullName,
+    required String email,
+    required String role,
+    // Already in "+63XXXXXXXXXX" form (see RegisterScreen._register) — this
+    // is contact info only, never used for phone-number auth/OTP.
+    String? mobileNumber,
+    // Farmer-only.
+    bool supportedProductsAcknowledged = false,
+    String? barangay,
+    String? certificateUrl,
+  }) async {
+    final isFarmer = role == 'farmer';
+    try {
+      await _auth.currentUser?.updateDisplayName(fullName.trim());
+      await _users.doc(uid).set({
         // 'fullName' is kept for backward compatibility with older reads;
         // 'name' is the standardized display-name field going forward
         // (matches what EditProfileScreen writes on later edits — see
@@ -75,24 +187,70 @@ class AuthService {
         'fullName': fullName.trim(),
         'name': fullName.trim(),
         'email': email.trim(),
+        if (mobileNumber != null && mobileNumber.isNotEmpty) 'mobileNumber': mobileNumber,
         'role': role,
-        'approvalStatus': role == 'farmer' ? 'pending' : 'approved',
+        'approvalStatus': isFarmer ? 'pending' : 'approved',
         // Buyers have no verification step, so they're verified on
         // creation; farmers become verified once an admin approves them
         // (see VerificationQueueView._approveFarmer).
-        'isVerified': role != 'farmer',
+        'isVerified': !isFarmer,
         'createdAt': FieldValue.serverTimestamp(),
         'termsAccepted': true,
         'termsAcceptedAt': FieldValue.serverTimestamp(),
-        if (role == 'farmer') 'supportedProductsAcknowledged': supportedProductsAcknowledged,
-        if (role == 'farmer') 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
-      });
+        if (isFarmer) 'supportedProductsAcknowledged': supportedProductsAcknowledged,
+        if (isFarmer) 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
+        if (isFarmer && barangay != null) 'barangay': barangay,
+        if (isFarmer) 'municipality': 'Laurel',
+        if (isFarmer) 'province': 'Batangas',
+        if (isFarmer && certificateUrl != null) 'hasVerificationDoc': true,
+      }, SetOptions(merge: true));
+
+      if (isFarmer && certificateUrl != null) {
+        await FirebaseFirestore.instance.collection('verificationDocs').doc(uid).set({
+          'document': certificateUrl,
+          'submittedAt': FieldValue.serverTimestamp(),
+          'status': 'pending',
+          'fullName': fullName.trim(),
+          'userId': uid,
+        }, SetOptions(merge: true));
+      }
       return null;
-    } on FirebaseAuthException catch (e) {
-      return _messageFromCode(e.code);
     } catch (e) {
-      return 'Something went wrong. Please try again.';
+      return 'Could not finish setting up your account. Please try again.';
     }
+  }
+
+  // ---- Local, on-device storage for PendingRegistrationProfile ----
+  // (see that class's doc comment for why this exists). Keyed by uid so a
+  // device that has registered more than one account never mixes them up.
+  static const _pendingProfileKeyPrefix = 'pending_registration_';
+
+  Future<void> savePendingProfile(String uid, PendingRegistrationProfile profile) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('$_pendingProfileKeyPrefix$uid', jsonEncode(profile.toJson()));
+    } catch (_) {
+      // Non-fatal — completeRegistration falls back to best-effort data if
+      // this was never saved or got lost (see EmailVerificationScreen).
+    }
+  }
+
+  Future<PendingRegistrationProfile?> loadPendingProfile(String uid) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_pendingProfileKeyPrefix$uid');
+      if (raw == null) return null;
+      return PendingRegistrationProfile.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearPendingProfile(String uid) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('$_pendingProfileKeyPrefix$uid');
+    } catch (_) {}
   }
 
   Future<String?> saveVerificationDocument({
@@ -127,57 +285,79 @@ class AuthService {
   }
 
   // Buyers have no verification step (see signUp's approvalStatus
-  // comment) and aren't restricted to Laurel the way farmers are — just a
-  // map pin (MyLocationField/PickLocationScreen) anywhere in the
-  // Philippines, so unlike farmers there's no barangay/municipality/
-  // province to store, only the raw coordinates.
+  // comment) and aren't restricted to Laurel the way farmers are — the
+  // buyer location popup (see buyer_location_picker.dart), shown when
+  // placing an order, either reverse-geocodes a GPS fix or reads a
+  // Region/Province/City/Barangay picked from a PSGC-backed drill-down.
+  //
+  /// Exact coordinates live under users/{uid}/private/geo, not on the main
+  /// user doc — that doc is readable by any signed-in user (needed for
+  /// public profile fields like name/barangay), so an exact pin must never
+  /// be a field on it. Only the owner and an admin can read this
+  /// subcollection (see firestore.rules); every other screen that needs a
+  /// buyer's or farmer's approximate location uses barangay/municipality
+  /// text or a server-aggregated point instead. The readable region/
+  /// province/city/barangay, by contrast, are stored on the main doc —
+  /// same as a farmer's barangay already is — since the admin Demand
+  /// Heatmap and this buyer's own profile ("Saved Location") both need to
+  /// read them, and they're already not sensitive precise-location data.
+  ///
+  /// [latitude]/[longitude] are omitted when the buyer picked their
+  /// location manually and the forward-geocode fallback failed — that's
+  /// non-fatal, since the readable address is what actually matters here;
+  /// a coordinate is only a bonus for the Demand Heatmap/approximate
+  /// distance. Pass only the fields that changed; omitted ones are left
+  /// untouched on the existing doc (e.g. "Edit Location" picking a new
+  /// barangay without re-detecting GPS doesn't erase a previously saved
+  /// pin).
   Future<String?> saveBuyerLocation({
     required String uid,
-    required double latitude,
-    required double longitude,
+    double? latitude,
+    double? longitude,
+    String? region,
+    String? province,
+    String? city,
+    String? barangay,
   }) async {
     try {
-      await FirebaseFirestore.instance.collection('users').doc(uid).set({
-        'latitude': latitude,
-        'longitude': longitude,
-      }, SetOptions(merge: true));
+      final batch = FirebaseFirestore.instance.batch();
+      final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
+
+      if (latitude != null && longitude != null) {
+        batch.set(
+          userRef.collection('private').doc('geo'),
+          {
+            'latitude': latitude,
+            'longitude': longitude,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      if (region != null || province != null || city != null || barangay != null) {
+        batch.set(
+          userRef,
+          {
+            if (region != null) 'region': region,
+            if (province != null) 'province': province,
+            // Kept as "municipality" (not "city") so this lines up with
+            // the field name DashboardAnalyticsService's Demand Heatmap
+            // already reads for every account, farmer and buyer alike.
+            if (city != null) 'municipality': city,
+            if (barangay != null) 'barangay': barangay,
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      await batch.commit();
       return null;
     } catch (e) {
       return 'Could not save your location. Please try again.';
     }
   }
 
-  Future<String?> createPendingVerificationApplication({
-    required String uid,
-    required String fullName,
-    required String barangay,
-  }) async {
-    try {
-      await FirebaseFirestore.instance
-          .collection('verificationDocs')
-          .doc(uid)
-          .set({
-            'document': '',
-            'submittedAt': FieldValue.serverTimestamp(),
-            'status': 'pending',
-            'fullName': fullName.trim(),
-            'userId': uid,
-          }, SetOptions(merge: true));
-
-      await _users.doc(uid).set({
-        'barangay': barangay,
-        'municipality': 'Laurel',
-        'province': 'Batangas',
-        'approvalStatus': 'pending',
-        'hasVerificationDoc': false,
-      }, SetOptions(merge: true));
-      return null;
-    } catch (_) {
-      return 'Hindi naisave ang application. Subukan ulit.';
-    }
-  }
-
-  //At lumping gun
   // ----------------------------------------------------------
   // READ the document — used by the admin dashboard in Week 10
   // so an officer can look at it before approving (FR-028).
@@ -229,6 +409,8 @@ class AuthService {
 
       final doc = await _users.doc(uid).get();
       if (doc.exists) {
+        final verificationError = await refreshVerifiedEmailToken();
+        if (verificationError != null) return GoogleSignInResult.error(verificationError);
         return GoogleSignInResult.signedIn(uid);
       }
       return GoogleSignInResult.needsProfile(
@@ -257,6 +439,8 @@ class AuthService {
     required String fullName,
     required String email,
     required String role,
+    // Already in "+63XXXXXXXXXX" form — see signUp's mobileNumber doc.
+    String? mobileNumber,
     bool supportedProductsAcknowledged = false,
   }) async {
     try {
@@ -265,6 +449,7 @@ class AuthService {
         'fullName': fullName.trim(),
         'name': fullName.trim(),
         'email': email.trim(),
+        if (mobileNumber != null && mobileNumber.isNotEmpty) 'mobileNumber': mobileNumber,
         'role': role,
         'approvalStatus': role == 'farmer' ? 'pending' : 'approved',
         'isVerified': role != 'farmer',
@@ -275,6 +460,8 @@ class AuthService {
         if (role == 'farmer') 'supportedProductsAcknowledged': supportedProductsAcknowledged,
         if (role == 'farmer') 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      final verificationError = await refreshVerifiedEmailToken();
+      if (verificationError != null) return verificationError;
       return null;
     } catch (e) {
       return 'Something went wrong. Please try again.';
@@ -304,8 +491,21 @@ class AuthService {
           return 'ROLE_MISMATCH:$role';
         }
       }
+      final isAdminAccount =
+          cred.user?.email?.trim().toLowerCase() == adminEmailWithoutVerification;
+      if (cred.user?.emailVerified == true || isAdminAccount) {
+        final verificationError = await refreshVerifiedEmailToken();
+        if (verificationError != null) return verificationError;
+      }
       return null;
     } on FirebaseAuthException catch (e) {
+      // A distinct sentinel (same pattern as ROLE_MISMATCH: above) so the
+      // caller can show "Email not registered" + a Create One prompt,
+      // instead of the generic wrong-password message — deliberately
+      // different from 'wrong-password'/'invalid-credential', which stay
+      // generic since those genuinely can't tell the caller whether the
+      // email exists.
+      if (e.code == 'user-not-found') return 'EMAIL_NOT_REGISTERED';
       return _messageFromCode(e.code);
     } catch (e) {
       return 'Something went wrong. Please try again.';
@@ -424,13 +624,21 @@ class AuthService {
   // ----------------------------------------------------------
   // FORGOT PASSWORD — sends a reset link to the given email.
   // Works the same for farmer, buyer, and admin accounts since
-  // they're all just Firebase Auth users underneath.
+  // they're all just Firebase Auth users underneath. Only an email
+  // that's actually registered gets a link — see the 'user-not-found'
+  // branch below.
   // ----------------------------------------------------------
   Future<String?> sendPasswordResetEmail(String email) async {
     try {
       await _auth.sendPasswordResetEmail(email: email.trim());
       return null;
     } on FirebaseAuthException catch (e) {
+      // Distinct from _messageFromCode's generic mapping — "incorrect
+      // email or password" doesn't make sense here, there's no password
+      // being checked, just whether an account exists to reset at all.
+      if (e.code == 'user-not-found') {
+        return "This email isn't registered. Please check the address or create an account.";
+      }
       return _messageFromCode(e.code);
     } catch (e) {
       return 'Could not send the reset email. Please try again.';

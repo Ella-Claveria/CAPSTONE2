@@ -23,6 +23,30 @@ if (!getApps().length) {
 const db = getFirestore();
 const messaging = getMessaging();
 
+// Keep marketplace-visible profile fields separate from private users/{uid}
+// records. Admin SDK writes bypass client rules; clients cannot write this
+// projection directly (see firestore.rules).
+exports.syncPublicProfile = onDocumentWritten("users/{uid}", async (event) => {
+  const profileRef = db.collection("publicProfiles").doc(event.params.uid);
+  // Read current source state rather than replaying event.after, so a delayed
+  // retry cannot overwrite a newer public profile with stale fields.
+  const current = await db.collection("users").doc(event.params.uid).get();
+  if (!current.exists) {
+    await profileRef.delete().catch(() => {});
+    return;
+  }
+  const data = current.data() || {};
+  const publicProfile = {};
+  for (const key of ["role", "name", "fullName", "photoUrl", "barangay", "municipality", "province", "approvalStatus", "rating", "reviewCount"]) {
+    const value = data[key];
+    if (typeof value === "string" && value.length <= 200) publicProfile[key] = value;
+    else if ((key === "rating" || key === "reviewCount") && typeof value === "number" && Number.isFinite(value)) {
+      publicProfile[key] = value;
+    }
+  }
+  await profileRef.set(publicProfile);
+});
+
 /** Sends a push notification to every device registered for `uid` (pruning
  * any token FCM reports as no longer valid), AND writes a durable record to
  * notifications/{uid}/items so the in-app Notifications screen has history
@@ -132,24 +156,9 @@ exports.sendMessageNotification = onDocumentCreated(
     const senderName =
       (conv.participantNames && conv.participantNames[message.senderId]) || "Someone";
 
-    let body;
-    if (message.text && message.text.length > 120) {
-      body = `${message.text.slice(0, 117)}...`;
-    } else if (message.text) {
-      body = message.text;
-    } else if (message.type === "location") {
-      body = "Shared their location";
-    } else if (message.type === "pricingOptions") {
-      body = "Sent pricing options";
-    } else if (message.imageUrl) {
-      body = "Sent a photo";
-    } else {
-      body = "Sent a message";
-    }
-
     await notifyUser(recipientId, {
-      title: senderName,
-      body,
+      title: "New message",
+      body: `A message was sent to you by ${senderName}.`,
       type: "chat_message",
       relatedId: conversationId,
       data: {
@@ -208,6 +217,18 @@ exports.notifyNewOrder = onDocumentCreated("orders/{orderId}", async (event) => 
 exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (event) => {
   const before = event.data.before.data();
   const after = event.data.after.data();
+
+  // Older versions copied exact seller coordinates onto buyer-readable
+  // orders. Remove that legacy snapshot and no longer create precise pins;
+  // buyer-facing distance uses only the approximate barangay cluster.
+  if (after.sellerLatitude != null || after.sellerLongitude != null || after.sellerLocationSnapshotAt != null) {
+    await event.data.after.ref.update({
+      sellerLatitude: FieldValue.delete(),
+      sellerLongitude: FieldValue.delete(),
+      sellerLocationSnapshotAt: FieldValue.delete(),
+    });
+    return;
+  }
   if (before.status === after.status) return;
 
   const statusLabels = {
@@ -227,6 +248,91 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
     data: { orderId: event.params.orderId, status: after.status },
     dedupeId: event.id,
   });
+
+  if (after.sellerId) {
+    await notifyUser(after.sellerId, {
+      title: `Order ${label}`,
+      body: `The order for ${after.productName || "a product"} was ${label}.`,
+      type: "order_status",
+      relatedId: event.params.orderId,
+      data: { orderId: event.params.orderId, status: after.status },
+      dedupeId: `${event.id}-seller`,
+    });
+  }
+});
+
+// ---------------------------------------------------------------
+// Buyer-facing marketplace map — barangay farmer-density clusters.
+//
+// The buyer map view must never read a farmer's exact coordinates
+// directly (see users/{uid}/private/geo's Firestore rule — only that
+// farmer or an admin can). This maintains a PII-free, pre-aggregated
+// collection instead: one averaged point + a farmer count per barangay,
+// never which specific farmers contribute to it. Recomputed whenever a
+// farmer's exact location changes, or their role/barangay/approval/
+// account status changes (any of which can move them into or out of a
+// barangay's count).
+// ---------------------------------------------------------------
+
+async function recomputeBarangayCluster(barangay) {
+  if (!barangay) return;
+  const clusterRef = db.collection("barangayClusters").doc(barangay);
+  const usersSnap = await db.collection("users").where("role", "==", "farmer").get();
+
+  const points = [];
+  for (const doc of usersSnap.docs) {
+    const data = doc.data();
+    if (data.barangay !== barangay) continue;
+    if ((data.approvalStatus || "pending") !== "approved") continue;
+    if ((data.accountStatus || "active") !== "active") continue;
+    const geoSnap = await db.collection("users").doc(doc.id).collection("private").doc("geo").get();
+    const geo = geoSnap.data();
+    if (geo && typeof geo.latitude === "number" && typeof geo.longitude === "number") {
+      points.push(geo);
+    }
+  }
+
+  if (points.length === 0) {
+    await clusterRef.delete();
+    return;
+  }
+
+  const avgLat = points.reduce((sum, p) => sum + p.latitude, 0) / points.length;
+  const avgLng = points.reduce((sum, p) => sum + p.longitude, 0) / points.length;
+  await clusterRef.set({
+    barangay,
+    lat: avgLat,
+    lng: avgLng,
+    farmerCount: points.length,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+}
+
+exports.onFarmerGeoChanged = onDocumentWritten("users/{uid}/private/{subDocId}", async (event) => {
+  if (event.params.subDocId !== "geo") return;
+  const userSnap = await db.collection("users").doc(event.params.uid).get();
+  const user = userSnap.data();
+  if (!user || user.role !== "farmer" || !user.barangay) return;
+  await recomputeBarangayCluster(user.barangay);
+});
+
+exports.onFarmerEligibilityChanged = onDocumentWritten("users/{uid}", async (event) => {
+  const before = event.data?.before?.data();
+  const after = event.data?.after?.data();
+
+  // Only role/barangay/approvalStatus/accountStatus affect cluster
+  // membership — skip the (far more frequent) writes to unrelated fields
+  // like fcmTokens or lastActiveAt so this doesn't re-scan every farmer
+  // on every unrelated profile write.
+  const relevantFields = (d) => (d ? [d.role, d.barangay, d.approvalStatus, d.accountStatus] : null);
+  if (JSON.stringify(relevantFields(before)) === JSON.stringify(relevantFields(after))) return;
+
+  const barangays = new Set();
+  if (before && before.role === "farmer" && before.barangay) barangays.add(before.barangay);
+  if (after && after.role === "farmer" && after.barangay) barangays.add(after.barangay);
+  for (const barangay of barangays) {
+    await recomputeBarangayCluster(barangay);
+  }
 });
 
 // ---------------------------------------------------------------
@@ -253,12 +359,97 @@ exports.recordMarketSale = onDocumentUpdated("orders/{orderId}", async (event) =
     {
       productName,
       quantity,
+      unit: (after.unit || "").toString().trim(),
       status: "completed",
       createdAt: after.updatedAt || FieldValue.serverTimestamp(),
     },
     { merge: true }
   );
 });
+
+async function validCompletedReview(reviewDoc) {
+  const review = reviewDoc.data();
+  if (
+    reviewDoc.id !== review.orderId ||
+    review.moderationStatus === "removed" ||
+    typeof review.rating !== "number" ||
+    !Number.isFinite(review.rating) ||
+    review.rating < 0.5 ||
+    review.rating > 5
+    || review.rating * 2 !== Math.round(review.rating * 2)
+  ) {
+    return null;
+  }
+
+  const orderSnap = await db.collection("orders").doc(review.orderId).get();
+  if (!orderSnap.exists) return null;
+  const order = orderSnap.data();
+  if (
+    order.status !== "completed" ||
+    order.buyerId !== review.buyerId ||
+    order.productId !== review.productId ||
+    order.sellerId !== review.sellerId
+  ) {
+    return null;
+  }
+  return review;
+}
+
+// Product and farmer ratings are derived from reviews whose source order is
+// still completed and whose buyer/product/seller IDs match that order.
+exports.recomputeProductReviewStats = onDocumentWritten(
+  "productReviews/{reviewId}",
+  async (event) => {
+    const before = event.data.before.exists ? event.data.before.data() : null;
+    const after = event.data.after.exists ? event.data.after.data() : null;
+    const productIds = new Set(
+      [before?.productId, after?.productId].filter((id) => typeof id === "string" && id.length > 0)
+    );
+
+    const sellerIds = new Set(
+      [before?.sellerId, after?.sellerId].filter((id) => typeof id === "string" && id.length > 0)
+    );
+    const buyerIds = new Set(
+      [before?.buyerId, after?.buyerId].filter((id) => typeof id === "string" && id.length > 0)
+    );
+
+    async function ratingSummary(reviewDocs) {
+      const validReviews = (await Promise.all(reviewDocs.map(validCompletedReview))).filter(Boolean);
+      const count = validReviews.length;
+      const average = count === 0
+        ? 0
+        : validReviews.reduce((sum, review) => sum + review.rating, 0) / count;
+      return { rating: average, reviewCount: count };
+    }
+
+    for (const productId of productIds) {
+      const productRef = db.collection("products").doc(productId);
+      const product = await productRef.get();
+      if (!product.exists) continue;
+
+      const reviews = await db.collection("productReviews").where("productId", "==", productId).get();
+      await productRef.update(await ratingSummary(reviews.docs));
+    }
+
+    for (const sellerId of sellerIds) {
+      const reviews = await db.collection("productReviews").where("sellerId", "==", sellerId).get();
+      await db.collection("users").doc(sellerId).set(
+        await ratingSummary(reviews.docs),
+        { merge: true }
+      );
+    }
+
+    for (const buyerId of buyerIds) {
+      const reviews = await db.collection("productReviews").where("buyerId", "==", buyerId).get();
+      const validReviews = (await Promise.all(reviews.docs.map(validCompletedReview))).filter(Boolean);
+      const count = validReviews.length;
+      await db.collection("users").doc(buyerId).set({
+        trustedBuyerReviewCount: count,
+        trustedBuyer: count >= 3,
+      }, { merge: true });
+    }
+  }
+);
 
 // ---------------------------------------------------------------
 // Farmer verification approved/rejected -> notify the applicant.
@@ -488,6 +679,18 @@ exports.logAuditEvent = onCall({ region: "asia-southeast1" }, async (request) =>
   }
   if (isAuthenticated && !request.auth) {
     throw new HttpsError("unauthenticated", "This action must be logged while signed in.");
+  }
+  if (isAuthenticated) {
+    const adminRef = db.collection("users").doc(request.auth.uid);
+    const adminSnap = await adminRef.get();
+    const admin = adminSnap.exists ? adminSnap.data() : {};
+    const isUnverifiedAdminAccount =
+      request.auth.token.email === "admin@agritrade.com";
+    if ((request.auth.token.email_verified !== true && !isUnverifiedAdminAccount) ||
+        admin.role !== "admin" ||
+        (admin.accountStatus || "active") !== "active") {
+      throw new HttpsError("permission-denied", "Only an active admin can log this action.");
+    }
   }
 
   const ua = request.rawRequest.get("user-agent") || "";
