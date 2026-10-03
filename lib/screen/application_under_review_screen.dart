@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class ApplicationUnderReviewScreen extends StatelessWidget {
-  // In a real app, these boolean values would stream from Firestore 
+  // In a real app, these boolean values would stream from Firestore
   // based on the current user's document status.
   final bool isEmailVerified = false;
-  final bool isDocumentScreened = true; // Assume document was successfully uploaded/scanned
+  final bool isDocumentScreened =
+      true; // Assume document was successfully uploaded/scanned
   final bool isComplianceApproved = false;
 
   const ApplicationUnderReviewScreen({super.key});
@@ -40,10 +41,14 @@ class ApplicationUnderReviewScreen extends StatelessWidget {
               const SizedBox(height: 24),
               Text(
                 'To maintain platform integrity, all registrations are subject to manual review. Approval normally takes 24-48 business hours.',
-                style: TextStyle(fontSize: 16, height: 1.5, color: Colors.grey[700]),
+                style: TextStyle(
+                  fontSize: 16,
+                  height: 1.5,
+                  color: Colors.grey[700],
+                ),
               ),
               const SizedBox(height: 32),
-              
+
               // Checklist
               _buildStatusRow(
                 title: 'Email Address Verification',
@@ -60,7 +65,7 @@ class ApplicationUnderReviewScreen extends StatelessWidget {
                 subtitle: 'Final clearance by an Agricultural Officer.',
                 isComplete: isComplianceApproved,
               ),
-              
+
               const SizedBox(height: 48),
               SizedBox(
                 width: double.infinity,
@@ -75,7 +80,10 @@ class ApplicationUnderReviewScreen extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8),
                     ),
                   ),
-                  child: const Text('Return to Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                  child: const Text(
+                    'Return to Login',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
             ],
@@ -85,7 +93,11 @@ class ApplicationUnderReviewScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildStatusRow({required String title, required String subtitle, required bool isComplete}) {
+  Widget _buildStatusRow({
+    required String title,
+    required String subtitle,
+    required bool isComplete,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 24.0),
       child: Row(

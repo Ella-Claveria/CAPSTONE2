@@ -8,11 +8,11 @@ import '../screen/app_bootstrap.dart';
 import 'auth_service.dart';
 
 /// Signs the signed-in user out after the app has sat backgrounded and
-/// untouched for [kIdleTimeout] — NOT on every relaunch. Firebase Auth's
+/// untouched for [kInactivityTimeout] — NOT on every relaunch. Firebase Auth's
 /// own session already persists across a normal close/reopen, and
 /// AppRouter/AuthRoutingService already route a still-valid session
 /// straight to its home screen on cold start; this only adds the missing
-/// piece, an actual idle timeout, on top of that.
+/// piece, an actual inactivity timeout, on top of that.
 ///
 /// The backgrounded-at timestamp is kept in SharedPreferences (not just
 /// memory) because Android can kill the process outright while it sits in
@@ -25,7 +25,10 @@ class SessionTimeoutService extends WidgetsBindingObserver {
   static final SessionTimeoutService instance = SessionTimeoutService._();
 
   static const _backgroundedAtKey = 'session_backgrounded_at_ms';
-  static const kIdleTimeout = Duration(minutes: 15);
+
+  /// A month is long enough to avoid surprising active users while still
+  /// ending abandoned sessions automatically.
+  static const kInactivityTimeout = Duration(days: 30);
 
   GlobalKey<NavigatorState>? _navigatorKey;
   Timer? _idleTimer;
@@ -47,7 +50,7 @@ class SessionTimeoutService extends WidgetsBindingObserver {
       return;
     }
     _idleTimer?.cancel();
-    _idleTimer = Timer(kIdleTimeout, _expireActiveSession);
+    _idleTimer = Timer(kInactivityTimeout, _expireActiveSession);
   }
 
   Future<void> _expireActiveSession() async {
@@ -74,7 +77,10 @@ class SessionTimeoutService extends WidgetsBindingObserver {
     if (FirebaseAuth.instance.currentUser == null) return;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_backgroundedAtKey, DateTime.now().millisecondsSinceEpoch);
+      await prefs.setInt(
+        _backgroundedAtKey,
+        DateTime.now().millisecondsSinceEpoch,
+      );
     } catch (_) {
       // Non-fatal — worst case this one background period isn't timed.
     }
@@ -100,7 +106,7 @@ class SessionTimeoutService extends WidgetsBindingObserver {
   }
 
   /// Signs the user out if the app was backgrounded at least
-  /// [kIdleTimeout] ago — including across a process kill, so AppRouter
+  /// [kInactivityTimeout] ago — including across a process kill, so AppRouter
   /// calls this before its own "already signed in" check on every cold
   /// start. Safe to call any time; a no-op when nobody's logged in or the
   /// background period (if any) wasn't long enough. Returns whether it
@@ -114,7 +120,9 @@ class SessionTimeoutService extends WidgetsBindingObserver {
       if (FirebaseAuth.instance.currentUser == null) return false;
 
       final backgroundedAt = DateTime.fromMillisecondsSinceEpoch(ms);
-      if (DateTime.now().difference(backgroundedAt) < kIdleTimeout) return false;
+      if (DateTime.now().difference(backgroundedAt) < kInactivityTimeout) {
+        return false;
+      }
 
       await AuthService().signOut();
       return true;

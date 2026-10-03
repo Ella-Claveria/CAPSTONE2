@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 
 import '../services/market_price_helpers.dart';
 import '../data/commodity_master_list.dart';
-import 'admin_dashboard_screen.dart' show AdminThemeScope, AdminPalette, AdminEmptyState, AdminRadii;
+import 'admin_dashboard_screen.dart'
+    show AdminThemeScope, AdminPalette, AdminEmptyState, AdminRadii;
 
 // ============================================================
 // New chart widgets for the Admin Analytics Dashboard redesign. Every
@@ -45,10 +46,19 @@ class AdminSalesByCategoryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Sales by Category',
-              style: TextStyle(color: c.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(
+            'Sales by Category',
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text('Share of completed-order revenue', style: TextStyle(color: c.textSecondary, fontSize: 13)),
+          Text(
+            'Share of completed-order revenue',
+            style: TextStyle(color: c.textSecondary, fontSize: 13),
+          ),
           const SizedBox(height: 16),
           if (entries.isEmpty)
             const AdminEmptyState(
@@ -84,10 +94,22 @@ class AdminSalesByCategoryCard extends StatelessWidget {
                       Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(formatPeso(total),
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
-                          Text('Total', style: TextStyle(color: c.textSecondary, fontSize: 10)),
+                          Text(
+                            formatPeso(total),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: c.textPrimary,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          Text(
+                            'Total',
+                            style: TextStyle(
+                              color: c.textSecondary,
+                              fontSize: 10,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -101,24 +123,39 @@ class AdminSalesByCategoryCard extends StatelessWidget {
                     children: [
                       for (var i = 0; i < entries.length; i++)
                         Padding(
-                          padding: EdgeInsets.only(bottom: i == entries.length - 1 ? 0 : 8),
+                          padding: EdgeInsets.only(
+                            bottom: i == entries.length - 1 ? 0 : 8,
+                          ),
                           child: Row(
                             children: [
                               Container(
                                 width: 10,
                                 height: 10,
-                                decoration:
-                                    BoxDecoration(color: _palette[i % _palette.length], shape: BoxShape.circle),
+                                decoration: BoxDecoration(
+                                  color: _palette[i % _palette.length],
+                                  shape: BoxShape.circle,
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Expanded(
-                                child: Text(entries[i].key,
-                                    style: TextStyle(color: c.textPrimary, fontSize: 12.5),
-                                    overflow: TextOverflow.ellipsis),
+                                child: Text(
+                                  entries[i].key,
+                                  style: TextStyle(
+                                    color: c.textPrimary,
+                                    fontSize: 12.5,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
                               ),
                               Text(
-                                total > 0 ? '${(entries[i].value / total * 100).toStringAsFixed(0)}%' : '0%',
-                                style: TextStyle(color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                                total > 0
+                                    ? '${(entries[i].value / total * 100).toStringAsFixed(0)}%'
+                                    : '0%',
+                                style: TextStyle(
+                                  color: c.textSecondary,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ],
                           ),
@@ -142,8 +179,11 @@ class AdminTopProductsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    final maxRevenue =
-        products.isEmpty ? 1.0 : products.map((p) => p.revenue.toDouble()).reduce((a, b) => a > b ? a : b);
+    final maxRevenue = products.isEmpty
+        ? 1.0
+        : products
+              .map((p) => p.revenue.toDouble())
+              .reduce((a, b) => a > b ? a : b);
 
     return Container(
       width: double.infinity,
@@ -160,12 +200,21 @@ class AdminTopProductsCard extends StatelessWidget {
             children: [
               Icon(Icons.emoji_events_outlined, size: 18, color: c.amber),
               const SizedBox(width: 8),
-              Text('Top-Selling Products',
-                  style: TextStyle(color: c.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+              Text(
+                'Top-Selling Products',
+                style: TextStyle(
+                  color: c.textPrimary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
-          Text('Platform-wide, by completed-order revenue', style: TextStyle(color: c.textSecondary, fontSize: 13)),
+          Text(
+            'Platform-wide, by completed-order revenue',
+            style: TextStyle(color: c.textSecondary, fontSize: 13),
+          ),
           const SizedBox(height: 16),
           if (products.isEmpty)
             const AdminEmptyState(
@@ -176,7 +225,9 @@ class AdminTopProductsCard extends StatelessWidget {
           else
             for (var i = 0; i < products.length; i++)
               Padding(
-                padding: EdgeInsets.only(bottom: i == products.length - 1 ? 0 : 14),
+                padding: EdgeInsets.only(
+                  bottom: i == products.length - 1 ? 0 : 14,
+                ),
                 child: _row(c, i, products[i], maxRevenue),
               ),
         ],
@@ -184,9 +235,16 @@ class AdminTopProductsCard extends StatelessWidget {
     );
   }
 
-  Widget _row(AdminPalette c, int index, ({String name, num revenue, num quantity}) p, double maxRevenue) {
+  Widget _row(
+    AdminPalette c,
+    int index,
+    ({String name, num revenue, num quantity}) p,
+    double maxRevenue,
+  ) {
     final isTop = index == 0;
-    final barValue = maxRevenue <= 0 ? 0.0 : (p.revenue / maxRevenue).clamp(0.03, 1.0);
+    final barValue = maxRevenue <= 0
+        ? 0.0
+        : (p.revenue / maxRevenue).clamp(0.03, 1.0);
     return Container(
       padding: EdgeInsets.all(isTop ? 12 : 0),
       decoration: isTop
@@ -201,8 +259,14 @@ class AdminTopProductsCard extends StatelessWidget {
         children: [
           SizedBox(
             width: 24,
-            child: Text('#${index + 1}',
-                style: TextStyle(color: isTop ? c.amber : c.textSecondary, fontWeight: FontWeight.bold, fontSize: 13)),
+            child: Text(
+              '#${index + 1}',
+              style: TextStyle(
+                color: isTop ? c.amber : c.textSecondary,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
           ),
           Expanded(
             child: Column(
@@ -211,12 +275,25 @@ class AdminTopProductsCard extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(p.name,
-                          style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w600, fontSize: 13.5),
-                          overflow: TextOverflow.ellipsis),
+                      child: Text(
+                        p.name,
+                        style: TextStyle(
+                          color: c.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13.5,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                     const SizedBox(width: 8),
-                    Text(formatPeso(p.revenue), style: TextStyle(color: c.green, fontWeight: FontWeight.bold, fontSize: 13)),
+                    Text(
+                      formatPeso(p.revenue),
+                      style: TextStyle(
+                        color: c.green,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
@@ -226,12 +303,16 @@ class AdminTopProductsCard extends StatelessWidget {
                     value: barValue,
                     minHeight: 6,
                     backgroundColor: c.surfaceAlt,
-                    valueColor: AlwaysStoppedAnimation(isTop ? c.amber : c.green),
+                    valueColor: AlwaysStoppedAnimation(
+                      isTop ? c.amber : c.green,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text('${formatStock(p.quantity, unitForProductName(p.name))} sold',
-                    style: TextStyle(color: c.textSecondary, fontSize: 11)),
+                Text(
+                  '${formatStock(p.quantity, unitForProductName(p.name))} sold',
+                  style: TextStyle(color: c.textSecondary, fontSize: 11),
+                ),
               ],
             ),
           ),
@@ -267,8 +348,12 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
       _selected = names.isNotEmpty ? names.first : null;
     }
 
-    final weekly = _selected == null ? const <double?>[] : (widget.weeklyPricesByCommodity[_selected] ?? const []);
-    final baseline = _selected == null ? null : widget.baselineByCommodity[_selected];
+    final weekly = _selected == null
+        ? const <double?>[]
+        : (widget.weeklyPricesByCommodity[_selected] ?? const []);
+    final baseline = _selected == null
+        ? null
+        : widget.baselineByCommodity[_selected];
     final hasData = weekly.any((v) => v != null);
 
     return Container(
@@ -282,11 +367,19 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Price Trend vs. Baseline',
-              style: TextStyle(color: c.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(
+            'Price Trend vs. Baseline',
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 4),
-          Text('Weekly average price from completed orders, dashed line = admin baseline',
-              style: TextStyle(color: c.textSecondary, fontSize: 12.5)),
+          Text(
+            'Weekly average price from completed orders, dashed line = admin baseline',
+            style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+          ),
           const SizedBox(height: 14),
           if (names.isEmpty)
             const AdminEmptyState(
@@ -307,7 +400,9 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
                     selectedColor: c.green,
                     backgroundColor: c.surfaceAlt,
                     side: BorderSide(color: c.border),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AdminRadii.control)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AdminRadii.control),
+                    ),
                     labelStyle: TextStyle(
                       color: _selected == name ? Colors.white : c.textPrimary,
                       fontSize: 12.5,
@@ -320,18 +415,27 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
             if (!hasData)
               AdminEmptyState(
                 icon: Icons.show_chart,
-                title: 'No completed sales for ${_selected ?? "this commodity"} yet',
-                subtitle: 'The trend line fills in once matching orders complete.',
+                title:
+                    'No completed sales for ${_selected ?? "this commodity"} yet',
+                subtitle:
+                    'The trend line fills in once matching orders complete.',
               )
             else
-              SizedBox(height: 190, child: LineChart(_chartData(c, weekly, baseline))),
+              SizedBox(
+                height: 190,
+                child: LineChart(_chartData(c, weekly, baseline)),
+              ),
           ],
         ],
       ),
     );
   }
 
-  LineChartData _chartData(AdminPalette c, List<double?> weekly, double? baseline) {
+  LineChartData _chartData(
+    AdminPalette c,
+    List<double?> weekly,
+    double? baseline,
+  ) {
     final spots = <FlSpot>[
       for (var i = 0; i < weekly.length; i++)
         if (weekly[i] != null) FlSpot(i.toDouble(), weekly[i]!),
@@ -339,7 +443,9 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
     final values = [...spots.map((s) => s.y), ?baseline];
     final rawMin = values.reduce((a, b) => a < b ? a : b);
     final rawMax = values.reduce((a, b) => a > b ? a : b);
-    final pad = ((rawMax - rawMin).abs() < 1 ? rawMax * 0.1 + 1 : (rawMax - rawMin) * 0.2);
+    final pad = ((rawMax - rawMin).abs() < 1
+        ? rawMax * 0.1 + 1
+        : (rawMax - rawMin) * 0.2);
     final minY = (rawMin - pad).clamp(0, double.infinity).toDouble();
     final maxY = rawMax + pad;
     final lastIndex = (weekly.length - 1).toDouble();
@@ -352,11 +458,14 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
       gridData: FlGridData(
         drawVerticalLine: false,
         horizontalInterval: ((maxY - minY) / 4).clamp(0.5, double.infinity),
-        getDrawingHorizontalLine: (_) => FlLine(color: c.border, strokeWidth: 1),
+        getDrawingHorizontalLine: (_) =>
+            FlLine(color: c.border, strokeWidth: 1),
       ),
       titlesData: FlTitlesData(
         topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles: const AxisTitles(
+          sideTitles: SideTitles(showTitles: false),
+        ),
         bottomTitles: AxisTitles(
           sideTitles: SideTitles(
             showTitles: true,
@@ -368,8 +477,10 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
               final weeksAgo = weekly.length - 1 - i;
               return Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text(weeksAgo == 0 ? 'Now' : '-${weeksAgo}w',
-                    style: TextStyle(color: c.textSecondary, fontSize: 10)),
+                child: Text(
+                  weeksAgo == 0 ? 'Now' : '-${weeksAgo}w',
+                  style: TextStyle(color: c.textSecondary, fontSize: 10),
+                ),
               );
             },
           ),
@@ -378,8 +489,10 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
           sideTitles: SideTitles(
             showTitles: true,
             reservedSize: 42,
-            getTitlesWidget: (value, meta) =>
-                Text('₱${value.toStringAsFixed(0)}', style: TextStyle(color: c.textSecondary, fontSize: 10)),
+            getTitlesWidget: (value, meta) => Text(
+              '₱${value.toStringAsFixed(0)}',
+              style: TextStyle(color: c.textSecondary, fontSize: 10),
+            ),
           ),
         ),
       ),
@@ -392,11 +505,17 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
           color: c.green,
           barWidth: 3,
           dotData: const FlDotData(show: true),
-          belowBarData: BarAreaData(show: true, color: c.green.withValues(alpha: 0.12)),
+          belowBarData: BarAreaData(
+            show: true,
+            color: c.green.withValues(alpha: 0.12),
+          ),
         ),
         if (baseline != null)
           LineChartBarData(
-            spots: [FlSpot(0, baseline), FlSpot(lastIndex < 1 ? 1 : lastIndex, baseline)],
+            spots: [
+              FlSpot(0, baseline),
+              FlSpot(lastIndex < 1 ? 1 : lastIndex, baseline),
+            ],
             isCurved: false,
             color: c.amber,
             barWidth: 2,
@@ -413,7 +532,11 @@ class AdminDemandByBarangayCard extends StatelessWidget {
   final List<({String barangay, int orderCount, num revenue})> demand;
   final VoidCallback onOpenHeatmap;
 
-  const AdminDemandByBarangayCard({super.key, required this.demand, required this.onOpenHeatmap});
+  const AdminDemandByBarangayCard({
+    super.key,
+    required this.demand,
+    required this.onOpenHeatmap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -436,23 +559,39 @@ class AdminDemandByBarangayCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text('Demand by Barangay',
-                    style: TextStyle(color: c.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+                child: Text(
+                  'Demand by Barangay',
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               TextButton(
                 onPressed: onOpenHeatmap,
-                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
-                child: Text('Open heatmap', style: TextStyle(color: c.green, fontSize: 12)),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                ),
+                child: Text(
+                  'Open heatmap',
+                  style: TextStyle(color: c.green, fontSize: 12),
+                ),
               ),
             ],
           ),
-          Text('Buyer demand, last 30 days', style: TextStyle(color: c.textSecondary, fontSize: 12)),
+          Text(
+            'Buyer demand, last 30 days',
+            style: TextStyle(color: c.textSecondary, fontSize: 12),
+          ),
           const SizedBox(height: 16),
           if (top.isEmpty)
             const AdminEmptyState(
               icon: Icons.location_on_outlined,
               title: 'No buyer location data yet',
-              subtitle: 'Fills in as buyers set their barangay and place orders.',
+              subtitle:
+                  'Fills in as buyers set their barangay and place orders.',
             )
           else
             for (var i = 0; i < top.length; i++)
@@ -465,11 +604,21 @@ class AdminDemandByBarangayCard extends StatelessWidget {
     );
   }
 
-  Widget _bar(AdminPalette c, ({String barangay, int orderCount, num revenue}) d, int maxCount, int index, int total) {
+  Widget _bar(
+    AdminPalette c,
+    ({String barangay, int orderCount, num revenue}) d,
+    int maxCount,
+    int index,
+    int total,
+  ) {
     // 0 = highest demand (red) -> 1 = lowest shown (yellow).
     final t = total <= 1 ? 0.0 : index / (total - 1);
-    final color = t <= 0.5 ? Color.lerp(c.red, c.amber, t * 2)! : Color.lerp(c.amber, const Color(0xFFFBC02D), (t - 0.5) * 2)!;
-    final width = maxCount <= 0 ? 0.0 : (d.orderCount / maxCount).clamp(0.05, 1.0);
+    final color = t <= 0.5
+        ? Color.lerp(c.red, c.amber, t * 2)!
+        : Color.lerp(c.amber, const Color(0xFFFBC02D), (t - 0.5) * 2)!;
+    final width = maxCount <= 0
+        ? 0.0
+        : (d.orderCount / maxCount).clamp(0.05, 1.0);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -477,11 +626,20 @@ class AdminDemandByBarangayCard extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Expanded(
-              child: Text(d.barangay,
-                  style: TextStyle(color: c.textPrimary, fontSize: 12.5, fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis),
+              child: Text(
+                d.barangay,
+                style: TextStyle(
+                  color: c.textPrimary,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
-            Text('${d.orderCount} order(s)', style: TextStyle(color: c.textSecondary, fontSize: 11)),
+            Text(
+              '${d.orderCount} order(s)',
+              style: TextStyle(color: c.textSecondary, fontSize: 11),
+            ),
           ],
         ),
         const SizedBox(height: 4),
@@ -524,7 +682,14 @@ class AdminRegistrationsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('New Registrations', style: TextStyle(color: c.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+          Text(
+            'New Registrations',
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           const SizedBox(height: 4),
           Row(
             children: [
@@ -550,19 +715,33 @@ class AdminRegistrationsCard extends StatelessWidget {
                   borderData: FlBorderData(show: false),
                   barTouchData: BarTouchData(enabled: false),
                   titlesData: FlTitlesData(
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
+                    rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
+                    leftTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false),
+                    ),
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
                         reservedSize: 24,
                         getTitlesWidget: (value, meta) {
                           final i = value.toInt();
-                          if (i < 0 || i >= registrations.length) return const SizedBox.shrink();
+                          if (i < 0 || i >= registrations.length) {
+                            return const SizedBox.shrink();
+                          }
                           return Padding(
                             padding: const EdgeInsets.only(top: 6),
-                            child: Text(registrations[i].label, style: TextStyle(color: c.textSecondary, fontSize: 10)),
+                            child: Text(
+                              registrations[i].label,
+                              style: TextStyle(
+                                color: c.textSecondary,
+                                fontSize: 10,
+                              ),
+                            ),
                           );
                         },
                       ),
@@ -598,13 +777,17 @@ class AdminRegistrationsCard extends StatelessWidget {
   }
 
   Widget _legendDot(AdminPalette c, Color color, String label) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-          const SizedBox(width: 4),
-          Text(label, style: TextStyle(fontSize: 11, color: c.textSecondary)),
-        ],
-      );
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
+      const SizedBox(width: 4),
+      Text(label, style: TextStyle(fontSize: 11, color: c.textSecondary)),
+    ],
+  );
 }
 
 // ---- Verification Status (donut) ----
@@ -642,17 +825,32 @@ class AdminVerificationStatusCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
-                child: Text('Verification Status',
-                    style: TextStyle(color: c.textPrimary, fontSize: 16, fontWeight: FontWeight.bold)),
+                child: Text(
+                  'Verification Status',
+                  style: TextStyle(
+                    color: c.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               TextButton(
                 onPressed: onOpenVerification,
-                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
-                child: Text('Review', style: TextStyle(color: c.green, fontSize: 12)),
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                ),
+                child: Text(
+                  'Review',
+                  style: TextStyle(color: c.green, fontSize: 12),
+                ),
               ),
             ],
           ),
-          Text('Farmer applications', style: TextStyle(color: c.textSecondary, fontSize: 12)),
+          Text(
+            'Farmer applications',
+            style: TextStyle(color: c.textSecondary, fontSize: 12),
+          ),
           const SizedBox(height: 16),
           if (total == 0)
             const AdminEmptyState(
@@ -670,11 +868,26 @@ class AdminVerificationStatusCard extends StatelessWidget {
                     PieChartData(
                       sections: [
                         if (approved > 0)
-                          PieChartSectionData(value: approved.toDouble(), color: c.green, showTitle: false, radius: 16),
+                          PieChartSectionData(
+                            value: approved.toDouble(),
+                            color: c.green,
+                            showTitle: false,
+                            radius: 16,
+                          ),
                         if (pending > 0)
-                          PieChartSectionData(value: pending.toDouble(), color: c.amber, showTitle: false, radius: 16),
+                          PieChartSectionData(
+                            value: pending.toDouble(),
+                            color: c.amber,
+                            showTitle: false,
+                            radius: 16,
+                          ),
                         if (rejected > 0)
-                          PieChartSectionData(value: rejected.toDouble(), color: c.red, showTitle: false, radius: 16),
+                          PieChartSectionData(
+                            value: rejected.toDouble(),
+                            color: c.red,
+                            showTitle: false,
+                            radius: 16,
+                          ),
                       ],
                       centerSpaceRadius: 28,
                       sectionsSpace: 2,
@@ -705,10 +918,26 @@ class AdminVerificationStatusCard extends StatelessWidget {
   Widget _statRow(AdminPalette c, Color color, String label, int count) {
     return Row(
       children: [
-        Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
         const SizedBox(width: 8),
-        Expanded(child: Text(label, style: TextStyle(color: c.textPrimary, fontSize: 12.5))),
-        Text('$count', style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.bold, fontSize: 13)),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(color: c.textPrimary, fontSize: 12.5),
+          ),
+        ),
+        Text(
+          '$count',
+          style: TextStyle(
+            color: c.textPrimary,
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+          ),
+        ),
       ],
     );
   }
@@ -719,7 +948,11 @@ class AdminPriceSparkline extends StatelessWidget {
   final List<double?> weeklyPrices;
   final Color color;
 
-  const AdminPriceSparkline({super.key, required this.weeklyPrices, required this.color});
+  const AdminPriceSparkline({
+    super.key,
+    required this.weeklyPrices,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -753,7 +986,10 @@ class AdminPriceSparkline extends StatelessWidget {
               color: color,
               barWidth: 1.6,
               dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(show: true, color: color.withValues(alpha: 0.10)),
+              belowBarData: BarAreaData(
+                show: true,
+                color: color.withValues(alpha: 0.10),
+              ),
             ),
           ],
         ),

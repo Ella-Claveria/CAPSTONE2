@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,7 +10,11 @@ class CoachMarkStep {
   final String title;
   final String message;
 
-  const CoachMarkStep({required this.targetKey, required this.title, required this.message});
+  const CoachMarkStep({
+    required this.targetKey,
+    required this.title,
+    required this.message,
+  });
 }
 
 /// Shows a subtle spotlighted walkthrough over up to a couple of key
@@ -60,7 +65,8 @@ class _CoachMarkOverlay {
     entry = OverlayEntry(
       builder: (overlayContext) {
         final step = steps[index];
-        final box = step.targetKey.currentContext?.findRenderObject() as RenderBox?;
+        final box =
+            step.targetKey.currentContext?.findRenderObject() as RenderBox?;
         if (box == null || !box.attached) {
           // Target isn't on screen (e.g. a different tab is showing) — bail
           // out quietly rather than drawing a spotlight pointing at nothing.
@@ -91,7 +97,9 @@ class _CoachMarkOverlay {
               left: 24,
               right: 24,
               top: calloutBelow ? (center.dy + radius + 16) : null,
-              bottom: calloutBelow ? null : (screenSize.height - (center.dy - radius) + 16),
+              bottom: calloutBelow
+                  ? null
+                  : (screenSize.height - (center.dy - radius) + 16),
               child: _CoachMarkCard(
                 step: step,
                 stepNumber: index + 1,
@@ -117,10 +125,15 @@ class _SpotlightPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final overlayPath = Path()..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
-    final holePath = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    final overlayPath = Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
+    final holePath = Path()
+      ..addOval(Rect.fromCircle(center: center, radius: radius));
     final scrim = Path.combine(PathOperation.difference, overlayPath, holePath);
-    canvas.drawPath(scrim, Paint()..color = Colors.black.withValues(alpha: 0.68));
+    canvas.drawPath(
+      scrim,
+      Paint()..color = Colors.black.withValues(alpha: 0.68),
+    );
     canvas.drawCircle(
       center,
       radius,
@@ -151,7 +164,7 @@ class _CoachMarkCard extends StatelessWidget {
     required this.onSkip,
   });
 
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
 
   @override
   Widget build(BuildContext context) {
@@ -169,25 +182,50 @@ class _CoachMarkCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: Text(step.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
+                  child: Text(
+                    step.title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
                 ),
                 if (totalSteps > 1)
-                  Text('$stepNumber/$totalSteps', style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+                  Text(
+                    '$stepNumber/$totalSteps',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                  ),
               ],
             ),
             const SizedBox(height: 6),
-            Text(step.message, style: TextStyle(fontSize: 13.5, color: Colors.grey[700], height: 1.4)),
+            Text(
+              step.message,
+              style: TextStyle(
+                fontSize: 13.5,
+                color: Colors.grey[700],
+                height: 1.4,
+              ),
+            ),
             const SizedBox(height: 14),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                TextButton(onPressed: onSkip, child: const Text('Skip', style: TextStyle(color: Colors.black45))),
+                TextButton(
+                  onPressed: onSkip,
+                  child: const Text(
+                    'Skip',
+                    style: TextStyle(color: Colors.black45),
+                  ),
+                ),
                 ElevatedButton(
                   onPressed: onNext,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _dark,
                     foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
                   ),
                   child: Text(isLast ? 'Got it' : 'Next'),
                 ),

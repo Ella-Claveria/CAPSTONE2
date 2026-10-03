@@ -1,4 +1,7 @@
+import '../theme/app_theme.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'agri_dialog.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../data/laurel_barangays.dart';
@@ -47,11 +50,9 @@ Future<BuyerLocationResult?> showBuyerLocationPicker(
   BuildContext context, {
   BuyerLocationResult? initial,
 }) {
-  return showModalBottomSheet<BuyerLocationResult>(
+  return showAgriPanelSheet<BuyerLocationResult>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: Colors.white,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
     builder: (_) => _BuyerLocationPopup(initial: initial),
   );
 }
@@ -65,7 +66,7 @@ class _BuyerLocationPopup extends StatefulWidget {
 }
 
 class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   final _psgc = PhLocationsService.instance;
 
   List<PhRegion> _regions = const [];
@@ -84,6 +85,12 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
 
   bool _locating = false;
   String? _gpsError;
+  // "Use My Current Location" got a valid position but not a full address:
+  // the position is kept, and used as the pin for whichever barangay the
+  // buyer then picks from the list.
+  String? _gpsNote;
+  double? _detectedLatitude;
+  double? _detectedLongitude;
 
   @override
   void initState() {
@@ -97,20 +104,25 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
     final initial = widget.initial;
     if (initial == null) return;
     try {
-      final region = _regions.firstWhereOrNull((r) => r.name.toLowerCase() == initial.region.toLowerCase());
+      final region = _regions.firstWhereOrNull(
+        (r) => r.name.toLowerCase() == initial.region.toLowerCase(),
+      );
       if (region == null) return;
       await _pickRegion(region);
       if (!mounted) return;
 
       if (!_regionHasNoProvinces) {
-        final province =
-            _provinces.firstWhereOrNull((p) => p.name.toLowerCase() == initial.province.toLowerCase());
+        final province = _provinces.firstWhereOrNull(
+          (p) => p.name.toLowerCase() == initial.province.toLowerCase(),
+        );
         if (province == null) return;
         await _pickProvince(province);
         if (!mounted) return;
       }
 
-      final city = _cities.firstWhereOrNull((c) => c.name.toLowerCase() == initial.city.toLowerCase());
+      final city = _cities.firstWhereOrNull(
+        (c) => c.name.toLowerCase() == initial.city.toLowerCase(),
+      );
       if (city == null) return;
       await _pickCity(city);
       // Left showing the barangay list (not auto-selected) so editing
@@ -136,7 +148,8 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       if (!mounted) return;
       setState(() {
         _loadingList = false;
-        _listError = 'Could not load the location list. Check your connection and try again.';
+        _listError =
+            'Could not load the location list. Check your connection and try again.';
       });
     }
   }
@@ -157,7 +170,9 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       final provinces = await _psgc.fetchProvinces(region.code);
       if (!mounted) return;
       if (provinces.isEmpty) {
-        final cities = await _psgc.fetchCitiesMunicipalities(regionCode: region.code);
+        final cities = await _psgc.fetchCitiesMunicipalities(
+          regionCode: region.code,
+        );
         if (!mounted) return;
         setState(() {
           _regionHasNoProvinces = true;
@@ -189,7 +204,9 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       _listError = null;
     });
     try {
-      final cities = await _psgc.fetchCitiesMunicipalities(provinceCode: province.code);
+      final cities = await _psgc.fetchCitiesMunicipalities(
+        provinceCode: province.code,
+      );
       if (!mounted) return;
       setState(() {
         _cities = cities;
@@ -222,7 +239,8 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       if (!mounted) return;
       setState(() {
         _loadingList = false;
-        _listError = 'Could not load that city/municipality\'s barangays. Please try again.';
+        _listError =
+            'Could not load that city/municipality\'s barangays. Please try again.';
       });
     }
   }
@@ -233,7 +251,15 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
     final province = _regionHasNoProvinces ? region : _selectedProvince!.name;
     final city = _selectedCity!.name;
 
-    final coord = await GeocodingService.forwardGeocode('${barangay.name}, $city, $province, Philippines');
+    // A position detected just now is the better pin; otherwise the
+    // barangay itself is looked up.
+    final detectedLat = _detectedLatitude;
+    final detectedLng = _detectedLongitude;
+    final coord = detectedLat != null && detectedLng != null
+        ? (lat: detectedLat, lng: detectedLng)
+        : await GeocodingService.forwardGeocode(
+            '${barangay.name}, $city, $province, Philippines',
+          );
     if (!mounted) return;
     Navigator.pop(
       context,
@@ -267,71 +293,184 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
     });
   }
 
+  // Debug builds only — never compiled into a release. Each line names the
+  // step, so a failure can be placed: GPS, Philippines check, reverse
+  // geocoding, or address parsing.
+  void _log(String step, String message) {
+    if (kDebugMode) debugPrint('UseMyLocation[$step]: $message');
+  }
+
+  // A fresh fix, not a remembered one. On Android the default (fused)
+  // provider can hand back a cached position — on an emulator, the one
+  // from before its location was changed. If what comes back is old, the
+  // position is read again straight from the device's location manager.
+  Future<Position> _freshPosition() async {
+    var position = await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 20),
+      ),
+    );
+    final age = DateTime.now().difference(position.timestamp);
+    _log(
+      'gps',
+      'fix received: (${position.latitude}, ${position.longitude}), '
+          'age ${age.inSeconds}s, mocked=${position.isMocked}',
+    );
+
+    if (age > const Duration(minutes: 2) &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        position = await Geolocator.getCurrentPosition(
+          locationSettings: AndroidSettings(
+            accuracy: LocationAccuracy.high,
+            forceLocationManager: true,
+            timeLimit: const Duration(seconds: 15),
+          ),
+        );
+        _log(
+          'gps',
+          'stale fix refreshed: (${position.latitude}, ${position.longitude})',
+        );
+      } catch (e) {
+        _log('gps', 'refresh failed, keeping the first fix: $e');
+      }
+    }
+    return position;
+  }
+
   Future<void> _useMyLocation() async {
     setState(() {
       _locating = true;
       _gpsError = null;
+      _gpsNote = null;
     });
     try {
       final granted = await requestBuyerLocationPermission(context);
+      _log('gps', 'permission ${granted ? 'granted' : 'NOT granted'}');
       if (!granted) return;
 
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
+        _log('gps', 'FAILED: location services are off');
         if (!mounted) return;
         setState(() => _gpsError = 'Turn on location services to use this.');
         return;
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      final Position position;
+      try {
+        position = await _freshPosition();
+      } catch (e) {
+        _log('gps', 'FAILED: could not get a position: $e');
+        rethrow;
+      }
+      if (!mounted) return;
+
+      // The Philippines check is on the coordinates themselves — it does
+      // not depend on any address coming back.
+      if (!isWithinPhilippines(position.latitude, position.longitude)) {
+        _log('philippines', 'FAILED: coordinates are outside the Philippines');
+        setState(
+          () => _gpsError =
+              "This doesn't look like a location within the Philippines.",
+        );
+        return;
+      }
+      _log('philippines', 'ok: coordinates are inside the Philippines');
+
+      final lookup = await GeocodingService.reverseGeocodeDetailed(
+        position.latitude,
+        position.longitude,
       );
       if (!mounted) return;
+      final addr = lookup.address;
+      _log(
+        'reverse-geocoding',
+        lookup.status == 'OK'
+            ? 'ok'
+            : 'FAILED: status=${lookup.status}'
+                  '${lookup.error == null ? '' : ', ${lookup.error}'}',
+      );
+      _log(
+        'address',
+        'country=${addr?.countryCode}, region=${addr?.region}, '
+            'province=${addr?.province}, city=${addr?.city}, '
+            'barangay=${addr?.barangay}',
+      );
 
-      if (!isWithinPhilippines(position.latitude, position.longitude)) {
-        setState(() => _gpsError = "This doesn't look like a location within the Philippines.");
+      // An address that says it is another country (the bounds above also
+      // take in a little of the Philippines' neighbours).
+      final country = addr?.countryCode;
+      if (country != null && country.toUpperCase() != 'PH') {
+        _log('philippines', 'FAILED: address country is $country');
+        setState(
+          () => _gpsError =
+              "This doesn't look like a location within the Philippines.",
+        );
         return;
       }
 
-      final addr = await GeocodingService.reverseGeocode(position.latitude, position.longitude);
-      if (!mounted) return;
-      if (addr == null || addr.city == null || addr.province == null) {
-        setState(() =>
-            _gpsError = "Couldn't determine your address. Please choose it from the list below instead.");
+      final city = addr?.city;
+      final province = addr?.province;
+      if (city == null || province == null) {
+        // The coordinates are good; only the address is incomplete (or the
+        // lookup itself failed). Keep the fix and let the buyer finish the
+        // address from the list — the pin saved will be this GPS position.
+        _log(
+          'address',
+          'incomplete (city=$city, province=$province) — keeping the '
+              'coordinates and asking the buyer to pick the barangay',
+        );
+        setState(() {
+          _detectedLatitude = position.latitude;
+          _detectedLongitude = position.longitude;
+          _gpsNote =
+              'Location detected. Please choose your barangay from the list '
+              'below to confirm.';
+        });
         return;
       }
 
-      final region = await _psgc.regionNameForProvinceName(addr.province!);
+      final region =
+          await _psgc.regionNameForProvinceName(province) ??
+          addr?.region ??
+          province;
       if (!mounted) return;
+      _log('address', 'ok: $city, $province ($region)');
 
       Navigator.pop(
         context,
         BuyerLocationResult(
-          region: region ?? addr.province!,
-          province: addr.province!,
-          city: addr.city!,
-          barangay: addr.barangay ?? addr.city!,
+          region: region,
+          province: province,
+          city: city,
+          barangay: addr?.barangay ?? city,
           latitude: position.latitude,
           longitude: position.longitude,
         ),
       );
     } catch (_) {
       if (!mounted) return;
-      setState(() => _gpsError = 'Could not detect your location. Please try again.');
+      setState(
+        () => _gpsError = 'Could not detect your location. Please try again.',
+      );
     } finally {
       if (mounted) setState(() => _locating = false);
     }
   }
 
   List<String> get _breadcrumb => [
-        if (_selectedRegion != null) _selectedRegion!.name,
-        if (_selectedProvince != null) _selectedProvince!.name,
-        if (_selectedCity != null) _selectedCity!.name,
-      ];
+    if (_selectedRegion != null) _selectedRegion!.name,
+    if (_selectedProvince != null) _selectedProvince!.name,
+    if (_selectedCity != null) _selectedCity!.name,
+  ];
 
   String get _levelLabel {
     if (_selectedCity != null) return 'Barangay';
-    if (_selectedProvince != null || _regionHasNoProvinces) return 'City / Municipality';
+    if (_selectedProvince != null || _regionHasNoProvinces) {
+      return 'City / Municipality';
+    }
     if (_selectedRegion != null) return 'Province';
     return 'Region';
   }
@@ -348,16 +487,28 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
             Container(
               width: 40,
               height: 4,
-              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(4)),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(4),
+              ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
               child: Row(
                 children: [
                   const Expanded(
-                    child: Text('Set Your Location', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    child: Text(
+                      'Set Your Location',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
                   ),
-                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  ),
                 ],
               ),
             ),
@@ -372,20 +523,42 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
                       onPressed: _locating ? null : _useMyLocation,
                       icon: _locating
                           ? const SizedBox(
-                              width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: _dark))
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: _dark,
+                              ),
+                            )
                           : const Icon(Icons.my_location),
                       label: const Text('Use My Current Location'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _dark,
                         side: const BorderSide(color: _dark),
                         padding: const EdgeInsets.symmetric(vertical: 13),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
                   ),
+                  if (_gpsNote != null && _gpsError == null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      _gpsNote!,
+                      style: const TextStyle(
+                        color: _dark,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                   if (_gpsError != null) ...[
                     const SizedBox(height: 6),
-                    Text(_gpsError!, style: const TextStyle(color: Colors.red, fontSize: 11.5)),
+                    Text(
+                      _gpsError!,
+                      style: const TextStyle(color: Colors.red, fontSize: 11.5),
+                    ),
                   ],
                   const SizedBox(height: 14),
                   Row(
@@ -393,7 +566,13 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
                       const Expanded(child: Divider()),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text('Or choose manually', style: TextStyle(fontSize: 11.5, color: Colors.grey[600])),
+                        child: Text(
+                          'Or choose manually',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: Colors.grey[600],
+                          ),
+                        ),
                       ),
                       const Expanded(child: Divider()),
                     ],
@@ -416,8 +595,14 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
                   ],
                   Expanded(
                     child: Text(
-                      _breadcrumb.isEmpty ? 'Select your $_levelLabel' : '${_breadcrumb.join(' › ')} — Select $_levelLabel',
-                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.black54),
+                      _breadcrumb.isEmpty
+                          ? 'Select your $_levelLabel'
+                          : '${_breadcrumb.join(' › ')} — Select $_levelLabel',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black54,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -445,18 +630,31 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
             children: [
               const Icon(Icons.wifi_off, size: 36, color: Colors.black38),
               const SizedBox(height: 10),
-              Text(_listError!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54)),
+              Text(
+                _listError!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.black54),
+              ),
               const SizedBox(height: 12),
-              OutlinedButton(onPressed: _retryCurrentLevel, child: const Text('Retry')),
+              OutlinedButton(
+                onPressed: _retryCurrentLevel,
+                child: const Text('Retry'),
+              ),
             ],
           ),
         ),
       );
     }
 
-    if (_selectedCity != null) return _list(_barangays, (b) => b.name, _pickBarangay);
-    if (_selectedProvince != null || _regionHasNoProvinces) return _list(_cities, (c) => c.name, _pickCity);
-    if (_selectedRegion != null) return _list(_provinces, (p) => p.name, _pickProvince);
+    if (_selectedCity != null) {
+      return _list(_barangays, (b) => b.name, _pickBarangay);
+    }
+    if (_selectedProvince != null || _regionHasNoProvinces) {
+      return _list(_cities, (c) => c.name, _pickCity);
+    }
+    if (_selectedRegion != null) {
+      return _list(_provinces, (p) => p.name, _pickProvince);
+    }
     return _list(_regions, (r) => r.name, _pickRegion);
   }
 
@@ -472,9 +670,18 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
     }
   }
 
-  Widget _list<T>(List<T> items, String Function(T) label, ValueChanged<T> onTap) {
+  Widget _list<T>(
+    List<T> items,
+    String Function(T) label,
+    ValueChanged<T> onTap,
+  ) {
     if (items.isEmpty) {
-      return const Center(child: Text('No entries found.', style: TextStyle(color: Colors.black45)));
+      return const Center(
+        child: Text(
+          'No entries found.',
+          style: TextStyle(color: Colors.black45),
+        ),
+      );
     }
     return ListView.separated(
       padding: const EdgeInsets.only(bottom: 12),
@@ -484,7 +691,11 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
         final item = items[i];
         return ListTile(
           title: Text(label(item), style: const TextStyle(fontSize: 14)),
-          trailing: const Icon(Icons.chevron_right, color: Colors.grey, size: 20),
+          trailing: const Icon(
+            Icons.chevron_right,
+            color: Colors.grey,
+            size: 20,
+          ),
           onTap: () => onTap(item),
         );
       },

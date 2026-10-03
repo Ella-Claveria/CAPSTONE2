@@ -4,8 +4,12 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
+import '../data/commodity_master_list.dart';
 import '../firebase_options.dart';
 import '../services/connectivity_service.dart';
+import '../services/device_trust_service.dart';
+import '../services/presence_service.dart';
+import '../services/product_share_service.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/branded_loading_screen.dart';
 import '../widgets/no_internet_screen.dart';
@@ -69,11 +73,18 @@ class _AppBootstrapState extends State<AppBootstrap> {
     if (Firebase.apps.isEmpty) {
       setState(() => _phase = _BootPhase.initializing);
       try {
-        await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+        await Firebase.initializeApp(
+          options: DefaultFirebaseOptions.currentPlatform,
+        );
       } catch (e, st) {
         debugPrint('App startup failed: $e');
         debugPrintStack(stackTrace: st);
-        if (mounted) setState(() { _error = e.toString(); _phase = _BootPhase.error; });
+        if (mounted) {
+          setState(() {
+            _error = e.toString();
+            _phase = _BootPhase.error;
+          });
+        }
         return;
       }
     }
@@ -93,7 +104,9 @@ class _AppBootstrapState extends State<AppBootstrap> {
     setState(() => _phase = _BootPhase.checkingAuthentication);
     try {
       if (!kIsWeb) {
-        FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+        FirebaseMessaging.onBackgroundMessage(
+          _firebaseMessagingBackgroundHandler,
+        );
       }
       // Notification permission itself is never requested here — this phase
       // runs on every single boot (every page load, before anyone is even
@@ -108,7 +121,12 @@ class _AppBootstrapState extends State<AppBootstrap> {
     } catch (e, st) {
       debugPrint('App startup failed: $e');
       debugPrintStack(stackTrace: st);
-      if (mounted) setState(() { _error = e.toString(); _phase = _BootPhase.error; });
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _phase = _BootPhase.error;
+        });
+      }
       return;
     }
 
@@ -122,6 +140,18 @@ class _AppBootstrapState extends State<AppBootstrap> {
     // while the user is inside the app (a single, shared watchdog — see
     // ConnectivityService — not a new timer/poll loop).
     ConnectivityService.instance.startWatching();
+    // Publishes this user's "active now" status while the app is open
+    // (the green dot in Messages — see PresenceService).
+    PresenceService.instance.start();
+    // Follows the Admin-managed commodity list (Supported Products, Add
+    // Product suggestions, units) — see CommodityRegistry.
+    CommodityRegistry.instance.start();
+    // Opens Product Details for a shared product link (see
+    // ProductLinkService) once the user is signed in and Home is up.
+    ProductLinkService.start();
+    // Recognizes this installation for the signed-in account (New Device
+    // Login Alert) — see DeviceTrustService.
+    DeviceTrustService.instance.start();
     setState(() => _phase = _BootPhase.ready);
   }
 
@@ -144,7 +174,10 @@ class _AppBootstrapState extends State<AppBootstrap> {
           body: Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
-              child: Text('App failed to start.\n$_error', textAlign: TextAlign.center),
+              child: Text(
+                'App failed to start.\n$_error',
+                textAlign: TextAlign.center,
+              ),
             ),
           ),
         );

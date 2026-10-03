@@ -1,5 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class ThemeController extends ChangeNotifier {
+  ThemeController._() {
+    _load();
+  }
+
+  static final ThemeController instance = ThemeController._();
+  static const _key = 'dark_mode_enabled';
+  bool isDark = false;
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    isDark = prefs.getBool(_key) ?? false;
+    notifyListeners();
+  }
+
+  Future<void> toggle() async {
+    isDark = !isDark;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_key, isDark);
+  }
+}
 
 class AppTheme {
   // ---------- COLOURS ----------
@@ -27,7 +51,7 @@ class AppTheme {
 
     return ThemeData(
       useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: mid),
+      colorScheme: ColorScheme.fromSeed(seedColor: mid, primary: dark),
       scaffoldBackgroundColor: bgLight,
 
       // <-- THIS is the line that changes the whole app's font.
@@ -88,9 +112,48 @@ class AppTheme {
         ),
       ),
 
+      // Fallback popup look for any dialog/sheet not built with
+      // widgets/agri_dialog.dart (e.g. date pickers): same rounded white
+      // card, Montserrat, dark-green title and the same dimmed barrier.
+      // New popups should use agri_dialog.dart for the full frosted style.
+      dialogTheme: DialogThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        barrierColor: const Color(0x61000000),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        titleTextStyle: GoogleFonts.montserrat(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          color: dark,
+        ),
+        contentTextStyle: GoogleFonts.montserrat(
+          fontSize: 13,
+          color: Colors.black87,
+          height: 1.45,
+        ),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        modalBarrierColor: Color(0x61000000),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+      ),
+
       snackBarTheme: SnackBarThemeData(
         contentTextStyle: GoogleFonts.montserrat(fontSize: 13.5),
       ),
+    );
+  }
+
+  static ThemeData darkThemeData() {
+    return ThemeData.dark(useMaterial3: true).copyWith(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: mid,
+        brightness: Brightness.dark,
+      ),
+      textTheme: GoogleFonts.montserratTextTheme(ThemeData.dark().textTheme),
     );
   }
 
@@ -103,50 +166,43 @@ class AppTheme {
   // ==========================================================
 
   static TextStyle heading(double size) => GoogleFonts.montserrat(
-        fontSize: size,
-        fontWeight: FontWeight.bold,
-        color: Colors.black87,
-      );
+    fontSize: size,
+    fontWeight: FontWeight.bold,
+    color: Colors.black87,
+  );
 
   static TextStyle label() => GoogleFonts.montserrat(
-        fontSize: 14,
-        fontWeight: FontWeight.w600,
-        color: Colors.black87,
-      );
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    color: Colors.black87,
+  );
 
   static TextStyle body({Color? color, double size = 13.5}) =>
-      GoogleFonts.montserrat(
-        fontSize: size,
-        color: color ?? Colors.grey[700],
-      );
+      GoogleFonts.montserrat(fontSize: size, color: color ?? Colors.grey[700]);
 
-  static TextStyle buttonText() => GoogleFonts.montserrat(
-        fontSize: 16,
-        fontWeight: FontWeight.bold,
-      );
+  static TextStyle buttonText() =>
+      GoogleFonts.montserrat(fontSize: 16, fontWeight: FontWeight.bold);
 
   // ---------- REUSABLE PIECES ----------
 
   static BoxDecoration authCard() => BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.90),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      );
+    color: Colors.white.withValues(alpha: 0.90),
+    borderRadius: BorderRadius.circular(24),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.15),
+        blurRadius: 20,
+        offset: const Offset(0, 8),
+      ),
+    ],
+  );
 
   static ButtonStyle primaryButton() => ElevatedButton.styleFrom(
-        backgroundColor: dark,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(30),
-        ),
-      );
+    backgroundColor: dark,
+    foregroundColor: Colors.white,
+    padding: const EdgeInsets.symmetric(vertical: 16),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+  );
 
   // ---------- LOGIN-STYLE "GLOW" FIELD ----------
   // Pill-shaped, borderless field on its own white plate. At rest it only
@@ -154,16 +210,29 @@ class AppTheme {
   // blue-glow neumorphic look) switches on around it while it's focused —
   // see the field wrapping this in LoginFormFields for the FocusNode that
   // drives [focused]. Used by the login form.
-  static BoxDecoration glowFieldWrapper({bool focused = false}) => BoxDecoration(
+  static BoxDecoration glowFieldWrapper({bool focused = false}) =>
+      BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(30),
         boxShadow: focused
             ? [
-                BoxShadow(color: mid.withValues(alpha: 0.18), blurRadius: 12, spreadRadius: 0.5),
-                BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 3)),
+                BoxShadow(
+                  color: mid.withValues(alpha: 0.18),
+                  blurRadius: 12,
+                  spreadRadius: 0.5,
+                ),
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
               ]
             : [
-                BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, 3)),
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.08),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
               ],
       );
 
@@ -178,7 +247,11 @@ class AppTheme {
       hintText: hint,
       prefixIcon: Icon(icon, color: Colors.grey),
       prefixText: prefixText,
-      prefixStyle: const TextStyle(color: dark, fontWeight: FontWeight.w600, fontSize: 15),
+      prefixStyle: const TextStyle(
+        color: dark,
+        fontWeight: FontWeight.w600,
+        fontSize: 15,
+      ),
       suffixIcon: suffix,
       filled: true,
       fillColor: fieldFill,

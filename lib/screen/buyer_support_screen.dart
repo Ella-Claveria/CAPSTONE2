@@ -1,4 +1,6 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
+import '../widgets/agri_dialog.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/support_request_service.dart';
 
@@ -14,7 +16,7 @@ class BuyerSupportScreen extends StatefulWidget {
 }
 
 class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _accent = Color(0xFFDCEDC8);
 
   final _service = SupportRequestService();
@@ -43,12 +45,9 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
   Future<void> _openNewRequestSheet() async {
     _subjectController.clear();
     _messageController.clear();
-    await showModalBottomSheet(
+    await showAgriPanelSheet<void>(
       context: context,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (sheetContext) {
         return Padding(
           padding: EdgeInsets.only(
@@ -63,8 +62,10 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('New Support Request',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                  const Text(
+                    'New Support Request',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17),
+                  ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _subjectController,
@@ -106,13 +107,18 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     child: _sending
                         ? const SizedBox(
                             height: 20,
                             width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           )
                         : const Text('Send Request'),
                   ),
@@ -130,10 +136,18 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
     final c = resolved ? _dark : const Color(0xFFB8860B);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(color: c.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
       child: Text(
         status.toUpperCase(),
-        style: TextStyle(color: c, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.4),
+        style: TextStyle(
+          color: c,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.4,
+        ),
       ),
     );
   }
@@ -147,8 +161,14 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
         elevation: 0,
         foregroundColor: Colors.black87,
         centerTitle: true,
-        title: const Text('Help & Support',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.black87)),
+        title: const Text(
+          'Help & Support',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+            color: Colors.black87,
+          ),
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openNewRequestSheet,
@@ -162,13 +182,17 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
           if (snap.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: _dark));
           }
-          final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
-            snap.data?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
-          )..sort((a, b) {
-              final at = a.data()['createdAt'] as Timestamp?;
-              final bt = b.data()['createdAt'] as Timestamp?;
-              return (bt?.millisecondsSinceEpoch ?? 0).compareTo(at?.millisecondsSinceEpoch ?? 0);
-            });
+          final docs =
+              List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+                snap.data?.docs ??
+                    const <QueryDocumentSnapshot<Map<String, dynamic>>>[],
+              )..sort((a, b) {
+                final at = a.data()['createdAt'] as Timestamp?;
+                final bt = b.data()['createdAt'] as Timestamp?;
+                return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
+                  at?.millisecondsSinceEpoch ?? 0,
+                );
+              });
 
           if (docs.isEmpty) {
             return Center(
@@ -177,15 +201,30 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.all(22),
-                    decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
-                    child: const Icon(Icons.support_agent_outlined, size: 48, color: _dark),
+                    decoration: const BoxDecoration(
+                      color: _accent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.support_agent_outlined,
+                      size: 48,
+                      color: _dark,
+                    ),
                   ),
                   const SizedBox(height: 18),
-                  const Text('No support requests yet',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.black87)),
+                  const Text(
+                    'No support requests yet',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
                   const SizedBox(height: 6),
-                  Text('Tap "New Request" if you need help with anything.',
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+                  Text(
+                    'Tap "New Request" if you need help with anything.',
+                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                  ),
                 ],
               ),
             );
@@ -206,7 +245,11 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 3)),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.05),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
+                    ),
                   ],
                 ),
                 child: Column(
@@ -215,14 +258,22 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                     Row(
                       children: [
                         Expanded(
-                          child: Text(subject,
-                              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                          child: Text(
+                            subject,
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                         _statusBadge(status),
                       ],
                     ),
                     const SizedBox(height: 6),
-                    Text(message, style: TextStyle(fontSize: 13, color: Colors.grey[700])),
+                    Text(
+                      message,
+                      style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                    ),
                   ],
                 ),
               );

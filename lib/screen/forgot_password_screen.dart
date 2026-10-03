@@ -15,14 +15,20 @@ class ForgotPasswordScreen extends StatefulWidget {
   // AuditLogService); farmer/buyer resets aren't in scope for it.
   final bool isAdmin;
 
-  const ForgotPasswordScreen({super.key, this.initialEmail = '', this.isAdmin = false});
+  const ForgotPasswordScreen({
+    super.key,
+    this.initialEmail = '',
+    this.isAdmin = false,
+  });
 
   @override
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
 
 class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
-  late final _emailController = TextEditingController(text: widget.initialEmail);
+  late final _emailController = TextEditingController(
+    text: widget.initialEmail,
+  );
   bool _sending = false;
   bool _sent = false;
 
@@ -48,11 +54,16 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     if (!mounted) return;
     setState(() => _sending = false);
     if (error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
       return;
     }
     if (widget.isAdmin) {
-      AuditLogService.logPreAuth(AuditAction.passwordResetRequested, email: email);
+      AuditLogService.logPreAuth(
+        AuditAction.passwordResetRequested,
+        email: email,
+      );
     }
     setState(() => _sent = true);
   }
@@ -63,9 +74,18 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       filled: true,
       fillColor: const Color(0xFFF2F2F2),
       prefixIcon: Icon(icon, color: Colors.grey),
-      border: OutlineInputBorder(borderRadius: _fieldRadius, borderSide: BorderSide.none),
-      enabledBorder: OutlineInputBorder(borderRadius: _fieldRadius, borderSide: BorderSide.none),
-      focusedBorder: OutlineInputBorder(borderRadius: _fieldRadius, borderSide: const BorderSide(color: _dark, width: 1.4)),
+      border: OutlineInputBorder(
+        borderRadius: _fieldRadius,
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: _fieldRadius,
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: _fieldRadius,
+        borderSide: const BorderSide(color: _dark, width: 1.4),
+      ),
     );
   }
 
@@ -85,7 +105,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: [
-                      BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 16, offset: const Offset(0, 6)),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
                     ],
                   ),
                   child: Column(
@@ -97,12 +121,20 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                           'assets/images/logo.png',
                           width: 70,
                           height: 70,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            width: 70,
-                            height: 70,
-                            decoration: const BoxDecoration(color: Color(0xFF2E7D32), shape: BoxShape.circle),
-                            child: const Icon(Icons.agriculture, size: 38, color: Colors.white),
-                          ),
+                          errorBuilder: (context, error, stackTrace) =>
+                              Container(
+                                width: 70,
+                                height: 70,
+                                decoration: const BoxDecoration(
+                                  color: AppTheme.dark,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.agriculture,
+                                  size: 38,
+                                  color: Colors.white,
+                                ),
+                              ),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -111,21 +143,35 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                       if (!_sent) ...[
                         const Text(
                           'Reset your password',
-                          style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Colors.black87),
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         const Text(
                           "Enter your account email and we'll send you a link to verify it's you and reset your password.",
-                          style: TextStyle(fontSize: 13.5, color: Colors.black54, height: 1.4),
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            color: Colors.black54,
+                            height: 1.4,
+                          ),
                         ),
                         const SizedBox(height: 20),
-                        const Text('Email Address', style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Text(
+                          'Email Address',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _emailController,
                           autofocus: true,
                           keyboardType: TextInputType.emailAddress,
-                          decoration: _decoration('you@example.com', Icons.email_outlined),
+                          decoration: _decoration(
+                            'you@example.com',
+                            Icons.email_outlined,
+                          ),
                         ),
                         const SizedBox(height: 20),
                         SizedBox(
@@ -136,30 +182,56 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                               backgroundColor: _dark,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
                             ),
                             child: _sending
                                 ? const SizedBox(
-                                    height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                : const Text('Send Reset Link', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Text(
+                                    'Send Reset Link',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
                           ),
                         ),
                       ] else ...[
                         const Center(
-                          child: Icon(Icons.mark_email_read_outlined, size: 56, color: _dark),
+                          child: Icon(
+                            Icons.mark_email_read_outlined,
+                            size: 56,
+                            color: _dark,
+                          ),
                         ),
                         const SizedBox(height: 12),
                         const Text(
                           'Check your email',
                           textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: Colors.black87),
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         Text(
                           'We sent a verification link to ${_emailController.text.trim()}. '
                           'Open it to confirm it\'s you and set a new password.',
                           textAlign: TextAlign.center,
-                          style: const TextStyle(fontSize: 13.5, color: Colors.black54, height: 1.4),
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            color: Colors.black54,
+                            height: 1.4,
+                          ),
                         ),
                         const SizedBox(height: 20),
                         SizedBox(
@@ -170,9 +242,17 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                               backgroundColor: _dark,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(vertical: 16),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
                             ),
-                            child: const Text('Back to Login', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            child: const Text(
+                              'Back to Login',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
                       ],

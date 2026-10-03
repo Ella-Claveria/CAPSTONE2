@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -24,7 +25,7 @@ class SetFarmLocationScreen extends StatefulWidget {
 }
 
 class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
 
   GoogleMapController? _mapController;
   late LatLng _picked;
@@ -52,18 +53,24 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
       if (!serviceEnabled) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Turn on location services to use this.')),
+          const SnackBar(
+            content: Text('Turn on location services to use this.'),
+          ),
         );
         return;
       }
 
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       if (!mounted) return;
       final here = LatLng(position.latitude, position.longitude);
       _picked = here;
-      await _mapController?.animateCamera(CameraUpdate.newLatLngZoom(here, 16.0));
+      await _mapController?.animateCamera(
+        CameraUpdate.newLatLngZoom(here, 16.0),
+      );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -88,20 +95,19 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
           .doc(user.uid)
           .collection('private')
           .doc('geo')
-          .set(
-        {
-          'latitude': _picked.latitude,
-          'longitude': _picked.longitude,
-          'updatedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
+          .set({
+            'latitude': _picked.latitude,
+            'longitude': _picked.longitude,
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
       if (!mounted) return;
       Navigator.pop(context, _picked);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not save your location. Please try again.')),
+        const SnackBar(
+          content: Text('Could not save your location. Please try again.'),
+        ),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -115,8 +121,14 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
         backgroundColor: Colors.white,
         foregroundColor: Colors.black87,
         elevation: 0,
-        title: const Text('Set Farm Location',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.black87)),
+        title: const Text(
+          'Set Farm Location',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+            color: Colors.black87,
+          ),
+        ),
       ),
       body: Stack(
         alignment: Alignment.center,
@@ -143,7 +155,13 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(14),
-                boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 2))],
+                boxShadow: const [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
               child: const Text(
                 'Drag the map so the pin sits over your farm, or use your current location.',
@@ -165,7 +183,11 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                         ? const SizedBox(
                             width: 16,
                             height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: _dark))
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: _dark,
+                            ),
+                          )
                         : const Icon(Icons.my_location),
                     label: const Text('Use My Current Location'),
                     style: OutlinedButton.styleFrom(
@@ -173,7 +195,9 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                       side: const BorderSide(color: _dark),
                       backgroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                     ),
                   ),
                 ),
@@ -186,15 +210,24 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
                       elevation: 0,
                     ),
                     child: _saving
                         ? const SizedBox(
                             width: 20,
                             height: 20,
-                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : const Text('Save Farm Location', style: TextStyle(fontWeight: FontWeight.bold)),
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Save Farm Location',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
                   ),
                 ),
               ],

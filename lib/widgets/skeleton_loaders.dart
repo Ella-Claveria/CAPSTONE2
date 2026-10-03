@@ -8,12 +8,16 @@ import 'shimmer.dart';
 // placeholder sweeps together.
 
 BoxDecoration _cardDecoration({double radius = 18}) => BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(radius),
-      boxShadow: [
-        BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 10, offset: const Offset(0, 3)),
-      ],
-    );
+  color: Colors.white,
+  borderRadius: BorderRadius.circular(radius),
+  boxShadow: [
+    BoxShadow(
+      color: Colors.black.withValues(alpha: 0.05),
+      blurRadius: 10,
+      offset: const Offset(0, 3),
+    ),
+  ],
+);
 
 // ---- Market tab (farmer home) ----
 // Mirrors MarketTab: welcome header, a row of two stat cards, then two
@@ -70,7 +74,6 @@ class MarketTabSkeleton extends StatelessWidget {
       ),
     );
   }
-
 }
 
 // Standalone market-objective card skeleton — reused both inside
@@ -95,7 +98,11 @@ class MarketObjectiveCardSkeleton extends StatelessWidget {
             if (i != 2) const SizedBox(height: 10),
           ],
           const SizedBox(height: 12),
-          const SkeletonBox(width: double.infinity, height: 44, borderRadius: BorderRadius.all(Radius.circular(12))),
+          const SkeletonBox(
+            width: double.infinity,
+            height: 44,
+            borderRadius: BorderRadius.all(Radius.circular(12)),
+          ),
         ],
       ),
     );
@@ -150,7 +157,11 @@ class SalesPerformanceCardSkeleton extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: const [
               SkeletonBox(width: 150, height: 16),
-              SkeletonBox(width: 90, height: 22, borderRadius: BorderRadius.all(Radius.circular(20))),
+              SkeletonBox(
+                width: 90,
+                height: 22,
+                borderRadius: BorderRadius.all(Radius.circular(20)),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -170,7 +181,9 @@ class SalesPerformanceCardSkeleton extends StatelessWidget {
                     SkeletonBox(
                       width: 18,
                       height: h,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(6),
+                      ),
                     ),
                     const SizedBox(height: 6),
                     const SkeletonBox(width: 18, height: 8),
@@ -202,94 +215,6 @@ class _StatCardSkeleton extends StatelessWidget {
           SkeletonBox(width: 50, height: 11),
           SizedBox(height: 10),
           SkeletonBox(width: 44, height: 30),
-        ],
-      ),
-    );
-  }
-}
-
-// ---- Orders tab ----
-// Mirrors OrdersTab: filter pills, then a scrollable list of order cards.
-class OrdersTabSkeleton extends StatelessWidget {
-  const OrdersTabSkeleton({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Shimmer(
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          Row(
-            children: const [
-              Expanded(child: SkeletonBox(height: 38, borderRadius: BorderRadius.all(Radius.circular(24)))),
-              SizedBox(width: 8),
-              Expanded(child: SkeletonBox(height: 38, borderRadius: BorderRadius.all(Radius.circular(24)))),
-              SizedBox(width: 8),
-              Expanded(child: SkeletonBox(height: 38, borderRadius: BorderRadius.all(Radius.circular(24)))),
-            ],
-          ),
-          const SizedBox(height: 16),
-          for (var i = 0; i < 4; i++) ...[
-            const OrderCardSkeleton(),
-            if (i != 3) const SizedBox(height: 14),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class OrderCardSkeleton extends StatelessWidget {
-  const OrderCardSkeleton({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: _cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SkeletonBox(width: 58, height: 58, borderRadius: BorderRadius.all(Radius.circular(12))),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    SkeletonBox(width: 120, height: 14),
-                    SizedBox(height: 6),
-                    SkeletonBox(width: 90, height: 11),
-                    SizedBox(height: 6),
-                    SkeletonBox(width: 80, height: 11),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              const SkeletonBox(width: 60, height: 20, borderRadius: BorderRadius.all(Radius.circular(20))),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Divider(height: 1),
-          const SizedBox(height: 10),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  SkeletonBox(width: 36, height: 10),
-                  SizedBox(height: 4),
-                  SkeletonBox(width: 64, height: 16),
-                ],
-              ),
-              const Spacer(),
-              const SkeletonBox(width: 90, height: 32, borderRadius: BorderRadius.all(Radius.circular(10))),
-            ],
-          ),
         ],
       ),
     );
@@ -330,7 +255,8 @@ class ProfileTabSkeleton extends StatelessWidget {
                     child: Column(
                       children: [
                         for (var i = 0; i < 3; i++) ...[
-                          if (i != 0) const Divider(height: 1, indent: 16, endIndent: 16),
+                          if (i != 0)
+                            const Divider(height: 1, indent: 16, endIndent: 16),
                           const ProductRowSkeleton(),
                         ],
                       ],
@@ -355,7 +281,11 @@ class ProductRowSkeleton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          const SkeletonBox(width: 46, height: 46, borderRadius: BorderRadius.all(Radius.circular(10))),
+          const SkeletonBox(
+            width: 46,
+            height: 46,
+            borderRadius: BorderRadius.all(Radius.circular(10)),
+          ),
           const SizedBox(width: 16),
           Expanded(
             child: Column(

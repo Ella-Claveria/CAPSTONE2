@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -14,7 +15,9 @@ class MapsLauncher {
   }) async {
     if (latitude == null || longitude == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This seller has not shared a location yet.')),
+        const SnackBar(
+          content: Text('This seller has not shared a location yet.'),
+        ),
       );
       return;
     }
@@ -24,9 +27,9 @@ class MapsLauncher {
     );
     final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!opened && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open Maps.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not open Maps.')));
     }
   }
 }
@@ -52,7 +55,7 @@ class OpenInMapsButton extends StatelessWidget {
     this.farmerName = 'Farmer',
   });
 
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
 
   @override
   Widget build(BuildContext context) {
@@ -68,10 +71,16 @@ class OpenInMapsButton extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(Icons.location_off_outlined, color: Colors.grey[500], size: 20),
+            Icon(
+              Icons.location_off_outlined,
+              color: Colors.grey[500],
+              size: 20,
+            ),
             const SizedBox(width: 10),
-            Text('Location not shared yet',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13)),
+            Text(
+              'Location not shared yet',
+              style: TextStyle(color: Colors.grey[600], fontSize: 13),
+            ),
           ],
         ),
       );
@@ -80,14 +89,20 @@ class OpenInMapsButton extends StatelessWidget {
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
-        onPressed: () => MapsLauncher.open(context, latitude: latitude, longitude: longitude),
+        onPressed: () => MapsLauncher.open(
+          context,
+          latitude: latitude,
+          longitude: longitude,
+        ),
         icon: const Icon(Icons.map_outlined, size: 20),
         label: Text("View $farmerName's Location"),
         style: OutlinedButton.styleFrom(
           foregroundColor: _dark,
           side: const BorderSide(color: _dark),
           padding: const EdgeInsets.symmetric(vertical: 13),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
         ),
       ),
     );
@@ -118,7 +133,7 @@ class MapPinIconButton extends StatelessWidget {
     this.color,
   });
 
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
 
   @override
   Widget build(BuildContext context) {
@@ -130,12 +145,22 @@ class MapPinIconButton extends StatelessWidget {
         size: size,
         color: hasLocation ? (color ?? _dark) : Colors.grey.shade400,
       ),
-      tooltip: hasLocation ? "View $farmerName's location" : 'Location not shared',
+      tooltip: hasLocation
+          ? "View $farmerName's location"
+          : 'Location not shared',
       padding: EdgeInsets.zero,
       constraints: const BoxConstraints(),
       onPressed: hasLocation
-          ? () => MapsLauncher.open(context, latitude: latitude, longitude: longitude)
-          : () => MapsLauncher.open(context, latitude: null, longitude: null), // shows the snackbar
+          ? () => MapsLauncher.open(
+              context,
+              latitude: latitude,
+              longitude: longitude,
+            )
+          : () => MapsLauncher.open(
+              context,
+              latitude: null,
+              longitude: null,
+            ), // shows the snackbar
     );
   }
 }

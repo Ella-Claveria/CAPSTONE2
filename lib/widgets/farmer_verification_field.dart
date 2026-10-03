@@ -29,6 +29,7 @@
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'agri_dialog.dart';
 import 'package:image_picker/image_picker.dart';
 import '../theme/app_theme.dart';
 
@@ -75,42 +76,31 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
   // Most will just photograph the paper certificate.
   // ----------------------------------------------------------
   Future<void> _chooseSource() async {
-    final source = await showModalBottomSheet<ImageSource>(
+    final source = await showAgriSheet<ImageSource>(
       context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(
+            leading: const Icon(
+              Icons.photo_camera_outlined,
+              color: AppTheme.dark,
             ),
-            const SizedBox(height: 12),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined,
-                  color: AppTheme.dark),
-              title: const Text('Kunan ng litrato'),
-              subtitle: const Text('Gamitin ang camera'),
-              onTap: () => Navigator.pop(context, ImageSource.camera),
+            title: const Text('Kunan ng litrato'),
+            subtitle: const Text('Gamitin ang camera'),
+            onTap: () => Navigator.pop(context, ImageSource.camera),
+          ),
+          ListTile(
+            leading: const Icon(
+              Icons.photo_library_outlined,
+              color: AppTheme.dark,
             ),
-            ListTile(
-              leading:
-                  const Icon(Icons.photo_library_outlined, color: AppTheme.dark),
-              title: const Text('Pumili sa gallery'),
-              subtitle: const Text('Mga naka-save na larawan'),
-              onTap: () => Navigator.pop(context, ImageSource.gallery),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
+            title: const Text('Pumili sa gallery'),
+            subtitle: const Text('Mga naka-save na larawan'),
+            onTap: () => Navigator.pop(context, ImageSource.gallery),
+          ),
+          const SizedBox(height: 8),
+        ],
       ),
     );
 
@@ -188,8 +178,11 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
         // ---- Section heading ----
         Row(
           children: [
-            const Icon(Icons.verified_user_outlined,
-                size: 18, color: AppTheme.dark),
+            const Icon(
+              Icons.verified_user_outlined,
+              size: 18,
+              color: AppTheme.dark,
+            ),
             const SizedBox(width: 6),
             Text('Farmer Verification', style: AppTheme.label()),
           ],
@@ -218,18 +211,14 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
         Text('Agricultural Certification', style: AppTheme.label()),
         const SizedBox(height: 8),
 
-        if (_base64 == null)
-          _uploadBox()
-        else
-          _filePreview(),
+        if (_base64 == null) _uploadBox() else _filePreview(),
 
         // Error text, if the parent screen passed one.
         if (widget.documentError != null) ...[
           const SizedBox(height: 6),
           Text(
             widget.documentError!,
-            style: const TextStyle(
-                color: Colors.redAccent, fontSize: 11.5),
+            style: const TextStyle(color: Colors.redAccent, fontSize: 11.5),
           ),
         ],
 
@@ -255,10 +244,7 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
         decoration: BoxDecoration(
           color: AppTheme.fieldFill,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: AppTheme.accent,
-            width: 1.4,
-          ),
+          border: Border.all(color: AppTheme.accent, width: 1.4),
         ),
         child: Column(
           children: [
@@ -272,8 +258,11 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
                 ),
               )
             else
-              const Icon(Icons.upload_file_outlined,
-                  size: 30, color: AppTheme.mid),
+              const Icon(
+                Icons.upload_file_outlined,
+                size: 30,
+                color: AppTheme.mid,
+              ),
             const SizedBox(height: 10),
             Text(
               _busy ? 'Ineeproseso...' : 'Choose File',
@@ -320,12 +309,19 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
               children: [
                 Row(
                   children: [
-                    const Icon(Icons.check_circle,
-                        size: 15, color: AppTheme.mid),
+                    const Icon(
+                      Icons.check_circle,
+                      size: 15,
+                      color: AppTheme.mid,
+                    ),
                     const SizedBox(width: 4),
-                    Text('Naka-attach',
-                        style: AppTheme.label().copyWith(
-                            fontSize: 13, color: AppTheme.dark)),
+                    Text(
+                      'Naka-attach',
+                      style: AppTheme.label().copyWith(
+                        fontSize: 13,
+                        color: AppTheme.dark,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -370,8 +366,10 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
               children: [
                 Text(
                   'Compliance Protocol',
-                  style: AppTheme.label()
-                      .copyWith(fontSize: 12.5, color: AppTheme.dark),
+                  style: AppTheme.label().copyWith(
+                    fontSize: 12.5,
+                    color: AppTheme.dark,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(

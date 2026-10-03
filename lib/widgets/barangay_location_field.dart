@@ -63,13 +63,17 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
       if (!serviceEnabled) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Turn on location services to use this.')),
+          const SnackBar(
+            content: Text('Turn on location services to use this.'),
+          ),
         );
         return;
       }
 
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+        ),
       );
       if (!mounted) return;
       if (!isWithinLaurel(position.latitude, position.longitude)) {
@@ -84,13 +88,20 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
         );
         return;
       }
-      final nearest = nearestLaurelBarangay(position.latitude, position.longitude);
+      final nearest = nearestLaurelBarangay(
+        position.latitude,
+        position.longitude,
+      );
       widget.onChanged(nearest.name);
       widget.onLocationDetected?.call(position.latitude, position.longitude);
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not detect your location. Please pick it manually.')),
+        const SnackBar(
+          content: Text(
+            'Could not detect your location. Please pick it manually.',
+          ),
+        ),
       );
     } finally {
       if (mounted) setState(() => _locating = false);
@@ -112,10 +123,16 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
                   ? const SizedBox(
                       width: 14,
                       height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.mid),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppTheme.mid,
+                      ),
                     )
                   : const Icon(Icons.my_location, size: 16),
-              label: const Text('Use my location', style: TextStyle(fontSize: 12.5)),
+              label: const Text(
+                'Use my location',
+                style: TextStyle(fontSize: 12.5),
+              ),
               style: TextButton.styleFrom(
                 foregroundColor: AppTheme.mid,
                 padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -134,7 +151,9 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
             hint: 'Select your barangay',
             icon: Icons.location_on_outlined,
           ),
-          items: kLaurelBarangays.map((b) => DropdownMenuItem(value: b, child: Text(b))).toList(),
+          items: kLaurelBarangays
+              .map((b) => DropdownMenuItem(value: b, child: Text(b)))
+              .toList(),
           onChanged: widget.onChanged,
         ),
         if (widget.errorText != null) ...[
@@ -145,7 +164,10 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
               Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
               const SizedBox(width: 4),
               Expanded(
-                child: Text(widget.errorText!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+                child: Text(
+                  widget.errorText!,
+                  style: TextStyle(color: Colors.red.shade700, fontSize: 11),
+                ),
               ),
             ],
           ),

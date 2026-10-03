@@ -27,7 +27,11 @@ class _OnboardingItem {
   final String image;
   final String title;
   final String description;
-  const _OnboardingItem({required this.image, required this.title, required this.description});
+  const _OnboardingItem({
+    required this.image,
+    required this.title,
+    required this.description,
+  });
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
@@ -35,17 +39,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _OnboardingItem(
       image: 'assets/images/onboarding_1_farming.png',
       title: 'Fresh Products, Direct Trading',
-      description: 'Buy and sell selected agricultural products directly through AgriTrade+.',
+      description:
+          'Buy and sell selected agricultural products directly through AgriTrade+.',
     ),
     _OnboardingItem(
       image: 'assets/images/onboarding_2_connection.png',
       title: 'Smart and Convenient Marketplace',
-      description: 'Discover products, connect with farmers and buyers, and manage your transactions in one place.',
+      description:
+          'Discover products, connect with farmers and buyers, and manage your transactions in one place.',
     ),
     _OnboardingItem(
       image: 'assets/images/onboarding_3_marketplace.png',
       title: 'Stay Connected',
-      description: 'Manage orders, messages, and important transaction updates through AgriTrade+.',
+      description:
+          'Manage orders, messages, and important transaction updates through AgriTrade+.',
     ),
   ];
 
@@ -60,7 +67,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       _finish();
       return;
     }
-    _controller.nextPage(duration: const Duration(milliseconds: 350), curve: Curves.easeOutCubic);
+    _controller.nextPage(
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   // Skip means "let me dive straight in" — it should leave onboarding
@@ -106,7 +116,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     style: TextButton.styleFrom(foregroundColor: Colors.white),
                     child: Text(
                       'Skip',
-                      style: GoogleFonts.montserrat(fontSize: 14.5, fontWeight: FontWeight.w600),
+                      style: GoogleFonts.montserrat(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
@@ -134,8 +147,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       transitionBuilder: (child, anim) => FadeTransition(
                         opacity: anim,
                         child: SlideTransition(
-                          position: Tween<Offset>(begin: const Offset(0, 0.08), end: Offset.zero)
-                              .animate(anim),
+                          position: Tween<Offset>(
+                            begin: const Offset(0, 0.08),
+                            end: Offset.zero,
+                          ).animate(anim),
                           child: child,
                         ),
                       ),
@@ -181,7 +196,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           width: active ? 22 : 7,
                           height: 7,
                           decoration: BoxDecoration(
-                            color: active ? Colors.white : Colors.white.withValues(alpha: 0.4),
+                            color: active
+                                ? Colors.white
+                                : Colors.white.withValues(alpha: 0.4),
                             borderRadius: BorderRadius.circular(4),
                           ),
                         );
@@ -199,17 +216,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           backgroundColor: AppTheme.dark,
                           foregroundColor: Colors.white,
                           elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(26),
+                          ),
                         ),
                         child: _submitting
                             ? const SizedBox(
                                 width: 22,
                                 height: 22,
-                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.4),
+                                child: CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2.4,
+                                ),
                               )
                             : Text(
                                 _isLastPage ? 'Get Started' : 'Next',
-                                style: GoogleFonts.montserrat(fontSize: 16, fontWeight: FontWeight.w600),
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                       ),
                     ),

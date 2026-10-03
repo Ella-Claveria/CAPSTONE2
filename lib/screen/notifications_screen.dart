@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -6,11 +7,14 @@ import '../services/connectivity_service.dart';
 import '../services/notification_navigation_service.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/permission_rationale_dialog.dart';
+import '../widgets/notification_card.dart';
 import '../widgets/retry_message.dart';
 
 /// Reads notifications/{uid}/items — written by Cloud Functions
 /// (functions/index.js) whenever a new message, new order, order status
-/// change, or verification decision happens. Requires that function to be
+/// change, verification decision or moderation notice happens. One screen
+/// for both roles: buyers and farmers see the same layout (filters, date
+/// groups, NotificationCard), just their own notifications. Requires that function to be
 /// deployed; until then this stream is simply empty.
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -20,9 +24,16 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _accent = Color(0xFFDCEDC8);
-  static const Color _bg = Colors.white;
+  static const Color _bg = Color(0xFFFAFBFA);
+  static const Color _text = Color(0xFF1B1B1B);
+
+  // Created once, not in build(), so switching filter doesn't resubscribe.
+  Stream<QuerySnapshot<Map<String, dynamic>>>? _items;
+  NotificationFilter _filter = NotificationFilter.all;
+  // Decides only whether the Reports filter is offered; buyer until known.
+  bool _isFarmer = false;
 
   CollectionReference<Map<String, dynamic>>? _itemsRef;
   AuthorizationStatus? _permissionStatus;
@@ -36,6 +47,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           .collection('notifications')
           .doc(uid)
           .collection('items');
+      _items = _itemsRef!
+          .orderBy('createdAt', descending: true)
+          .limit(50)
+          .snapshots();
+      FirebaseFirestore.instance.collection('users').doc(uid).get().then((doc) {
+        if (mounted && doc.data()?['role'] == 'farmer') {
+          setState(() => _isFarmer = true);
+        }
+      }, onError: (_) {});
     }
     // Refreshes the token only when OS permission is already granted. This
     // call never opens a permission prompt.
@@ -50,7 +70,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   // anything else. This is the one place that actually tells the user.
   Future<void> _checkPermission() async {
     try {
-      final settings = await FirebaseMessaging.instance.getNotificationSettings();
+      final settings = await FirebaseMessaging.instance
+          .getNotificationSettings();
       if (!mounted) return;
       setState(() => _permissionStatus = settings.authorizationStatus);
     } catch (_) {}
@@ -60,7 +81,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   // AgriTrade+'s online-only actions — it must not appear to succeed while
   // actually offline (it would otherwise silently queue in Firestore's
   // local cache instead of being confirmed).
-  Future<void> _markRead(QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
+  Future<void> _markRead(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) async {
     if (doc.data()['read'] == true) return;
     if (!await ConnectivityService.instance.checkNow()) return;
     try {
@@ -71,15 +94,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
   }
 
-  Future<void> _markAllRead(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+  Future<void> _markAllRead(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) async {
     final unread = docs.where((d) => d.data()['read'] != true).toList();
     if (unread.isEmpty) return;
 
     if (!await ConnectivityService.instance.checkNow()) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(kNoInternetActionMessage)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
       return;
     }
 
@@ -94,7 +119,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not mark all as read. Please try again.')),
+        const SnackBar(
+          content: Text('Could not mark all as read. Please try again.'),
+        ),
       );
     }
   }
@@ -107,42 +134,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     NotificationNavigationService.open(type: type, data: payload);
   }
 
-  IconData _iconFor(String type) {
-    switch (type) {
-      case 'chat_message':
-        return Icons.mail_outline;
-      case 'new_order':
-        return Icons.shopping_bag_outlined;
-      case 'order_status':
-        return Icons.local_shipping_outlined;
-      case 'verification_status':
-        return Icons.verified_user_outlined;
-      case 'moderation_warning':
-        return Icons.warning_amber_rounded;
-      default:
-        return Icons.notifications_none_rounded;
-    }
-  }
-
-  String _formatTime(DateTime? date) {
-    if (date == null) return '';
-    final diff = DateTime.now().difference(date);
-    if (diff.inMinutes < 1) return 'now';
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
-    if (diff.inDays < 7) return '${diff.inDays}d';
-    return '${date.month}/${date.day}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final itemsRef = _itemsRef;
     if (itemsRef == null) {
-      return const Scaffold(body: Center(child: Text('Please log in to see notifications.')));
+      return const Scaffold(
+        body: Center(child: Text('Please log in to see notifications.')),
+      );
     }
 
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: itemsRef.orderBy('createdAt', descending: true).limit(50).snapshots(),
+      stream: _items,
       builder: (context, snapshot) {
         final docs = snapshot.data?.docs ?? [];
         final hasUnread = docs.any((d) => d.data()['read'] != true);
@@ -150,63 +152,207 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         return Scaffold(
           backgroundColor: _bg,
           appBar: AppBar(
-            title: const Text('Notifications'),
             backgroundColor: Colors.white,
-            foregroundColor: _dark,
-            elevation: 1,
+            surfaceTintColor: Colors.white,
+            foregroundColor: _text,
+            elevation: 0,
+            titleSpacing: 0,
+            title: Text('Notifications', style: AppTheme.heading(18)),
             actions: [
               if (hasUnread)
                 TextButton(
                   onPressed: () => _markAllRead(docs),
-                  child: const Text('Mark all read', style: TextStyle(color: _dark)),
+                  style: TextButton.styleFrom(foregroundColor: _dark),
+                  child: const Text(
+                    'Mark All as Read',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
+              const SizedBox(width: 4),
             ],
           ),
           body: Column(
             children: [
+              _filterRow(),
               _permissionBanner(),
               Expanded(
-                child: Builder(builder: (context) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator(color: _dark));
-                  }
-                  if (snapshot.hasError) {
-                    return RetryMessage(
-                      message: 'Could not load notifications. Check your connection and try again.',
-                      onRetry: () => setState(() {}),
-                    );
-                  }
+                child: Builder(
+                  builder: (context) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(color: _dark),
+                      );
+                    }
+                    if (snapshot.hasError) {
+                      return RetryMessage(
+                        message:
+                            'Could not load notifications. Check your connection and try again.',
+                        onRetry: () => setState(() {}),
+                      );
+                    }
 
-                  if (docs.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.done_all, size: 64, color: Colors.grey[300]),
-                          const SizedBox(height: 16),
-                          Text('No notifications yet',
-                              style: TextStyle(fontSize: 16, color: Colors.grey[600], fontWeight: FontWeight.w500)),
-                          const SizedBox(height: 8),
-                          Text('New messages, orders, and updates will appear here.',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(fontSize: 13, color: Colors.grey[500])),
-                        ],
-                      ),
-                    );
-                  }
+                    final shown = _filter == NotificationFilter.all
+                        ? docs
+                        : docs
+                              .where(
+                                (d) =>
+                                    notificationCategory(
+                                      (d.data()['type'] ?? '').toString(),
+                                      isFarmer: _isFarmer,
+                                    ) ==
+                                    _filter,
+                              )
+                              .toList();
 
-                  return ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 20),
-                    itemCount: docs.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 4),
-                    itemBuilder: (context, i) => _notificationTile(docs[i]),
-                  );
-                }),
+                    if (shown.isEmpty) return _emptyState(docs.isEmpty);
+                    return _groupedList(shown);
+                  },
+                ),
               ),
             ],
           ),
         );
       },
+    );
+  }
+
+  // ---- All / Messages / Orders / Updates (+ Reports for farmers) ----
+  Widget _filterRow() {
+    final filters = notificationFiltersFor(isFarmer: _isFarmer);
+    return SizedBox(
+      height: 48,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+        itemCount: filters.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final filter = filters[index];
+          final selected = filter == _filter;
+          return Center(
+            child: Material(
+              color: selected ? _dark : Colors.white,
+              shape: StadiumBorder(
+                side: BorderSide(
+                  color: selected ? _dark : _dark.withValues(alpha: 0.25),
+                ),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: () => setState(() => _filter = filter),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 7,
+                  ),
+                  child: Text(
+                    filter.label,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      height: 1.2,
+                      fontWeight: FontWeight.w600,
+                      color: selected ? Colors.white : _dark,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // Newest first, under Today / Yesterday / the date.
+  Widget _groupedList(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    final rows = <Widget>[];
+    String? currentGroup;
+    for (final doc in docs) {
+      final createdAt = (doc.data()['createdAt'] as Timestamp?)?.toDate();
+      // Not stamped by the server yet = just now.
+      final group = notificationGroupLabel(createdAt ?? DateTime.now());
+      if (group != currentGroup) {
+        currentGroup = group;
+        rows.add(
+          Padding(
+            padding: EdgeInsets.fromLTRB(4, rows.isEmpty ? 4 : 14, 4, 8),
+            child: Text(
+              group,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: _text,
+              ),
+            ),
+          ),
+        );
+      } else {
+        rows.add(const SizedBox(height: 8));
+      }
+      final data = doc.data();
+      rows.add(
+        NotificationCard(
+          type: (data['type'] ?? '').toString(),
+          title: data['title']?.toString() ?? 'Notification',
+          body: data['body']?.toString() ?? '',
+          createdAt: createdAt,
+          isRead: data['read'] == true,
+          onTap: () => _openNotification(doc),
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      children: rows,
+    );
+  }
+
+  Widget _emptyState(bool noNotificationsAtAll) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 76,
+              height: 76,
+              decoration: const BoxDecoration(
+                color: _accent,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.notifications_none_rounded,
+                size: 38,
+                color: _dark,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              noNotificationsAtAll
+                  ? 'No notifications yet'
+                  : 'No ${_filter.label.toLowerCase()} notifications',
+              textAlign: TextAlign.center,
+              style: AppTheme.heading(17),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              noNotificationsAtAll
+                  ? 'Messages, orders, and important updates will appear here.'
+                  : 'Notifications of this kind will appear here.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13.5,
+                height: 1.4,
+                color: Color(0xFF424242),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -233,7 +379,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.notifications_off_outlined, color: Colors.red.shade700, size: 20),
+          Icon(
+            Icons.notifications_off_outlined,
+            color: Colors.red.shade700,
+            size: 20,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -242,11 +392,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 Text(
                   canPromptAgain
                       ? "Push notifications aren't turned on yet, so you won't be alerted "
-                          "about new messages or orders while the app is closed."
+                            "about new messages or orders while the app is closed."
                       : "Push notifications are off for AgriTrade+, so you won't be alerted "
-                          "about new messages or orders while the app is closed. To turn them "
-                          "on: phone Settings → Apps → AgriTrade+ → Notifications.",
-                  style: TextStyle(fontSize: 12.5, color: Colors.red.shade900, height: 1.4),
+                            "about new messages or orders while the app is closed. To turn them "
+                            "on: phone Settings → Apps → AgriTrade+ → Notifications.",
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: Colors.red.shade900,
+                    height: 1.4,
+                  ),
                 ),
                 if (canPromptAgain) ...[
                   const SizedBox(height: 8),
@@ -258,12 +412,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           context,
                           icon: Icons.notifications_active_outlined,
                           title: 'Stay Updated with AgriTrade+',
-                          message: 'Payagan ang notifications para makatanggap ka ng updates tungkol sa orders, messages, verification status, delivery o pick-up, warnings, at ibang importanteng marketplace activities.',
+                          message:
+                              'Allow notifications to receive important updates about orders, messages, verification status, delivery or pickup, warnings, and other marketplace activities.',
                           denyLabel: 'Not Now',
                           allowLabel: 'Enable Notifications',
                         );
                         if (proceed) {
-                          await PushNotificationService().setupFCM(requestPermission: true);
+                          await PushNotificationService().setupFCM(
+                            requestPermission: true,
+                          );
                         }
                         _checkPermission();
                       },
@@ -272,7 +429,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         side: BorderSide(color: Colors.red.shade300),
                         padding: const EdgeInsets.symmetric(horizontal: 12),
                       ),
-                      child: const Text('Enable Notifications', style: TextStyle(fontSize: 12.5)),
+                      child: const Text(
+                        'Enable Notifications',
+                        style: TextStyle(fontSize: 12.5),
+                      ),
                     ),
                   ),
                 ],
@@ -283,88 +443,4 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       ),
     );
   }
-
-  Widget _notificationTile(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
-    final title = data['title']?.toString() ?? 'Notification';
-    final body = data['body']?.toString() ?? '';
-    final type = (data['type'] ?? '').toString();
-    final isRead = data['read'] == true;
-    final createdAt = data['createdAt'] as Timestamp?;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 8, offset: const Offset(0, 2)),
-        ],
-        border: Border.all(color: isRead ? Colors.grey.shade200 : _accent, width: 1.5),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: () => _openNotification(doc),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: _accent,
-                  child: Icon(_iconFor(type), color: _dark, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: isRead ? FontWeight.w600 : FontWeight.bold,
-                                  color: Colors.black87,
-                                )),
-                          ),
-                          if (createdAt != null)
-                            Text(_formatTime(createdAt.toDate()),
-                                style: TextStyle(
-                                    fontSize: 11,
-                                    color: isRead ? Colors.grey[400] : Colors.red,
-                                    fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                      if (body.isNotEmpty) ...[
-                        const SizedBox(height: 3),
-                        Text(body,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 13, color: Colors.black87)),
-                      ],
-                    ],
-                  ),
-                ),
-                if (!isRead) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
-
-

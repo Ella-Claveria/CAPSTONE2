@@ -35,27 +35,33 @@ class _AuditEntry {
   final DateTime? timestamp;
 
   _AuditEntry.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc)
-      : id = doc.id,
-        adminId = doc.data()['adminId'] as String?,
-        adminName = doc.data()['adminName'] as String?,
-        adminEmail = doc.data()['adminEmail'] as String?,
-        attemptedEmail = doc.data()['attemptedEmail'] as String?,
-        action = (doc.data()['action'] ?? '').toString(),
-        details = (doc.data()['details'] ?? '').toString(),
-        browser = ((doc.data()['device'] as Map?)?['browser'] ?? 'Unknown').toString(),
-        os = ((doc.data()['device'] as Map?)?['os'] ?? 'Unknown').toString(),
-        ip = (doc.data()['ip'] ?? 'Unknown').toString(),
-        location = (doc.data()['location'] ?? 'Unknown').toString(),
-        timestamp = (doc.data()['timestamp'] as Timestamp?)?.toDate();
+    : id = doc.id,
+      adminId = doc.data()['adminId'] as String?,
+      adminName = doc.data()['adminName'] as String?,
+      adminEmail = doc.data()['adminEmail'] as String?,
+      attemptedEmail = doc.data()['attemptedEmail'] as String?,
+      action = (doc.data()['action'] ?? '').toString(),
+      details = (doc.data()['details'] ?? '').toString(),
+      browser = ((doc.data()['device'] as Map?)?['browser'] ?? 'Unknown')
+          .toString(),
+      os = ((doc.data()['device'] as Map?)?['os'] ?? 'Unknown').toString(),
+      ip = (doc.data()['ip'] ?? 'Unknown').toString(),
+      location = (doc.data()['location'] ?? 'Unknown').toString(),
+      timestamp = (doc.data()['timestamp'] as Timestamp?)?.toDate();
 
   // No confirmed admin identity for a pre-auth entry (a failed login or a
   // password-reset request) — only the email that was typed, which is why
   // it's labeled "Attempt:" instead of shown as if it were verified.
-  String get who => adminName ?? adminEmail ?? (attemptedEmail != null ? 'Attempt: $attemptedEmail' : 'Unknown');
+  String get who =>
+      adminName ??
+      adminEmail ??
+      (attemptedEmail != null ? 'Attempt: $attemptedEmail' : 'Unknown');
 
   String get device => '$browser on $os';
 
-  String get whenLabel => timestamp != null ? DateFormat('MMM d, y – h:mm a').format(timestamp!) : 'Just now';
+  String get whenLabel => timestamp != null
+      ? DateFormat('MMM d, y – h:mm a').format(timestamp!)
+      : 'Just now';
 
   String get actionLabel => action
       .split('_')
@@ -82,8 +88,8 @@ class _AuditLogViewState extends State<AuditLogView> {
   DateTimeRange? _dateRange;
   String _search = '';
 
-  late final Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _adminsFuture = FirebaseFirestore
-      .instance
+  late final Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+  _adminsFuture = FirebaseFirestore.instance
       .collection('users')
       .where('role', isEqualTo: 'admin')
       .get()
@@ -96,7 +102,9 @@ class _AuditLogViewState extends State<AuditLogView> {
   }
 
   Query<Map<String, dynamic>> _baseQuery() {
-    Query<Map<String, dynamic>> q = FirebaseFirestore.instance.collection('audit_logs');
+    Query<Map<String, dynamic>> q = FirebaseFirestore.instance.collection(
+      'audit_logs',
+    );
     // Only one equality filter goes server-side at a time — Firestore needs
     // a distinct composite index per combination of equality/range fields,
     // and indexing every admin-x-action pairing doesn't scale. Action wins
@@ -110,9 +118,16 @@ class _AuditLogViewState extends State<AuditLogView> {
     if (_dateRange != null) {
       final end = _dateRange!.end;
       q = q
-          .where('timestamp', isGreaterThanOrEqualTo: Timestamp.fromDate(_dateRange!.start))
-          .where('timestamp',
-              isLessThanOrEqualTo: Timestamp.fromDate(DateTime(end.year, end.month, end.day, 23, 59, 59)));
+          .where(
+            'timestamp',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(_dateRange!.start),
+          )
+          .where(
+            'timestamp',
+            isLessThanOrEqualTo: Timestamp.fromDate(
+              DateTime(end.year, end.month, end.day, 23, 59, 59),
+            ),
+          );
     }
     return q.orderBy('timestamp', descending: true);
   }
@@ -131,7 +146,8 @@ class _AuditLogViewState extends State<AuditLogView> {
       }
     });
 
-    final needsClientAdminFilter = _actionFilter != null && _adminFilter != null;
+    final needsClientAdminFilter =
+        _actionFilter != null && _adminFilter != null;
 
     try {
       var collected = 0;
@@ -154,7 +170,9 @@ class _AuditLogViewState extends State<AuditLogView> {
         if (snap.docs.length < _pageSize) _hasMore = false;
 
         for (final doc in snap.docs) {
-          if (needsClientAdminFilter && doc.data()['adminId'] != _adminFilter) continue;
+          if (needsClientAdminFilter && doc.data()['adminId'] != _adminFilter) {
+            continue;
+          }
           _entries.add(_AuditEntry.fromDoc(doc));
           collected++;
         }
@@ -170,10 +188,12 @@ class _AuditLogViewState extends State<AuditLogView> {
     final q = _search.trim().toLowerCase();
     if (q.isEmpty) return _entries;
     return _entries
-        .where((e) =>
-            e.who.toLowerCase().contains(q) ||
-            e.actionLabel.toLowerCase().contains(q) ||
-            e.details.toLowerCase().contains(q))
+        .where(
+          (e) =>
+              e.who.toLowerCase().contains(q) ||
+              e.actionLabel.toLowerCase().contains(q) ||
+              e.details.toLowerCase().contains(q),
+        )
         .toList();
   }
 
@@ -202,19 +222,24 @@ class _AuditLogViewState extends State<AuditLogView> {
 
   Future<void> _export() async {
     final rows = _visibleEntries
-        .map((e) => (
-              when: e.whenLabel,
-              admin: e.who,
-              action: e.actionLabel,
-              details: e.details,
-              device: e.device,
-              location: '${e.ip} • ${e.location}',
-            ))
+        .map(
+          (e) => (
+            when: e.whenLabel,
+            admin: e.who,
+            action: e.actionLabel,
+            details: e.details,
+            device: e.device,
+            location: '${e.ip} • ${e.location}',
+          ),
+        )
         .toList();
     final bytes = await PdfReportService.buildAuditLogReport(entries: rows);
     if (!mounted) return;
     await PdfReportService.share(bytes, 'agritrade_audit_log.pdf');
-    AuditLogService.log(AuditAction.exportReport, 'Exported the Audit Log (${rows.length} entries).');
+    AuditLogService.log(
+      AuditAction.exportReport,
+      'Exported the Audit Log (${rows.length} entries).',
+    );
   }
 
   (Color, Color) _badgeColors(AdminPalette c, String action) {
@@ -246,11 +271,25 @@ class _AuditLogViewState extends State<AuditLogView> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Audit Log',
-                      style: TextStyle(color: c.textPrimary, fontSize: 30, height: 1.15, letterSpacing: -0.6, fontWeight: FontWeight.w800)),
+                  Text(
+                    'Audit Log',
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 30,
+                      height: 1.15,
+                      letterSpacing: -0.6,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
                   const SizedBox(height: 4),
-                  Text('Every admin login and action on this portal — append-only, cannot be edited.',
-                      style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5)),
+                  Text(
+                    'Every admin login and action on this portal — append-only, cannot be edited.',
+                    style: TextStyle(
+                      color: c.textSecondary,
+                      fontSize: 14,
+                      height: 1.5,
+                    ),
+                  ),
                 ],
               ),
               AdminQuickActionButton(
@@ -296,10 +335,18 @@ class _AuditLogViewState extends State<AuditLogView> {
                 else if (entries.isEmpty && !_loading)
                   AdminEmptyState(
                     icon: Icons.fact_check_outlined,
-                    title: _search.isNotEmpty || _actionFilter != null || _adminFilter != null || _dateRange != null
+                    title:
+                        _search.isNotEmpty ||
+                            _actionFilter != null ||
+                            _adminFilter != null ||
+                            _dateRange != null
                         ? 'No entries match these filters'
                         : 'No audit log entries yet',
-                    subtitle: _search.isNotEmpty || _actionFilter != null || _adminFilter != null || _dateRange != null
+                    subtitle:
+                        _search.isNotEmpty ||
+                            _actionFilter != null ||
+                            _adminFilter != null ||
+                            _dateRange != null
                         ? 'Try clearing a filter or loading more entries.'
                         : 'Admin logins and actions will appear here as they happen.',
                   )
@@ -311,8 +358,15 @@ class _AuditLogViewState extends State<AuditLogView> {
                       dataRowColor: WidgetStateProperty.all(Colors.transparent),
                       columnSpacing: 32,
                       horizontalMargin: 12,
-                      headingTextStyle: TextStyle(color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
-                      dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
+                      headingTextStyle: TextStyle(
+                        color: c.textSecondary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      dataTextStyle: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 13,
+                      ),
                       columns: const [
                         DataColumn(label: Text('Date & Time')),
                         DataColumn(label: Text('Admin')),
@@ -323,20 +377,42 @@ class _AuditLogViewState extends State<AuditLogView> {
                       ],
                       rows: entries.map((e) {
                         final (color, bg) = _badgeColors(c, e.action);
-                        return DataRow(cells: [
-                          DataCell(Text(e.whenLabel)),
-                          DataCell(SizedBox(width: 160, child: Text(e.who, overflow: TextOverflow.ellipsis))),
-                          DataCell(AdminStatusBadge(text: e.actionLabel, color: color, bg: bg)),
-                          DataCell(SizedBox(
-                            width: 260,
-                            child: Tooltip(
-                              message: e.details,
-                              child: Text(e.details, overflow: TextOverflow.ellipsis, maxLines: 1),
+                        return DataRow(
+                          cells: [
+                            DataCell(Text(e.whenLabel)),
+                            DataCell(
+                              SizedBox(
+                                width: 160,
+                                child: Text(
+                                  e.who,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
                             ),
-                          )),
-                          DataCell(Text(e.device)),
-                          DataCell(Text('${e.ip} • ${e.location}')),
-                        ]);
+                            DataCell(
+                              AdminStatusBadge(
+                                text: e.actionLabel,
+                                color: color,
+                                bg: bg,
+                              ),
+                            ),
+                            DataCell(
+                              SizedBox(
+                                width: 260,
+                                child: Tooltip(
+                                  message: e.details,
+                                  child: Text(
+                                    e.details,
+                                    overflow: TextOverflow.ellipsis,
+                                    maxLines: 1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            DataCell(Text(e.device)),
+                            DataCell(Text('${e.ip} • ${e.location}')),
+                          ],
+                        );
                       }).toList(),
                     ),
                   ),
@@ -348,7 +424,9 @@ class _AuditLogViewState extends State<AuditLogView> {
                     child: Center(
                       child: OutlinedButton(
                         onPressed: () => _fetchPage(),
-                        style: OutlinedButton.styleFrom(side: BorderSide(color: c.border)),
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(color: c.border),
+                        ),
                         child: const Text('Load more'),
                       ),
                     ),
@@ -390,13 +468,17 @@ class _FilterBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    final hasFilters = actionFilter != null || adminFilter != null || dateRange != null || search.isNotEmpty;
+    final hasFilters =
+        actionFilter != null ||
+        adminFilter != null ||
+        dateRange != null ||
+        search.isNotEmpty;
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: c.surface,
-              borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: c.border),
       ),
       child: Wrap(
@@ -416,7 +498,10 @@ class _FilterBar extends StatelessWidget {
                 prefixIcon: Icon(Icons.search, color: c.textMuted, size: 18),
                 filled: true,
                 fillColor: c.surfaceAlt,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
               ),
             ),
@@ -431,45 +516,72 @@ class _FilterBar extends StatelessWidget {
               dropdownColor: c.surface,
               items: [
                 const DropdownMenuItem(value: null, child: Text('All actions')),
-                ...AuditAction.all.map((a) => DropdownMenuItem(
-                      value: a,
-                      child: Text(
-                        a.split('_').map((w) => w.isEmpty ? w : '${w[0]}${w.substring(1).toLowerCase()}').join(' '),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )),
+                ...AuditAction.all.map(
+                  (a) => DropdownMenuItem(
+                    value: a,
+                    child: Text(
+                      a
+                          .split('_')
+                          .map(
+                            (w) => w.isEmpty
+                                ? w
+                                : '${w[0]}${w.substring(1).toLowerCase()}',
+                          )
+                          .join(' '),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
               ],
               onChanged: onActionChanged,
             ),
           ),
           SizedBox(
             width: 190,
-            child: FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
-              future: adminsFuture,
-              builder: (context, snap) {
-                final admins = snap.data ?? const [];
-                return DropdownButtonFormField<String>(
-                  initialValue: adminFilter,
-                  isExpanded: true,
-                  decoration: _dropdownDecoration(c, 'Admin'),
-                  style: TextStyle(color: c.textPrimary, fontSize: 13),
-                  dropdownColor: c.surface,
-                  items: [
-                    const DropdownMenuItem(value: null, child: Text('All admins')),
-                    ...admins.map((d) {
-                      final data = d.data();
-                      final label = (data['name'] ?? data['fullName'] ?? data['email'] ?? d.id).toString();
-                      return DropdownMenuItem(value: d.id, child: Text(label, overflow: TextOverflow.ellipsis));
-                    }),
-                  ],
-                  onChanged: onAdminChanged,
-                );
-              },
-            ),
+            child:
+                FutureBuilder<
+                  List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                >(
+                  future: adminsFuture,
+                  builder: (context, snap) {
+                    final admins = snap.data ?? const [];
+                    return DropdownButtonFormField<String>(
+                      initialValue: adminFilter,
+                      isExpanded: true,
+                      decoration: _dropdownDecoration(c, 'Admin'),
+                      style: TextStyle(color: c.textPrimary, fontSize: 13),
+                      dropdownColor: c.surface,
+                      items: [
+                        const DropdownMenuItem(
+                          value: null,
+                          child: Text('All admins'),
+                        ),
+                        ...admins.map((d) {
+                          final data = d.data();
+                          final label =
+                              (data['name'] ??
+                                      data['fullName'] ??
+                                      data['email'] ??
+                                      d.id)
+                                  .toString();
+                          return DropdownMenuItem(
+                            value: d.id,
+                            child: Text(label, overflow: TextOverflow.ellipsis),
+                          );
+                        }),
+                      ],
+                      onChanged: onAdminChanged,
+                    );
+                  },
+                ),
           ),
           OutlinedButton.icon(
             onPressed: onPickDateRange,
-            icon: Icon(Icons.date_range_outlined, size: 16, color: c.textPrimary),
+            icon: Icon(
+              Icons.date_range_outlined,
+              size: 16,
+              color: c.textPrimary,
+            ),
             label: Text(
               dateRange == null
                   ? 'Date range'
@@ -482,7 +594,10 @@ class _FilterBar extends StatelessWidget {
             TextButton.icon(
               onPressed: onClear,
               icon: Icon(Icons.close, size: 16, color: c.textSecondary),
-              label: Text('Clear filters', style: TextStyle(color: c.textSecondary, fontSize: 13)),
+              label: Text(
+                'Clear filters',
+                style: TextStyle(color: c.textSecondary, fontSize: 13),
+              ),
             ),
         ],
       ),
@@ -496,7 +611,10 @@ class _FilterBar extends StatelessWidget {
       labelStyle: TextStyle(color: c.textMuted, fontSize: 12),
       filled: true,
       fillColor: c.surfaceAlt,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide.none,
+      ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     );
   }

@@ -1,10 +1,12 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import '../widgets/agri_dialog.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/auth_routing_service.dart';
 import '../services/auth_service.dart';
+import '../services/ph_mobile.dart';
 import '../services/cloudinary_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
@@ -25,6 +27,7 @@ class GoogleCompleteProfileScreen extends StatefulWidget {
   final String uid;
   final String email;
   final String? initialName;
+  final String? initialPhotoUrl;
   // Pre-selects the toggle when they tapped Google sign-in on a
   // role-specific door; still changeable, same as RegisterScreen's toggle.
   final String initialRole;
@@ -35,23 +38,33 @@ class GoogleCompleteProfileScreen extends StatefulWidget {
     required this.email,
     required this.initialRole,
     this.initialName,
+    this.initialPhotoUrl,
   });
 
   @override
-  State<GoogleCompleteProfileScreen> createState() => _GoogleCompleteProfileScreenState();
+  State<GoogleCompleteProfileScreen> createState() =>
+      _GoogleCompleteProfileScreenState();
 }
 
-class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScreen> {
-  late final _fullNameController = TextEditingController(text: widget.initialName ?? '');
+class _GoogleCompleteProfileScreenState
+    extends State<GoogleCompleteProfileScreen> {
+  late final _fullNameController = TextEditingController(
+    text: widget.initialName ?? '',
+  );
   // Holds only the 10 local digits — see RegisterScreen._mobileController's
   // doc for the full rationale (fixed "+63 " prefix, required for farmers,
   // optional for buyers).
   final _mobileController = TextEditingController();
-  late String _selectedRole = widget.initialRole == 'farmer' ? 'farmer' : 'buyer';
+  late String _selectedRole = widget.initialRole == 'farmer'
+      ? 'farmer'
+      : 'buyer';
 
   String? _selectedBarangay;
   XFile? _certFile;
   Uint8List? _certBytes;
+  XFile? _profilePhoto;
+  Uint8List? _profilePhotoBytes;
+  bool _useGooglePhoto = false;
   bool _photoPromptShown = false;
 
   final _authService = AuthService();
@@ -73,8 +86,78 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
     super.dispose();
   }
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _chooseProfilePhoto());
+  }
+
+  Future<void> _chooseProfilePhoto() async {
+    final googlePhoto = widget.initialPhotoUrl;
+    if (googlePhoto == null || googlePhoto.isEmpty || !mounted) return;
+    final choice = await showAgriDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AgriDialog(
+        title: const Text(
+          'Choose your profile photo',
+          textAlign: TextAlign.center,
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircleAvatar(
+              radius: 42,
+              backgroundImage: NetworkImage(googlePhoto),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Use your Google photo, or upload a different one.',
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actions: [
+          AgriDialogButton(
+            label: 'Upload my own',
+            onPressed: () => Navigator.pop(context, 'upload'),
+          ),
+          AgriDialogButton(
+            label: 'Use Google photo',
+            kind: AgriButtonKind.primary,
+            onPressed: () => Navigator.pop(context, 'google'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'google') {
+      setState(() => _useGooglePhoto = true);
+      return;
+    }
+    await _pickProfilePhoto();
+  }
+
+  Future<void> _pickProfilePhoto() async {
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 1000,
+      imageQuality: 75,
+    );
+    if (picked != null) {
+      final bytes = await picked.readAsBytes();
+      if (mounted) {
+        setState(() {
+          _profilePhoto = picked;
+          _profilePhotoBytes = bytes;
+          _useGooglePhoto = false;
+        });
+      }
+    }
+  }
+
   bool _nameHasDigits(String name) => RegExp(r'[0-9]').hasMatch(name);
-  bool _mobileNumberValid(String digits) => digits.length == 10 && digits.startsWith('9');
+  bool _mobileNumberValid(String digits) => isValidPhMobile(digits);
 
   bool get _isFormValid {
     final name = _fullNameController.text.trim();
@@ -107,14 +190,12 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
   // for buyers. "Must start with 9" shows live; "required"/"incomplete"
   // only after a submit attempt — same rationale as RegisterScreen.
   String? get _mobileError {
-    final digits = _mobileController.text.trim();
-    if (digits.isEmpty) {
-      if (_isFarmer && _triedSubmit) return 'Mobile number is required.';
-      return null;
-    }
-    if (!digits.startsWith('9')) return 'Mobile number must start with 9.';
-    if (digits.length != 10 && _triedSubmit) return 'Enter all 10 digits.';
-    return null;
+    // Shared rules for every mobile field in the app — see ph_mobile.dart.
+    return phMobileError(
+      _mobileController.text.trim(),
+      required: _isFarmer,
+      submitted: _triedSubmit,
+    );
   }
 
   void _selectRole(String role) {
@@ -140,7 +221,8 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
         context,
         icon: Icons.photo_library_outlined,
         title: 'Attach your certificate',
-        message: 'AgriTrade+ needs access to your photos so you can attach '
+        message:
+            'AgriTrade+ needs access to your photos so you can attach '
             'a picture of your agricultural certification.',
       );
       if (!proceed) return;
@@ -181,7 +263,9 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _cancel() async {
@@ -204,13 +288,27 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
     // pick here is this account's first and only role — already enforced,
     // nothing further to check.
     final mobileDigits = _mobileController.text.trim();
+    String? profilePhotoUrl = _useGooglePhoto ? widget.initialPhotoUrl : null;
+    if (_profilePhoto != null) {
+      profilePhotoUrl = await _cloudinaryService.uploadImage(
+        _profilePhoto!,
+        folder: 'agritrade/profiles',
+      );
+      if (profilePhotoUrl == null) {
+        setState(() => _loading = false);
+        _showMessage('Profile photo upload failed. Please try again.');
+        return;
+      }
+    }
     final profileError = await _authService.completeGoogleProfile(
       uid: widget.uid,
       fullName: _fullNameController.text.trim(),
       email: widget.email,
       role: _selectedRole,
-      mobileNumber: mobileDigits.isEmpty ? null : '+63$mobileDigits',
-      supportedProductsAcknowledged: _isFarmer && _supportedProductsAcknowledged,
+      photoUrl: profilePhotoUrl,
+      mobileNumber: mobileDigits.isEmpty ? null : phMobileE164(mobileDigits),
+      supportedProductsAcknowledged:
+          _isFarmer && _supportedProductsAcknowledged,
     );
     if (!mounted) return;
     if (profileError != null) {
@@ -267,7 +365,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
       decoration: BoxDecoration(
         color: AppTheme.accent.withValues(alpha: 0.20),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: showError ? Colors.red : AppTheme.mid, width: 1.2),
+        border: Border.all(
+          color: showError ? Colors.red : AppTheme.mid,
+          width: 1.2,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -276,8 +377,13 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
             children: [
               const Icon(Icons.eco_outlined, color: AppTheme.dark, size: 18),
               const SizedBox(width: 6),
-              Text('Supported Products in AgriTrade+',
-                  style: AppTheme.body(color: AppTheme.dark, size: 13.5).copyWith(fontWeight: FontWeight.bold)),
+              Text(
+                'Supported Products in AgriTrade+',
+                style: AppTheme.body(
+                  color: AppTheme.dark,
+                  size: 13.5,
+                ).copyWith(fontWeight: FontWeight.bold),
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -285,19 +391,27 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
             'AgriTrade+ currently supports selected agricultural commodities based on '
             'the products identified with the agricultural office. Only supported '
             'products can be posted in the marketplace.',
-            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+            style: AppTheme.body(
+              color: Colors.black87,
+              size: 12.5,
+            ).copyWith(height: 1.4),
           ),
           const SizedBox(height: 6),
           Text(
             'Please review the supported products before continuing.',
-            style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.w600),
+            style: AppTheme.body(
+              color: Colors.black87,
+              size: 12.5,
+            ).copyWith(fontWeight: FontWeight.w600),
           ),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton(
               onPressed: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => const SupportedProductsScreen()),
+                MaterialPageRoute(
+                  builder: (_) => const SupportedProductsScreen(),
+                ),
               ),
               style: TextButton.styleFrom(
                 foregroundColor: AppTheme.dark,
@@ -305,18 +419,26 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: const Text('View Supported Products', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+              child: const Text(
+                'View Supported Products',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5),
+              ),
             ),
           ),
           const SizedBox(height: 4),
           InkWell(
-            onTap: () => setState(() => _supportedProductsAcknowledged = !_supportedProductsAcknowledged),
+            onTap: () => setState(
+              () => _supportedProductsAcknowledged =
+                  !_supportedProductsAcknowledged,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Checkbox(
                   value: _supportedProductsAcknowledged,
-                  onChanged: (v) => setState(() => _supportedProductsAcknowledged = v ?? false),
+                  onChanged: (v) => setState(
+                    () => _supportedProductsAcknowledged = v ?? false,
+                  ),
                   activeColor: AppTheme.dark,
                   visualDensity: VisualDensity.compact,
                 ),
@@ -327,7 +449,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                       'I understand that AgriTrade+ currently supports only selected '
                       'agricultural commodities and that I can only post products '
                       'included in the Supported Products list.',
-                      style: AppTheme.body(color: Colors.black87, size: 12).copyWith(height: 1.4),
+                      style: AppTheme.body(
+                        color: Colors.black87,
+                        size: 12,
+                      ).copyWith(height: 1.4),
                     ),
                   ),
                 ),
@@ -337,8 +462,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
           if (showError)
             const Padding(
               padding: EdgeInsets.only(left: 12),
-              child: Text('Please confirm you understand the supported products scope.',
-                  style: TextStyle(color: Colors.red, fontSize: 11.5)),
+              child: Text(
+                'Please confirm you understand the supported products scope.',
+                style: TextStyle(color: Colors.red, fontSize: 11.5),
+              ),
             ),
         ],
       ),
@@ -364,16 +491,31 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Public Location Preview',
-                    style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(fontWeight: FontWeight.bold)),
+                Text(
+                  'Public Location Preview',
+                  style: AppTheme.body(
+                    color: Colors.black87,
+                    size: 12.5,
+                  ).copyWith(fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 2),
-                Text('Buyers will see:', style: AppTheme.body(color: Colors.black54, size: 11.5)),
+                Text(
+                  'Buyers will see:',
+                  style: AppTheme.body(color: Colors.black54, size: 11.5),
+                ),
                 const SizedBox(height: 2),
-                Text('$_selectedBarangay, Laurel, Batangas',
-                    style: AppTheme.body(color: AppTheme.dark, size: 13).copyWith(fontWeight: FontWeight.w600)),
+                Text(
+                  '$_selectedBarangay, Laurel, Batangas',
+                  style: AppTheme.body(
+                    color: AppTheme.dark,
+                    size: 13,
+                  ).copyWith(fontWeight: FontWeight.w600),
+                ),
                 const SizedBox(height: 4),
-                Text('Your exact coordinates will not be displayed publicly.',
-                    style: AppTheme.body(color: Colors.black45, size: 11)),
+                Text(
+                  'Your exact coordinates will not be displayed publicly.',
+                  style: AppTheme.body(color: Colors.black45, size: 11),
+                ),
               ],
             ),
           ),
@@ -405,29 +547,49 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                   children: [
                     RichText(
                       text: TextSpan(
-                        style: AppTheme.body(color: Colors.black87, size: 12.5).copyWith(height: 1.4),
+                        style: AppTheme.body(
+                          color: Colors.black87,
+                          size: 12.5,
+                        ).copyWith(height: 1.4),
                         children: [
                           const TextSpan(text: 'I agree to the '),
                           TextSpan(
                             text: 'Terms & Conditions',
-                            style: AppTheme.body(color: AppTheme.dark, size: 12.5)
-                                .copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                            style:
+                                AppTheme.body(
+                                  color: AppTheme.dark,
+                                  size: 12.5,
+                                ).copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.underline,
+                                ),
                             recognizer: TapGestureRecognizer()
                               ..onTap = () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(builder: (_) => const TermsAndConditionsScreen()),
-                                  ),
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) =>
+                                      const TermsAndConditionsScreen(),
+                                ),
+                              ),
                           ),
                           const TextSpan(text: ' and '),
                           TextSpan(
                             text: 'Privacy Policy',
-                            style: AppTheme.body(color: AppTheme.dark, size: 12.5)
-                                .copyWith(fontWeight: FontWeight.bold, decoration: TextDecoration.underline),
+                            style:
+                                AppTheme.body(
+                                  color: AppTheme.dark,
+                                  size: 12.5,
+                                ).copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.underline,
+                                ),
                             recognizer: TapGestureRecognizer()
                               ..onTap = () => Navigator.push(
-                                    context,
-                                    MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
-                                  ),
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const PrivacyPolicyScreen(),
+                                ),
+                              ),
                           ),
                           const TextSpan(text: '.'),
                         ],
@@ -436,8 +598,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                     if (showError)
                       const Padding(
                         padding: EdgeInsets.only(top: 4),
-                        child: Text('Please accept the Terms & Conditions and Privacy Policy to continue.',
-                            style: TextStyle(color: Colors.red, fontSize: 11.5)),
+                        child: Text(
+                          'Please accept the Terms & Conditions and Privacy Policy to continue.',
+                          style: TextStyle(color: Colors.red, fontSize: 11.5),
+                        ),
                       ),
                   ],
                 ),
@@ -467,7 +631,11 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: [
-                      BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 16, offset: const Offset(0, 6)),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
                     ],
                   ),
                   child: Column(
@@ -476,14 +644,20 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                     children: [
                       const Center(child: AgriTradeText(fontSize: 26)),
                       const SizedBox(height: 6),
-                     Center(
-                        child: Text('One last step', style: AppTheme.heading(20)),
+                      Center(
+                        child: Text(
+                          'One last step',
+                          style: AppTheme.heading(20),
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Center(
                         child: Text(
                           'Signed in as ${widget.email}',
-                          style: AppTheme.body(color: Colors.black54, size: 12.5),
+                          style: AppTheme.body(
+                            color: Colors.black54,
+                            size: 12.5,
+                          ),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -505,12 +679,45 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+                            Icon(
+                              Icons.error_outline,
+                              size: 14,
+                              color: Colors.red.shade700,
+                            ),
                             const SizedBox(width: 4),
                             Expanded(
-                              child: Text(_nameError!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+                              child: Text(
+                                _nameError!,
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 11,
+                                ),
+                              ),
                             ),
                           ],
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+
+                      OutlinedButton.icon(
+                        onPressed: _loading ? null : _pickProfilePhoto,
+                        icon: const Icon(Icons.photo_camera_outlined),
+                        label: Text(
+                          _profilePhoto != null || _useGooglePhoto
+                              ? 'Change profile photo'
+                              : 'Add a profile photo',
+                        ),
+                      ),
+                      if (_profilePhoto != null || _useGooglePhoto) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: CircleAvatar(
+                            radius: 38,
+                            backgroundImage: _profilePhoto != null
+                                ? MemoryImage(_profilePhotoBytes!)
+                                : NetworkImage(widget.initialPhotoUrl!)
+                                      as ImageProvider,
+                          ),
                         ),
                       ],
                       const SizedBox(height: 16),
@@ -520,20 +727,21 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                       // coordination); optional for buyers, who can also
                       // give it later per order instead. Fixed +63 prefix —
                       // no country dropdown, PH-only scope.
-                      Text(_isFarmer ? 'Mobile Number' : 'Mobile Number (optional)',
-                          style: AppTheme.label()),
+                      Text(
+                        _isFarmer
+                            ? 'Mobile Number'
+                            : 'Mobile Number (optional)',
+                        style: AppTheme.label(),
+                      ),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _mobileController,
                         keyboardType: TextInputType.phone,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(10),
-                        ],
+                        inputFormatters: kPhMobileInputFormatters,
                         decoration: AppTheme.inputBox(
-                          hint: '912 345 6789',
+                          hint: kPhMobileHint,
                           icon: Icons.phone_outlined,
-                          prefixText: '+63 ',
+                          prefixText: kPhMobilePrefix,
                         ),
                       ),
                       if (_mobileError != null) ...[
@@ -541,10 +749,20 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+                            Icon(
+                              Icons.error_outline,
+                              size: 14,
+                              color: Colors.red.shade700,
+                            ),
                             const SizedBox(width: 4),
                             Expanded(
-                              child: Text(_mobileError!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+                              child: Text(
+                                _mobileError!,
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 11,
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -552,7 +770,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         const SizedBox(height: 6),
                         Text(
                           'For order, delivery, and pick-up coordination only.',
-                          style: TextStyle(color: Colors.grey[600], fontSize: 11.5),
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 11.5,
+                          ),
                         ),
                       ],
                       const SizedBox(height: 16),
@@ -567,8 +788,20 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         ),
                         child: Row(
                           children: [
-                            Expanded(child: _roleToggleOption('buyer', 'Buyer', Icons.shopping_cart_outlined)),
-                            Expanded(child: _roleToggleOption('farmer', 'Farmer', Icons.agriculture_outlined)),
+                            Expanded(
+                              child: _roleToggleOption(
+                                'buyer',
+                                'Buyer',
+                                Icons.shopping_cart_outlined,
+                              ),
+                            ),
+                            Expanded(
+                              child: _roleToggleOption(
+                                'farmer',
+                                'Farmer',
+                                Icons.agriculture_outlined,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -585,7 +818,11 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.warning_amber_rounded, color: Colors.amber.shade800, size: 20),
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: Colors.amber.shade800,
+                                size: 20,
+                              ),
                               const SizedBox(width: 8),
                               Expanded(
                                 child: Text(
@@ -610,11 +847,15 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                           errorText: _triedSubmit && _selectedBarangay == null
                               ? 'Please select a barangay in Laurel.'
                               : null,
-                          onChanged: (value) => setState(() => _selectedBarangay = value),
+                          onChanged: (value) =>
+                              setState(() => _selectedBarangay = value),
                         ),
                       if (_isFarmer) _publicLocationPreview(),
                       if (_isFarmer) ...[
-                        Text('Agricultural Certification', style: AppTheme.label()),
+                        Text(
+                          'Agricultural Certification',
+                          style: AppTheme.label(),
+                        ),
                         const SizedBox(height: 8),
                         GestureDetector(
                           onTap: _loading ? null : _pickCertificate,
@@ -625,7 +866,9 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                               color: AppTheme.accent.withValues(alpha: 0.20),
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(
-                                color: _triedSubmit && _certFile == null ? Colors.red : AppTheme.mid,
+                                color: _triedSubmit && _certFile == null
+                                    ? Colors.red
+                                    : AppTheme.mid,
                                 width: 1.2,
                               ),
                             ),
@@ -633,11 +876,24 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                                 ? Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      const Icon(Icons.upload_file, size: 38, color: AppTheme.mid),
+                                      const Icon(
+                                        Icons.upload_file,
+                                        size: 38,
+                                        color: AppTheme.mid,
+                                      ),
                                       const SizedBox(height: 8),
-                                      Text('Attach your certificate', style: AppTheme.body(size: 13)),
+                                      Text(
+                                        'Attach your certificate',
+                                        style: AppTheme.body(size: 13),
+                                      ),
                                       const SizedBox(height: 2),
-                                      Text('PNG or JPG only, up to 5MB', style: AppTheme.body(color: Colors.black45, size: 11.5)),
+                                      Text(
+                                        'PNG or JPG only, up to 5MB',
+                                        style: AppTheme.body(
+                                          color: Colors.black45,
+                                          size: 11.5,
+                                        ),
+                                      ),
                                     ],
                                   )
                                 : Stack(
@@ -645,7 +901,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                                     children: [
                                       ClipRRect(
                                         borderRadius: BorderRadius.circular(14),
-                                        child: Image.memory(_certBytes!, fit: BoxFit.cover),
+                                        child: Image.memory(
+                                          _certBytes!,
+                                          fit: BoxFit.cover,
+                                        ),
                                       ),
                                       Positioned(
                                         top: 8,
@@ -654,8 +913,14 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                                           color: Colors.black54,
                                           shape: const CircleBorder(),
                                           child: IconButton(
-                                            icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                                            onPressed: _loading ? null : _removeCertificate,
+                                            icon: const Icon(
+                                              Icons.close,
+                                              color: Colors.white,
+                                              size: 20,
+                                            ),
+                                            onPressed: _loading
+                                                ? null
+                                                : _removeCertificate,
                                             tooltip: 'Remove',
                                           ),
                                         ),
@@ -666,8 +931,10 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                         ),
                         if (_triedSubmit && _certFile == null) ...[
                           const SizedBox(height: 6),
-                          const Text('Agricultural certification is required.',
-                              style: TextStyle(color: Colors.red, fontSize: 11.5)),
+                          const Text(
+                            'Agricultural certification is required.',
+                            style: TextStyle(color: Colors.red, fontSize: 11.5),
+                          ),
                         ],
                       ],
                       _consentCheckbox(),
@@ -681,7 +948,11 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
               decoration: BoxDecoration(
                 color: AppTheme.bgLight,
                 boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 12, offset: const Offset(0, -4)),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 12,
+                    offset: const Offset(0, -4),
+                  ),
                 ],
               ),
               child: Column(
@@ -690,18 +961,32 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: canSubmit ? _finish : (_loading ? null : _finish),
+                      onPressed: canSubmit
+                          ? _finish
+                          : (_loading ? null : _finish),
                       style: AppTheme.primaryButton(),
                       child: _loading
                           ? const SizedBox(
-                              height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : Text('Finish Sign Up', style: AppTheme.buttonText()),
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(
+                              'Finish Sign Up',
+                              style: AppTheme.buttonText(),
+                            ),
                     ),
                   ),
                   const SizedBox(height: 10),
                   TextButton(
                     onPressed: _loading ? null : _cancel,
-                    child: const Text('Cancel', style: TextStyle(color: Colors.black54)),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(color: Colors.black54),
+                    ),
                   ),
                 ],
               ),
@@ -726,11 +1011,18 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 17, color: selected ? Colors.white : Colors.black54),
+            Icon(
+              icon,
+              size: 17,
+              color: selected ? Colors.white : Colors.black54,
+            ),
             const SizedBox(width: 6),
             Text(
               label,
-              style: AppTheme.body(color: selected ? Colors.white : Colors.black87, size: 14).copyWith(fontWeight: FontWeight.w600),
+              style: AppTheme.body(
+                color: selected ? Colors.white : Colors.black87,
+                size: 14,
+              ).copyWith(fontWeight: FontWeight.w600),
             ),
           ],
         ),
@@ -738,4 +1030,3 @@ class _GoogleCompleteProfileScreenState extends State<GoogleCompleteProfileScree
     );
   }
 }
-

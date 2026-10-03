@@ -23,8 +23,11 @@ class UnreadMessagesDot extends StatelessWidget {
           .where('participants', arrayContains: uid)
           .snapshots(),
       builder: (context, snapshot) {
-        final hasUnread = snapshot.data?.docs.any((doc) {
-              final unreadMap = Map<String, dynamic>.from(doc.data()['unreadCount'] ?? {});
+        final hasUnread =
+            snapshot.data?.docs.any((doc) {
+              final unreadMap = Map<String, dynamic>.from(
+                doc.data()['unreadCount'] ?? {},
+              );
               return ((unreadMap[uid] ?? 0) as num).toInt() > 0;
             }) ??
             false;

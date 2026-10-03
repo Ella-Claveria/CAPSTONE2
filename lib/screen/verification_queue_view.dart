@@ -30,7 +30,13 @@ class VerificationQueueView extends StatelessWidget {
         children: [
           Text(
             'Verification Queue',
-            style: TextStyle(fontSize: 30, height: 1.15, letterSpacing: -0.6, fontWeight: FontWeight.w800, color: c.textPrimary),
+            style: TextStyle(
+              fontSize: 30,
+              height: 1.15,
+              letterSpacing: -0.6,
+              fontWeight: FontWeight.w800,
+              color: c.textPrimary,
+            ),
           ),
           Text(
             'Review and approve agricultural credentials for new farmers.',
@@ -56,11 +62,18 @@ class VerificationQueueView extends StatelessWidget {
                   stream: DashboardDataService.instance.verificationDocsStream,
                   builder: (context, verifSnap) {
                     if (usersSnap.connectionState == ConnectionState.waiting) {
-                      return Center(child: CircularProgressIndicator(color: c.green));
+                      return Center(
+                        child: CircularProgressIndicator(color: c.green),
+                      );
                     }
 
                     if (usersSnap.hasError) {
-                      return Center(child: Text('Error loading queue.', style: TextStyle(color: c.textSecondary)));
+                      return Center(
+                        child: Text(
+                          'Error loading queue.',
+                          style: TextStyle(color: c.textSecondary),
+                        ),
+                      );
                     }
 
                     final docs = (usersSnap.data?.docs ?? []).where((d) {
@@ -71,14 +84,18 @@ class VerificationQueueView extends StatelessWidget {
                     }).toList();
 
                     final verifByUid = <String, Map<String, dynamic>>{
-                      for (final d in verifSnap.data?.docs ?? const []) d.id: d.data(),
+                      for (final d in verifSnap.data?.docs ?? const [])
+                        d.id: d.data(),
                     };
 
                     if (docs.isEmpty) {
                       return Center(
                         child: Text(
                           'No pending verifications at this time.',
-                          style: TextStyle(fontSize: 15, color: c.textSecondary),
+                          style: TextStyle(
+                            fontSize: 15,
+                            color: c.textSecondary,
+                          ),
                         ),
                       );
                     }
@@ -88,7 +105,12 @@ class VerificationQueueView extends StatelessWidget {
                       itemBuilder: (context, index) {
                         final uid = docs[index].id;
                         final profile = docs[index].data();
-                        return _farmerApplicationCard(context, uid, profile, verifByUid[uid]);
+                        return _farmerApplicationCard(
+                          context,
+                          uid,
+                          profile,
+                          verifByUid[uid],
+                        );
                       },
                     );
                   },
@@ -111,59 +133,76 @@ class VerificationQueueView extends StatelessWidget {
     // caller) is supplementary only — submission date and the document
     // image live on verificationDocs, but the row (and the Approve/Reject
     // actions below) must never depend on this document existing.
-    final fullName = _firstNonEmpty([verif?['fullName'], profile['fullName'], profile['name']]) ??
+    final fullName =
+        _firstNonEmpty([
+          verif?['fullName'],
+          profile['fullName'],
+          profile['name'],
+        ]) ??
         'Unknown Farmer';
     final email = (profile['email'] ?? '—').toString();
     final rawBarangay = profile['barangay']?.toString().trim();
-    final barangay = (rawBarangay == null || rawBarangay.isEmpty) ? '—' : rawBarangay;
+    final barangay = (rawBarangay == null || rawBarangay.isEmpty)
+        ? '—'
+        : rawBarangay;
     final submittedAt = verif?['submittedAt'] as Timestamp?;
-    final dateSubmitted = submittedAt != null ? DateFormat('MMM d, y').format(submittedAt.toDate()) : '—';
+    final dateSubmitted = submittedAt != null
+        ? DateFormat('MMM d, y').format(submittedAt.toDate())
+        : '—';
     final document = (verif?['document'] ?? '').toString();
     final farmerId = uid.length > 8 ? uid.substring(0, 8) : uid;
 
     return Card(
-          margin: const EdgeInsets.only(bottom: 14),
-          child: ListTile(
-            contentPadding: const EdgeInsets.all(16),
-            leading: CircleAvatar(
-              backgroundColor: Colors.green[100],
-              child: Icon(Icons.person, color: Colors.green[800]),
+      margin: const EdgeInsets.only(bottom: 14),
+      child: ListTile(
+        contentPadding: const EdgeInsets.all(16),
+        leading: CircleAvatar(
+          backgroundColor: Colors.green[100],
+          child: Icon(Icons.person, color: Colors.green[800]),
+        ),
+        title: Text(
+          fullName,
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+        isThreeLine: true,
+        subtitle: Text(
+          'ID: $farmerId  •  $email\nBarangay: $barangay  •  Submitted: $dateSubmitted',
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'View full verification details',
+              icon: Icon(Icons.visibility_outlined, color: Colors.grey[700]),
+              onPressed: () => showFarmerVerificationDetails(context, uid: uid),
             ),
-            title: Text(fullName, style: const TextStyle(fontWeight: FontWeight.bold)),
-            isThreeLine: true,
-            subtitle: Text(
-              'ID: $farmerId  •  $email\nBarangay: $barangay  •  Submitted: $dateSubmitted',
+            OutlinedButton.icon(
+              icon: const Icon(Icons.image_search, color: Colors.blue),
+              label: const Text('View Doc'),
+              onPressed: document.isEmpty
+                  ? null
+                  : () => _showDocumentDialog(context, document),
             ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  tooltip: 'View full verification details',
-                  icon: Icon(Icons.visibility_outlined, color: Colors.grey[700]),
-                  onPressed: () => showFarmerVerificationDetails(context, uid: uid),
-                ),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.image_search, color: Colors.blue),
-                  label: const Text('View Doc'),
-                  onPressed: document.isEmpty ? null : () => _showDocumentDialog(context, document),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.check),
-                  label: const Text('Approve'),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                  onPressed: () => approveFarmerAccount(context, uid, fullName),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.close, color: Colors.red),
-                  label: const Text('Reject', style: TextStyle(color: Colors.red)),
-                  onPressed: () => rejectFarmerAccount(context, uid, fullName),
-                ),
-              ],
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.check),
+              label: const Text('Approve'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => approveFarmerAccount(context, uid, fullName),
             ),
-          ),
-        );
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.close, color: Colors.red),
+              label: const Text('Reject', style: TextStyle(color: Colors.red)),
+              onPressed: () => rejectFarmerAccount(context, uid, fullName),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -189,7 +228,9 @@ void _showDocumentDialog(BuildContext context, String document) {
       );
     } else if (document.isNotEmpty) {
       // Clean up the string in case it has metadata like "data:image/jpeg;base64,"
-      final cleanBase64 = document.contains(',') ? document.split(',').last : document;
+      final cleanBase64 = document.contains(',')
+          ? document.split(',').last
+          : document;
 
       imageWidget = Image.memory(
         base64Decode(cleanBase64),
@@ -264,23 +305,33 @@ Future<void> _confirmAndRun(
           ),
           actions: [
             TextButton(
-              onPressed: loading ? null : () => Navigator.of(dialogContext).pop(),
+              onPressed: loading
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(),
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: confirmColor, foregroundColor: Colors.white),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: confirmColor,
+                foregroundColor: Colors.white,
+              ),
               onPressed: loading
                   ? null
                   : () async {
                       setDialogState(() => loading = true);
                       await action(reasonController?.text.trim());
-                      if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+                      if (dialogContext.mounted) {
+                        Navigator.of(dialogContext).pop();
+                      }
                     },
               child: loading
                   ? const SizedBox(
                       height: 18,
                       width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : Text(confirmLabel),
             ),
@@ -293,27 +344,47 @@ Future<void> _confirmAndRun(
 
 /// Approve a farmer application. `uid` is the farmer's own Firebase Auth
 /// uid — the same id as their `users/{uid}` document.
-Future<void> approveFarmerAccount(BuildContext context, String uid, String farmerName) {
+Future<void> approveFarmerAccount(
+  BuildContext context,
+  String uid,
+  String farmerName,
+) {
   return _confirmAndRun(
     context,
     title: 'Approve this Farmer account?',
-    message: 'This farmer will be verified and able to list products and sell on AgriTrade+.',
+    message:
+        'This farmer will be verified and able to list products and sell on AgriTrade+.',
     confirmLabel: 'Approve',
     confirmColor: Colors.green,
-    action: (_) => _setFarmerApproval(context, uid, approved: true, farmerName: farmerName),
+    action: (_) => _setFarmerApproval(
+      context,
+      uid,
+      approved: true,
+      farmerName: farmerName,
+    ),
   );
 }
 
-Future<void> rejectFarmerAccount(BuildContext context, String uid, String farmerName) {
+Future<void> rejectFarmerAccount(
+  BuildContext context,
+  String uid,
+  String farmerName,
+) {
   return _confirmAndRun(
     context,
     title: 'Reject this Farmer verification?',
-    message: 'The farmer will be notified that their application was not approved.',
+    message:
+        'The farmer will be notified that their application was not approved.',
     confirmLabel: 'Reject',
     confirmColor: Colors.red,
     withReason: true,
-    action: (reason) =>
-        _setFarmerApproval(context, uid, approved: false, reason: reason, farmerName: farmerName),
+    action: (reason) => _setFarmerApproval(
+      context,
+      uid,
+      approved: false,
+      reason: reason,
+      farmerName: farmerName,
+    ),
   );
 }
 
@@ -331,7 +402,9 @@ Future<void> _setFarmerApproval(
 }) async {
   if (!await ConnectivityService.instance.checkNow()) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
     }
     return;
   }
@@ -347,7 +420,9 @@ Future<void> _setFarmerApproval(
   if (adminUid != null && adminUid == uid) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You cannot approve or reject your own account.')),
+        const SnackBar(
+          content: Text('You cannot approve or reject your own account.'),
+        ),
       );
     }
     return;
@@ -371,7 +446,10 @@ Future<void> _setFarmerApproval(
       'isVerified': approved,
     };
     if (approved) userUpdate['verifiedAt'] = FieldValue.serverTimestamp();
-    await FirebaseFirestore.instance.collection('users').doc(uid).update(userUpdate);
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .update(userUpdate);
 
     final docUpdate = <String, dynamic>{
       'status': status,
@@ -395,11 +473,17 @@ Future<void> _setFarmerApproval(
 
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(approved ? 'Farmer approved successfully!' : 'Application rejected.')),
+      SnackBar(
+        content: Text(
+          approved ? 'Farmer approved successfully!' : 'Application rejected.',
+        ),
+      ),
     );
   } catch (e) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error updating farmer: $e')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Error updating farmer: $e')));
   }
 }
 
@@ -420,8 +504,10 @@ class _MarketplaceSummary {
 }
 
 Future<_MarketplaceSummary> _loadMarketplaceSummary(String uid) async {
-  final products =
-      await FirebaseFirestore.instance.collection('products').where('farmerId', isEqualTo: uid).get();
+  final products = await FirebaseFirestore.instance
+      .collection('products')
+      .where('farmerId', isEqualTo: uid)
+      .get();
   var active = 0, archived = 0;
   for (final p in products.docs) {
     if ((p.data()['isArchived'] ?? false) == true) {
@@ -431,15 +517,22 @@ Future<_MarketplaceSummary> _loadMarketplaceSummary(String uid) async {
     }
   }
 
-  final orders =
-      await FirebaseFirestore.instance.collection('orders').where('sellerId', isEqualTo: uid).get();
+  final orders = await FirebaseFirestore.instance
+      .collection('orders')
+      .where('sellerId', isEqualTo: uid)
+      .get();
   final completedCount = orders.docs
-      .where((o) => (o.data()['status'] ?? '').toString().toLowerCase() == 'completed')
+      .where(
+        (o) =>
+            (o.data()['status'] ?? '').toString().toLowerCase() == 'completed',
+      )
       .length;
   // TOTAL TRANSACTION VALUE — same definition/formula as the platform-
   // wide KPI tile (DashboardAnalyticsService.platformTransactionTotal),
   // just scoped to this one farmer's own orders.
-  final totalSales = DashboardAnalyticsService.platformTransactionTotal(orders.docs);
+  final totalSales = DashboardAnalyticsService.platformTransactionTotal(
+    orders.docs,
+  );
 
   return _MarketplaceSummary(
     activeProducts: active,
@@ -454,7 +547,10 @@ Future<_MarketplaceSummary> _loadMarketplaceSummary(String uid) async {
 /// "Recent Verification Requests" table, so both stay backed by the same
 /// live data and the same approve/reject actions. The Farmer List page has
 /// its own, separate detail dialog and does not use this one.
-Future<void> showFarmerVerificationDetails(BuildContext context, {required String uid}) {
+Future<void> showFarmerVerificationDetails(
+  BuildContext context, {
+  required String uid,
+}) {
   return showDialog<void>(
     context: context,
     builder: (_) => _FarmerVerificationDetailDialog(uid: uid),
@@ -468,17 +564,28 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .snapshots(),
       builder: (context, userSnap) {
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance.collection('verificationDocs').doc(uid).snapshots(),
+          stream: FirebaseFirestore.instance
+              .collection('verificationDocs')
+              .doc(uid)
+              .snapshots(),
           builder: (context, verifSnap) {
             if (userSnap.hasError || verifSnap.hasError) {
               return AlertDialog(
                 title: const Text('Something went wrong'),
-                content: const Text('Could not load this farmer\'s details. Please try again.'),
+                content: const Text(
+                  'Could not load this farmer\'s details. Please try again.',
+                ),
                 actions: [
-                  TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
                 ],
               );
             }
@@ -495,36 +602,52 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
             if (user == null) {
               return AlertDialog(
                 title: const Text('Account Not Found'),
-                content: const Text('This farmer\'s account could not be found. It may have been removed.'),
+                content: const Text(
+                  'This farmer\'s account could not be found. It may have been removed.',
+                ),
                 actions: [
-                  TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
                 ],
               );
             }
             final verif = verifSnap.data!.data();
 
-            final fullName = _firstNonEmpty([verif?['fullName'], user['fullName'], user['name']]) ??
+            final fullName =
+                _firstNonEmpty([
+                  verif?['fullName'],
+                  user['fullName'],
+                  user['name'],
+                ]) ??
                 'Unknown Farmer';
             final email = (user['email'] ?? '—').toString();
             final barangay = _firstNonEmpty([user['barangay']]) ?? '—';
             final municipality = _firstNonEmpty([user['municipality']]) ?? '—';
             final phone = _firstNonEmpty([user['phone']]) ?? '—';
-            final approvalStatus = (user['approvalStatus'] ?? 'pending').toString();
+            final approvalStatus = (user['approvalStatus'] ?? 'pending')
+                .toString();
             final statusLabel = approvalStatus.isEmpty
                 ? 'Pending'
                 : '${approvalStatus[0].toUpperCase()}${approvalStatus.substring(1)}';
             final submittedAt = verif?['submittedAt'] as Timestamp?;
-            final dateSubmitted =
-                submittedAt != null ? DateFormat('MMM d, y – h:mm a').format(submittedAt.toDate()) : '—';
+            final dateSubmitted = submittedAt != null
+                ? DateFormat('MMM d, y – h:mm a').format(submittedAt.toDate())
+                : '—';
             final reviewedAt = user['reviewedAt'] as Timestamp?;
-            final dateReviewed =
-                reviewedAt != null ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate()) : '—';
+            final dateReviewed = reviewedAt != null
+                ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate())
+                : '—';
             final reviewedByUid = _firstNonEmpty([user['reviewedBy']]);
             final reviewedBy = reviewedByUid == null
                 ? '—'
-                : (reviewedByUid.length > 8 ? reviewedByUid.substring(0, 8) : reviewedByUid);
+                : (reviewedByUid.length > 8
+                      ? reviewedByUid.substring(0, 8)
+                      : reviewedByUid);
             final document = (verif?['document'] ?? '').toString();
-            final rejectionReason = (verif?['rejectionReason'] ?? '').toString();
+            final rejectionReason = (verif?['rejectionReason'] ?? '')
+                .toString();
 
             return AlertDialog(
               title: Text(fullName),
@@ -547,39 +670,54 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                       _detailRow('Date Submitted', dateSubmitted),
                       _detailRow('Reviewed At', dateReviewed),
                       _detailRow('Reviewed By', reviewedBy),
-                      if (approvalStatus == 'rejected' && rejectionReason.isNotEmpty)
+                      if (approvalStatus == 'rejected' &&
+                          rejectionReason.isNotEmpty)
                         _detailRow('Rejection Reason', rejectionReason),
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.image_search, color: Colors.blue),
+                        icon: const Icon(
+                          Icons.image_search,
+                          color: Colors.blue,
+                        ),
                         label: const Text('View Submitted Document'),
-                        onPressed: document.isEmpty ? null : () => _showDocumentDialog(context, document),
+                        onPressed: document.isEmpty
+                            ? null
+                            : () => _showDocumentDialog(context, document),
                       ),
                       if (document.isEmpty) ...[
                         const SizedBox(height: 6),
                         Text(
                           'No verification document was submitted for this account.',
-                          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                       const SizedBox(height: 10),
                       FutureBuilder<_MarketplaceSummary>(
                         future: _loadMarketplaceSummary(uid),
                         builder: (context, activitySnap) {
-                          if (activitySnap.connectionState != ConnectionState.done) {
+                          if (activitySnap.connectionState !=
+                              ConnectionState.done) {
                             return const Padding(
                               padding: EdgeInsets.symmetric(vertical: 12),
                               child: SizedBox(
                                 height: 18,
                                 width: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             );
                           }
                           if (activitySnap.hasError || !activitySnap.hasData) {
                             return Text(
                               'Could not load marketplace activity.',
-                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 12,
+                              ),
                             );
                           }
                           final a = activitySnap.data!;
@@ -587,10 +725,22 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _sectionLabel('Marketplace Summary'),
-                              _detailRow('Active Products', '${a.activeProducts}'),
-                              _detailRow('Archived Products', '${a.archivedProducts}'),
-                              _detailRow('Completed Orders', '${a.completedOrders}'),
-                              _detailRow('Total Sales', formatPeso(a.totalSales)),
+                              _detailRow(
+                                'Active Products',
+                                '${a.activeProducts}',
+                              ),
+                              _detailRow(
+                                'Archived Products',
+                                '${a.archivedProducts}',
+                              ),
+                              _detailRow(
+                                'Completed Orders',
+                                '${a.completedOrders}',
+                              ),
+                              _detailRow(
+                                'Total Sales',
+                                formatPeso(a.totalSales),
+                              ),
                             ],
                           );
                         },
@@ -600,10 +750,15 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
                 if (approvalStatus == 'pending') ...[
                   OutlinedButton(
-                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                    ),
                     onPressed: () {
                       Navigator.of(context).pop();
                       rejectFarmerAccount(context, uid, fullName);
@@ -611,7 +766,10 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                     child: const Text('Reject'),
                   ),
                   ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                    ),
                     onPressed: () {
                       Navigator.of(context).pop();
                       approveFarmerAccount(context, uid, fullName);
@@ -632,7 +790,12 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 6),
       child: Text(
         label,
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.grey[600], letterSpacing: 0.4),
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 12.5,
+          color: Colors.grey[600],
+          letterSpacing: 0.4,
+        ),
       ),
     );
   }
@@ -645,7 +808,13 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
         children: [
           SizedBox(
             width: 130,
-            child: Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700])),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
           ),
           Expanded(child: Text(value)),
         ],

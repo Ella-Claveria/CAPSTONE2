@@ -1,8 +1,12 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../services/product_share_service.dart';
+import '../services/notification_permission_prompt.dart';
 import '../services/push_notification_service.dart';
+import '../widgets/agri_dialog.dart';
 import '../widgets/coach_mark.dart';
-import '../widgets/notification_bell.dart';
+import '../widgets/agri_header.dart';
 import '../widgets/unread_messages_dot.dart';
 import 'add_product_screen.dart';
 import 'market_tab.dart';
@@ -11,7 +15,6 @@ import 'farmer_orders_tab.dart';
 import 'farmer_profile_tab.dart';
 import 'notifications_screen.dart';
 import '../l10n/app_localizations.dart';
-import '../l10n/locale_controller.dart';
 
 // A one-shot "command channel", not persisted UI state: setting this while
 // a FarmerHomeScreen is already mounted (e.g. from a notification tap, see
@@ -31,7 +34,7 @@ class FarmerHomeScreen extends StatefulWidget {
 }
 
 class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _bg = Colors.white;
 
   // 0 = Market, 1 = Messages, 2 = Orders, 3 = Profile
@@ -46,8 +49,20 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     // If the app was launched (cold start) by tapping a push notification,
     // this replays that navigation now that routing has actually finished.
     PushNotificationService.consumePendingNavigation();
+    // Likewise for a shared product link that opened the app.
+    ProductLinkService.homeReady();
     globalFarmerTabIndex.addListener(_onGlobalTabIndexChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showWalkthrough());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onEnteredApp());
+  }
+
+  // Runs once this home screen is actually on screen — i.e. after login,
+  // email verification and admin approval are all behind the user. The
+  // notification rationale waits for the first-time walkthrough so the two
+  // never appear on top of each other.
+  Future<void> _onEnteredApp() async {
+    await _showWalkthrough();
+    if (!mounted) return;
+    await NotificationPermissionPrompt.instance.onEnteredApp(context);
   }
 
   void _onGlobalTabIndexChanged() {
@@ -73,12 +88,14 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
         CoachMarkStep(
           targetKey: _addProductKey,
           title: 'List your first product',
-          message: 'Tap here anytime to post crops or livestock for buyers to see.',
+          message:
+              'Tap here anytime to post crops or livestock for buyers to see.',
         ),
         CoachMarkStep(
           targetKey: _ordersTabKey,
           title: 'Track incoming orders',
-          message: 'Orders from buyers show up here — you can accept, message, and update their status.',
+          message:
+              'Orders from buyers show up here — you can accept, message, and update their status.',
         ),
       ],
     );
@@ -98,70 +115,6 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     );
   }
 
-  // ---- Language picker ----
-  void _showLanguagePicker(BuildContext context) {
-    final t = AppLocalizations.of(context)!;
-    final currentCode = LocaleController.instance.locale?.languageCode ?? 'en';
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(t.selectLanguage,
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                ),
-              ),
-              RadioGroup<String>(
-                groupValue: currentCode,
-                onChanged: (value) {
-                  if (value == null) return;
-                  LocaleController.instance.setLocale(Locale(value));
-                  Navigator.pop(sheetContext);
-                  _showLanguageNote(value == 'en' ? t.english : t.tagalog);
-                },
-                child: Column(
-                  children: [
-                    RadioListTile<String>(
-                      title: Text(t.english),
-                      value: 'en',
-                      activeColor: _dark,
-                    ),
-                    RadioListTile<String>(
-                      title: Text(t.tagalog),
-                      value: 'tl',
-                      activeColor: _dark,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showLanguageNote(String language) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor: _dark,
-        content: Text(AppLocalizations.of(context)!.languageChanged(language)),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -173,75 +126,75 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           setState(() => _selectedIndex = 0);
           return;
         }
-        final shouldExit = await showDialog<bool>(
+        final shouldExit = await showAgriConfirm(
           context: context,
-          builder: (context) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Text('Exit App?'),
-            content: const Text('Are you sure you want to close AgriTrade?'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-              TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Exit')),
-            ],
-          ),
+          icon: Icons.exit_to_app,
+          title: 'Exit App?',
+          message: 'Are you sure you want to close AgriTrade?',
+          confirmLabel: 'Exit',
         );
-        if (shouldExit == true) {
+        if (shouldExit) {
           SystemNavigator.pop();
         }
       },
       child: Scaffold(
         backgroundColor: _bg,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 1,
-          iconTheme: const IconThemeData(color: _dark),
-          titleSpacing: 16,
-          title: Semantics(
-            button: true,
-            label: 'Go to Market tab',
-            child: InkWell(
-              onTap: () => setState(() => _selectedIndex = 0),
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.all(3),
-                child: Image.asset(
-                  'assets/images/logo.png',
-                  width: 40,
-                  height: 40,
-                  fit: BoxFit.contain,
-                  errorBuilder: (c, e, s) => const Icon(Icons.agriculture, color: _dark, size: 28),
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            IconButton(
-              onPressed: () => _showLanguagePicker(context),
-              icon: const Icon(Icons.language, color: _dark, size: 22),
-            ),
-            NotificationBell(onPressed: _openNotifications, color: _dark),
-            const SizedBox(width: 8),
-          ],
+        appBar: AgriHeader(
+          onLogoTap: () => setState(() => _selectedIndex = 0),
+          onNotificationsPressed: _openNotifications,
         ),
 
         // ---- Bottom navigation bar (Market · Messages · + · Orders · Profile) ----
-        bottomNavigationBar: BottomAppBar(
-          color: Colors.white,
-          elevation: 10,
-          padding: EdgeInsets.zero,
-          child: SizedBox(
-            height: 60,
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Container(
+            height: 68,
+            margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.62),
+              borderRadius: BorderRadius.circular(36),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.72),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF8EB99A).withValues(alpha: 0.22),
+                  blurRadius: 20,
+                  spreadRadius: 1,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
             child: Row(
               children: [
-                _navItem(0, Icons.storefront_outlined, Icons.storefront,
-                    AppLocalizations.of(context)!.navMarket),
-                _navItem(1, Icons.mail_outline, Icons.mail,
-                    AppLocalizations.of(context)!.navMessages, showUnreadDot: true),
+                _navItem(
+                  0,
+                  Icons.storefront_outlined,
+                  Icons.storefront,
+                  AppLocalizations.of(context)!.navMarket,
+                ),
+                _navItem(
+                  1,
+                  Icons.mail_outline,
+                  Icons.mail,
+                  AppLocalizations.of(context)!.navMessages,
+                  showUnreadDot: true,
+                ),
                 _buildAddButton(),
-                _navItem(2, Icons.shopping_bag_outlined, Icons.shopping_bag,
-                    AppLocalizations.of(context)!.navOrders, key: _ordersTabKey),
-                _navItem(3, Icons.person_outline, Icons.person,
-                    AppLocalizations.of(context)!.navProfile),
+                _navItem(
+                  2,
+                  Icons.shopping_bag_outlined,
+                  Icons.shopping_bag,
+                  AppLocalizations.of(context)!.navOrders,
+                  key: _ordersTabKey,
+                ),
+                _navItem(
+                  3,
+                  Icons.person_outline,
+                  Icons.person,
+                  AppLocalizations.of(context)!.navProfile,
+                ),
               ],
             ),
           ),
@@ -253,21 +206,33 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
         body: IndexedStack(
           index: _selectedIndex,
           children: [
-            MarketTab(onNavigateToTab: (i) => setState(() => _selectedIndex = i)),
+            MarketTab(
+              onNavigateToTab: (i) => setState(() => _selectedIndex = i),
+            ),
             const ChatListScreen(),
             const OrdersTab(),
             const ProfileTab(),
-          ], 
+          ],
         ),
       ),
     );
   }
 
-  Widget _navItem(int index, IconData icon, IconData activeIcon, String label,
-      {Key? key, bool showUnreadDot = false}) {
+  Widget _navItem(
+    int index,
+    IconData icon,
+    IconData activeIcon,
+    String label, {
+    Key? key,
+    bool showUnreadDot = false,
+  }) {
     final selected = _selectedIndex == index;
-    final color = selected ? _dark : Colors.grey;
-    final iconWidget = Icon(selected ? activeIcon : icon, color: color, size: 24);
+    final color = selected ? _dark : const Color(0xFFAAB4AC);
+    final iconWidget = Icon(
+      selected ? activeIcon : icon,
+      color: color,
+      size: 20,
+    );
     return Expanded(
       child: InkWell(
         onTap: () => setState(() => _selectedIndex = index),
@@ -277,13 +242,13 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             showUnreadDot ? UnreadMessagesDot(child: iconWidget) : iconWidget,
-            const SizedBox(height: 3),
+            const SizedBox(height: 2),
             Text(
               label,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 9.5,
                 color: color,
-                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
           ],
@@ -295,15 +260,29 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
   Widget _buildAddButton() {
     return Expanded(
       child: Center(
-        child: InkWell(
-          onTap: _openAddProduct,
-          customBorder: const CircleBorder(),
-          child: Container(
-            key: _addProductKey,
-            width: 46,
-            height: 46,
-            decoration: const BoxDecoration(color: _dark, shape: BoxShape.circle),
-            child: const Icon(Icons.add, color: Colors.white, size: 26),
+        child: Transform.translate(
+          offset: const Offset(0, -17),
+          child: InkWell(
+            onTap: _openAddProduct,
+            customBorder: const CircleBorder(),
+            child: Container(
+              key: _addProductKey,
+              width: 58,
+              height: 58,
+              decoration: BoxDecoration(
+                color: _dark,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: _dark.withValues(alpha: 0.30),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.add, color: Colors.white, size: 31),
+            ),
           ),
         ),
       ),

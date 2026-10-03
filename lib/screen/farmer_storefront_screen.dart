@@ -1,240 +1,276 @@
+import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-import '../data/commodity_master_list.dart';
-import '../services/market_price_helpers.dart';
+import '../services/saved_products_service.dart';
+import '../widgets/explore_product_card.dart';
+import '../widgets/profile_avatar.dart';
+import '../widgets/save_product_button.dart';
 import 'product_detail_screen.dart';
 
-class FarmerStorefrontScreen extends StatelessWidget {
+/// A farmer's public profile, as a buyer sees it: photo, name, general
+/// location and Verified Farmer badge, then their active listings in a
+/// two-column grid. Everything comes from publicProfiles/{farmerId} (the
+/// allow-listed projection — no email, phone or exact location) and the
+/// farmer's own products.
+///
+/// There is no separate reviews list here: reviews belong to individual
+/// products and are shown on each one's Product Details.
+class FarmerStorefrontScreen extends StatefulWidget {
   final String farmerId;
 
   const FarmerStorefrontScreen({super.key, required this.farmerId});
 
-  static const _green = Color(0xFF1B5E20);
+  @override
+  State<FarmerStorefrontScreen> createState() => _FarmerStorefrontScreenState();
+}
+
+class _FarmerStorefrontScreenState extends State<FarmerStorefrontScreen> {
+  static const _green = AppTheme.dark;
+
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _profile =
+      FirebaseFirestore.instance
+          .collection('publicProfiles')
+          .doc(widget.farmerId)
+          .snapshots();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _products =
+      FirebaseFirestore.instance
+          .collection('products')
+          .where('farmerId', isEqualTo: widget.farmerId)
+          .snapshots();
+
+  // The heart on each card (buyers only) — the shared LikedProducts state,
+  // the same one Explore, Search and Product Details use.
+  void _onLikesChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    LikedProducts.instance
+      ..start()
+      ..addListener(_onLikesChanged);
+  }
+
+  @override
+  void dispose() {
+    LikedProducts.instance.removeListener(_onLikesChanged);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Farmer Profile'),
         backgroundColor: Colors.white,
+        surfaceTintColor: Colors.white,
         foregroundColor: _green,
-        elevation: 1,
+        elevation: 0,
       ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance
-            .collection('publicProfiles')
-            .doc(farmerId)
-            .snapshots(),
+        stream: _profile,
         builder: (context, profileSnap) {
           if (profileSnap.connectionState == ConnectionState.waiting) {
             return const Center(
               child: CircularProgressIndicator(color: _green),
             );
           }
-          if (profileSnap.hasError || !profileSnap.data!.exists) {
+          final profile = profileSnap.data?.data();
+          if (profileSnap.hasError || profile == null) {
             return const Center(child: Text('Farmer profile is unavailable.'));
           }
-          final profile = profileSnap.data!.data()!;
-          final name = (profile['name'] ?? profile['fullName'] ?? 'Farmer')
-              .toString();
-          final photoUrl = profile['photoUrl']?.toString() ?? '';
-          final barangay = profile['barangay']?.toString() ?? '';
 
           return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
             children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 30,
-                    backgroundColor: const Color(0xFFDCEDC8),
-                    backgroundImage: photoUrl.isNotEmpty
-                        ? NetworkImage(photoUrl)
-                        : null,
-                    child: photoUrl.isEmpty
-                        ? const Icon(Icons.person, color: _green, size: 32)
-                        : null,
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          name,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        if (barangay.isNotEmpty)
-                          Text(
-                            barangay,
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 13,
-                            ),
-                          ),
-                        if (profile['approvalStatus'] == 'approved')
-                          const Text(
-                            'Verified farmer',
-                            style: TextStyle(
-                              color: _green,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 22),
-              const Text(
-                'Products',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('products')
-                    .where('farmerId', isEqualTo: farmerId)
-                    .snapshots(),
-                builder: (context, productSnap) {
-                  if (productSnap.connectionState == ConnectionState.waiting) {
-                    return const Padding(
-                      padding: EdgeInsets.all(20),
-                      child: Center(
-                        child: CircularProgressIndicator(color: _green),
-                      ),
-                    );
-                  }
-                  final products = (productSnap.data?.docs ?? const [])
-                      .where(
-                        (doc) =>
-                            doc.data()['isArchived'] != true &&
-                            doc.data()['isSuspended'] != true,
-                      )
-                      .toList();
-                  if (productSnap.hasError) {
-                    return const Text('Could not load this farmer’s products.');
-                  }
-                  if (products.isEmpty) {
-                    return const Text('No active products right now.');
-                  }
-                  return Column(
-                    children: products.map((doc) {
-                      final data = doc.data();
-                      final productName = (data['name'] ?? 'Product')
-                          .toString();
-                      final image = (data['imageUrl'] ?? '').toString();
-                      final price =
-                          (data['retailPrice'] as num?) ??
-                          (data['price'] as num?) ??
-                          0;
-                      final unit =
-                          (data['unit'] ?? unitForProductName(productName))
-                              .toString();
-                      final rating = (data['rating'] as num?)?.toDouble();
-                      final reviews =
-                          (data['reviewCount'] as num?)?.toInt() ?? 0;
-                      return Card(
-                        clipBehavior: Clip.antiAlias,
-                        margin: const EdgeInsets.only(bottom: 10),
-                        child: ListTile(
-                          leading: image.isEmpty
-                              ? const CircleAvatar(
-                                  child: Icon(Icons.eco_outlined),
-                                )
-                              : ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.network(
-                                    image,
-                                    width: 52,
-                                    height: 52,
-                                    fit: BoxFit.cover,
-                                  ),
-                                ),
-                          title: Text(
-                            productName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Text(
-                            '${formatPriceWithUnit(price, unit)}${rating != null && reviews > 0 ? ' · ${rating.toStringAsFixed(1)} ★ ($reviews)' : ''}',
-                          ),
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => ProductDetailScreen(
-                                productId: doc.id,
-                                data: data,
-                              ),
-                            ),
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  );
-                },
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Buyer Reviews',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 10),
-              StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('productReviews')
-                    .where('sellerId', isEqualTo: farmerId)
-                    .snapshots(),
-                builder: (context, reviewSnap) {
-                  if (reviewSnap.connectionState == ConnectionState.waiting) {
-                    return const Center(
-                      child: CircularProgressIndicator(color: _green),
-                    );
-                  }
-                  if (reviewSnap.hasError) {
-                    return const Text('Could not load buyer reviews.');
-                  }
-                  final reviews = (reviewSnap.data?.docs ?? const [])
-                      .where(
-                        (doc) => doc.data()['moderationStatus'] != 'removed',
-                      )
-                      .toList();
-                  if (reviews.isEmpty) {
-                    return const Text('No buyer reviews yet.');
-                  }
-                  return Column(
-                    children: reviews.map((doc) {
-                      final review = doc.data();
-                      final stars = (review['rating'] as num?)?.toDouble() ?? 0;
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(
-                          (review['productName'] ?? 'Product').toString(),
-                        ),
-                        subtitle: Text(
-                          (review['comment'] ?? 'Rated by buyer').toString(),
-                        ),
-                        trailing: Text(
-                          '${stars.toStringAsFixed(1)} ★',
-                          style: const TextStyle(
-                            color: _green,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  );
-                },
-              ),
+              _header(profile),
+              const SizedBox(height: 20),
+              Divider(height: 1, color: Colors.grey[200]),
+              const SizedBox(height: 16),
+              _productsSection(),
             ],
           );
         },
       ),
+    );
+  }
+
+  Widget _header(Map<String, dynamic> profile) {
+    final name = (profile['name'] ?? profile['fullName'] ?? 'Farmer')
+        .toString();
+    // General area only — the public profile never holds an exact location.
+    final location = [profile['barangay'], profile['municipality']]
+        .map((v) => (v ?? '').toString().trim())
+        .where((v) => v.isNotEmpty)
+        .join(', ');
+    final bio = (profile['bio'] ?? '').toString().trim();
+    final verified = profile['approvalStatus'] == 'approved';
+
+    return Column(
+      children: [
+        ProfileAvatar(
+          photoUrl: profile['photoUrl']?.toString(),
+          name: name,
+          radius: 46,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          name,
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: AppTheme.heading(22),
+        ),
+        if (location.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.place_outlined, size: 15, color: Colors.grey[600]),
+              const SizedBox(width: 3),
+              Flexible(
+                child: Text(
+                  location,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[700],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (verified) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFE8F5E9),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.verified_rounded, size: 15, color: _green),
+                SizedBox(width: 5),
+                Text(
+                  'Verified Farmer',
+                  style: TextStyle(
+                    color: _green,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (bio.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          Text(
+            bio,
+            textAlign: TextAlign.center,
+            maxLines: 4,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.45,
+              color: Colors.grey[700],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _productsSection() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _products,
+      builder: (context, productSnap) {
+        if (productSnap.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.all(20),
+            child: Center(child: CircularProgressIndicator(color: _green)),
+          );
+        }
+        if (productSnap.hasError) {
+          return _note('Could not load this farmer’s products.');
+        }
+        final products = (productSnap.data?.docs ?? const [])
+            .where(
+              (doc) =>
+                  doc.data()['isArchived'] != true &&
+                  doc.data()['isSuspended'] != true,
+            )
+            .toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Products (${products.length})', style: AppTheme.heading(17)),
+            const SizedBox(height: 12),
+            if (products.isEmpty)
+              _note('No active products right now.')
+            else
+              _grid(products),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _note(String text) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Text(text, style: TextStyle(fontSize: 13, color: Colors.grey[600])),
+  );
+
+  Widget _grid(List<QueryDocumentSnapshot<Map<String, dynamic>>> products) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final cardWidth = (constraints.maxWidth - spacing) / 2;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: products.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            mainAxisExtent: ExploreProductCard.extentFor(
+              cardWidth,
+              MediaQuery.textScalerOf(context),
+              showFarmer: false,
+            ),
+          ),
+          itemBuilder: (context, index) {
+            final doc = products[index];
+            final data = doc.data();
+            return ExploreProductCard(
+              data: data,
+              // Every card here is this farmer's — no need to repeat it.
+              showFarmer: false,
+              saved: LikedProducts.instance.contains(doc.id),
+              onToggleSave: LikedProducts.instance.canLike
+                  ? () => toggleLikedProduct(context, doc.id)
+                  : null,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      ProductDetailScreen(productId: doc.id, data: data),
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

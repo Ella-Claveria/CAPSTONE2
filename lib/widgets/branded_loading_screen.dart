@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 
 /// The very first thing Flutter draws after the native splash hands off —
@@ -21,8 +22,15 @@ class BrandedLoadingScreen extends StatelessWidget {
             errorBuilder: (context, error, stackTrace) => Container(
               width: 120,
               height: 120,
-              decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-              child: const Icon(Icons.agriculture, size: 60, color: Color(0xFF2E7D32)),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.agriculture,
+                size: 60,
+                color: AppTheme.dark,
+              ),
             ),
           ),
         ),

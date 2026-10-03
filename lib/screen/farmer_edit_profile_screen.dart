@@ -1,6 +1,8 @@
+import '../theme/app_theme.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import '../widgets/agri_dialog.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,6 +10,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../services/cloudinary_service.dart';
+import '../services/ph_mobile.dart';
 import 'set_farm_location_screen.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -18,12 +21,13 @@ class EditProfileScreen extends StatefulWidget {
 }
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _accent = Color(0xFFDCEDC8);
   static const Color _fieldBorder = Color(0xFFDCEDC8);
 
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _recoveryEmailController = TextEditingController();
   final _phoneController = TextEditingController();
   final _locationController = TextEditingController();
 
@@ -38,6 +42,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   bool _loading = false;
   bool _initialLoading = true;
+  bool _recoveryEmailVerified = false;
 
   User? get _user => FirebaseAuth.instance.currentUser;
 
@@ -53,7 +58,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _emailController.text = user?.email ?? '';
 
     if (user != null) {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .get();
       final data = doc.data();
       // Exact coordinates live under users/{uid}/private/geo, not on the
       // main doc just read above — only this account (the owner) or an
@@ -68,7 +76,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       _latitude = (geo?['latitude'] as num?)?.toDouble();
       _longitude = (geo?['longitude'] as num?)?.toDouble();
       if (data != null) {
-        _phoneController.text = data['phone']?.toString() ?? '';
+        // Registration saves 'mobileNumber'; this screen used to save
+        // 'phone'. Either is read, in whatever format it was stored, and
+        // shown as the 10 digits after +63.
+        _phoneController.text = phMobileLocalDigits(
+          (data['mobileNumber'] ?? data['phone'])?.toString(),
+        );
+        _recoveryEmailController.text =
+            data['recoveryEmail']?.toString() ?? user.email ?? '';
+        _recoveryEmailVerified =
+            data['recoveryEmailVerified'] == true ||
+            _recoveryEmailController.text == user.email &&
+                user.emailVerified == true;
         _photoUrl = data['photoUrl']?.toString();
         _role = data['role']?.toString();
         // Combine barangay/municipality/province into one display string,
@@ -91,6 +110,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _recoveryEmailController.dispose();
     _phoneController.dispose();
     _locationController.dispose();
     super.dispose();
@@ -98,11 +118,23 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   Future<void> _save() async {
     final name = _nameController.text.trim();
-    final phone = _phoneController.text.trim();
+    final phoneDigits = _phoneController.text.trim();
+    // Always stored as +639XXXXXXXXX (empty if the user cleared it).
+    final phone = phMobileE164(phoneDigits);
     final location = _locationController.text.trim();
+    final recoveryEmail = _recoveryEmailController.text.trim();
 
+    if (phoneDigits.isNotEmpty && !isValidPhMobile(phoneDigits)) {
+      _showMessage(kPhMobileInvalidMessage);
+      return;
+    }
     if (name.isEmpty) {
       _showMessage('Please enter your full name.');
+      return;
+    }
+    if (recoveryEmail.isNotEmpty &&
+        !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(recoveryEmail)) {
+      _showMessage('Please enter a valid recovery email.');
       return;
     }
 
@@ -110,16 +142,38 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       final user = _user;
       if (user != null) {
-        final updateData = {
+        final Map<String, dynamic> updateData = {
           'name': name,
+          'fullName': name,
+          // Both names, so every reader sees the same number: 'mobileNumber'
+          // (Registration, Place Order) and 'phone' (the admin views).
           'phone': phone,
+          'mobileNumber': phone,
           'location': location, // simple combined string; split into
           // barangay/municipality/province fields instead if your
           // schema needs them separately.
         };
 
+        final previousRecoveryEmail =
+            (await FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(user.uid)
+                    .get())
+                .data()?['recoveryEmail']
+                ?.toString();
+        final recoveryChanged =
+            recoveryEmail.isNotEmpty &&
+            recoveryEmail != (previousRecoveryEmail ?? user.email);
+        if (recoveryChanged) {
+          await user.verifyBeforeUpdateEmail(recoveryEmail);
+          updateData['recoveryEmail'] = recoveryEmail;
+          updateData['recoveryEmailVerified'] = false;
+        }
+
         if (_pickedPhoto != null) {
-          final uploadedUrl = await _cloudinaryService.uploadImage(_pickedPhoto!);
+          final uploadedUrl = await _cloudinaryService.uploadImage(
+            _pickedPhoto!,
+          );
           if (uploadedUrl == null || uploadedUrl.isEmpty) {
             throw Exception('Could not upload profile photo.');
           }
@@ -132,11 +186,25 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           await user.updateDisplayName(name);
         }
 
-        await FirebaseFirestore.instance.collection('users').doc(user.uid).set(updateData, SetOptions(merge: true));
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .set(updateData, SetOptions(merge: true));
       }
       if (!mounted) return;
-      _showMessage('Profile updated!');
+      _showMessage(
+        recoveryEmail.isNotEmpty && !_recoveryEmailVerified
+            ? 'Profile updated. Check your recovery email to verify it.'
+            : 'Profile updated!',
+      );
       Navigator.pop(context);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      _showMessage(
+        e.code == 'requires-recent-login'
+            ? 'Please log in again before changing your recovery email.'
+            : 'Could not verify that recovery email. Please try again.',
+      );
     } catch (e) {
       if (!mounted) return;
       _showMessage('Could not save changes. Please try again.');
@@ -151,50 +219,34 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         backgroundColor: _dark,
-        content: Text(message, style: GoogleFonts.montserrat(color: Colors.white)),
+        content: Text(
+          message,
+          style: GoogleFonts.montserrat(color: Colors.white),
+        ),
       ),
     );
   }
 
   Future<ImageSource?> _showImageSourceSheet() async {
-    return showModalBottomSheet<ImageSource>(
+    return showAgriSheet<ImageSource>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return SafeArea(
-          child: Container(
-            margin: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 8),
-                Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.black12, borderRadius: BorderRadius.circular(2))),
-                const SizedBox(height: 12),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Choose Photo', style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black87)),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                ListTile(
-                  leading: const Icon(Icons.photo_camera_outlined, color: _dark),
-                  title: Text('Take Photo', style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, fontSize: 14)),
-                  onTap: () => Navigator.pop(context, ImageSource.camera),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.photo_library_outlined, color: _dark),
-                  title: Text('Choose from Gallery', style: GoogleFonts.montserrat(fontWeight: FontWeight.w600, fontSize: 14)),
-                  onTap: () => Navigator.pop(context, ImageSource.gallery),
-                ),
-                const SizedBox(height: 8),
-              ],
-            ),
+      title: 'Choose Photo',
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AgriSheetAction(
+            icon: Icons.photo_camera_outlined,
+            label: 'Take Photo',
+            onTap: () => Navigator.pop(context, ImageSource.camera),
           ),
-        );
-      },
+          AgriSheetAction(
+            icon: Icons.photo_library_outlined,
+            label: 'Choose from Gallery',
+            onTap: () => Navigator.pop(context, ImageSource.gallery),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
     );
   }
 
@@ -202,19 +254,27 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final source = await _showImageSourceSheet();
     if (source == null) return;
 
-    final picked = await _imagePicker.pickImage(source: source, maxWidth: 1000, imageQuality: 70);
+    final picked = await _imagePicker.pickImage(
+      source: source,
+      maxWidth: 1000,
+      imageQuality: 70,
+    );
     if (picked == null || !mounted) return;
 
     setState(() => _pickedPhoto = picked);
   }
 
-  void showComingSoon(String feature) => _showMessage('$feature — coming soon.');
+  void showComingSoon(String feature) =>
+      _showMessage('$feature — coming soon.');
 
   Future<void> _openLocationPicker() async {
     final picked = await Navigator.push<LatLng>(
       context,
       MaterialPageRoute(
-        builder: (_) => SetFarmLocationScreen(initialLat: _latitude, initialLng: _longitude),
+        builder: (_) => SetFarmLocationScreen(
+          initialLat: _latitude,
+          initialLng: _longitude,
+        ),
       ),
     );
     if (picked == null || !mounted) return;
@@ -236,29 +296,46 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       ),
       child: Row(
         children: [
-          Icon(hasLocation ? Icons.location_on : Icons.location_off_outlined,
-              color: _dark, size: 22),
+          Icon(
+            hasLocation ? Icons.location_on : Icons.location_off_outlined,
+            color: _dark,
+            size: 22,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Farm Location',
-                    style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 13.5)),
+                Text(
+                  'Farm Location',
+                  style: GoogleFonts.montserrat(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13.5,
+                  ),
+                ),
                 const SizedBox(height: 2),
                 Text(
                   hasLocation
                       ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
                       : 'Not pinned yet — buyers and admin can\'t see your farm on the map.',
-                  style: GoogleFonts.montserrat(fontSize: 11.5, color: Colors.grey[600]),
+                  style: GoogleFonts.montserrat(
+                    fontSize: 11.5,
+                    color: Colors.grey[600],
+                  ),
                 ),
               ],
             ),
           ),
           TextButton(
             onPressed: _openLocationPicker,
-            child: Text(hasLocation ? 'Update' : 'Set on Map',
-                style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 12.5, color: _dark)),
+            child: Text(
+              hasLocation ? 'Update' : 'Set on Map',
+              style: GoogleFonts.montserrat(
+                fontWeight: FontWeight.bold,
+                fontSize: 12.5,
+                color: _dark,
+              ),
+            ),
           ),
         ],
       ),
@@ -271,18 +348,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       filled: true,
       fillColor: Colors.white,
       contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: _fieldBorder, width: 1.2)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: _fieldBorder, width: 1.2)),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: _dark, width: 1.6)),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _fieldBorder, width: 1.2),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _fieldBorder, width: 1.2),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _dark, width: 1.6),
+      ),
     );
   }
 
   Widget _fieldLabel(String text) {
     return Padding(
       padding: const EdgeInsets.only(left: 4, bottom: 6),
-      child: Text(text,
-          style: GoogleFonts.montserrat(
-              fontSize: 11.5, fontWeight: FontWeight.w600, color: Colors.grey[600], letterSpacing: 0.5)),
+      child: Text(
+        text,
+        style: GoogleFonts.montserrat(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: Colors.grey[600],
+          letterSpacing: 0.5,
+        ),
+      ),
     );
   }
 
@@ -307,7 +399,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                 radius: 46,
                 backgroundColor: _accent,
                 backgroundImage: imageProvider,
-                child: imageProvider == null ? const Icon(Icons.person, color: _dark, size: 52) : null,
+                child: imageProvider == null
+                    ? const Icon(Icons.person, color: _dark, size: 52)
+                    : null,
               ),
               Positioned(
                 bottom: -2,
@@ -321,7 +415,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white, width: 2),
                     ),
-                    child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+                    child: const Icon(
+                      Icons.camera_alt,
+                      color: Colors.white,
+                      size: 14,
+                    ),
                   ),
                 ),
               ),
@@ -331,8 +429,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         const SizedBox(height: 8),
         GestureDetector(
           onTap: _pickProfilePhoto,
-          child: Text('Change Photo',
-              style: GoogleFonts.montserrat(fontSize: 12.5, fontWeight: FontWeight.w600, color: _dark)),
+          child: Text(
+            'Change Photo',
+            style: GoogleFonts.montserrat(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: _dark,
+            ),
+          ),
         ),
       ],
     );
@@ -347,8 +451,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         elevation: 0,
         foregroundColor: Colors.black87,
         centerTitle: true,
-        title: Text('Edit Profile',
-            style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 17, color: Colors.black87)),
+        title: Text(
+          'Edit Profile',
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+            color: Colors.black87,
+          ),
+        ),
       ),
       body: _initialLoading
           ? const Center(child: CircularProgressIndicator(color: _dark))
@@ -371,9 +481,32 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   _fieldLabel('EMAIL ADDRESS'),
                   TextField(
                     controller: _emailController,
-                    enabled: false, // email changes need re-auth; edit elsewhere if needed
-                    style: GoogleFonts.montserrat(fontSize: 14, color: Colors.black54),
+                    enabled:
+                        false, // email changes need re-auth; edit elsewhere if needed
+                    style: GoogleFonts.montserrat(
+                      fontSize: 14,
+                      color: Colors.black54,
+                    ),
                     decoration: _fieldDecoration(Icons.mail_outline),
+                  ),
+                  const SizedBox(height: 14),
+
+                  _fieldLabel('RECOVERY EMAIL'),
+                  TextField(
+                    controller: _recoveryEmailController,
+                    keyboardType: TextInputType.emailAddress,
+                    style: GoogleFonts.montserrat(fontSize: 14),
+                    decoration: _fieldDecoration(Icons.security_outlined).copyWith(
+                      helperText: _recoveryEmailVerified
+                          ? 'Verified'
+                          : 'A verification link will be sent when you change it.',
+                      helperStyle: TextStyle(
+                        color: _recoveryEmailVerified
+                            ? _dark
+                            : Colors.grey[600],
+                        fontSize: 11,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 14),
 
@@ -381,8 +514,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   TextField(
                     controller: _phoneController,
                     keyboardType: TextInputType.phone,
+                    inputFormatters: kPhMobileInputFormatters,
                     style: GoogleFonts.montserrat(fontSize: 14),
-                    decoration: _fieldDecoration(Icons.call_outlined),
+                    decoration: _fieldDecoration(Icons.call_outlined).copyWith(
+                      // Fixed, not editable: only the 10 digits after it are.
+                      prefixText: kPhMobilePrefix,
+                      prefixStyle: GoogleFonts.montserrat(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppTheme.dark,
+                      ),
+                      hintText: kPhMobileHint,
+                    ),
                   ),
                   const SizedBox(height: 14),
 
@@ -406,12 +549,27 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       disabledBackgroundColor: Colors.grey.shade400,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
                       elevation: 0,
                     ),
                     child: _loading
-                        ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                        : Text('Save Changes', style: GoogleFonts.montserrat(fontSize: 15, fontWeight: FontWeight.bold)),
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Text(
+                            'Save Changes',
+                            style: GoogleFonts.montserrat(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                   ),
                 ],
               ),

@@ -5,8 +5,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'push_notification_service.dart';
 import '../widgets/permission_rationale_dialog.dart';
 
-/// Offers notification access once, immediately after an existing user logs
-/// in on this device. Registration and email verification never call this.
+/// Offers notification access once per device, the first time a user reaches
+/// their own home screen (FarmerHomeScreen / BuyerMarketplaceScreen) — so
+/// only after login, email verification and, for farmers, admin approval.
+/// Nothing on the way there (login, registration, the email code screen,
+/// the loading/auth checks, the pending-approval screen) calls this.
+///
+/// "Not Now" closes it without asking the OS for anything; the Notifications
+/// screen offers the same choice again whenever the user wants it.
 class NotificationPermissionPrompt {
   NotificationPermissionPrompt._();
   static final instance = NotificationPermissionPrompt._();
@@ -15,14 +21,12 @@ class NotificationPermissionPrompt {
 
   bool _handling = false;
 
-  Future<void> afterLogin(BuildContext context) async {
+  Future<void> onEnteredApp(BuildContext context) async {
     if (_handling) return;
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    // Wait until the account is actually verified (email verification for
-    // password sign-up, automatic for Google) — otherwise this could fire
-    // while the user is still stuck on EmailVerificationScreen, before
-    // they've "successfully logged in" in the sense item 16 means.
+    // The home screens are only reachable once verified; this is a second
+    // guard, not the thing that decides the timing.
     if (!user.emailVerified) return;
 
     _handling = true;
@@ -49,7 +53,8 @@ class NotificationPermissionPrompt {
         context,
         icon: Icons.notifications_active_outlined,
         title: 'Stay Updated with AgriTrade+',
-        message: 'Payagan ang notifications para makatanggap ka ng updates tungkol sa orders, messages, verification status, delivery o pick-up, warnings, at ibang importanteng marketplace activities.',
+        message:
+            'Allow notifications to receive important updates about orders, messages, verification status, delivery or pickup, warnings, and other marketplace activities.',
         denyLabel: 'Not Now',
         allowLabel: 'Enable Notifications',
       );

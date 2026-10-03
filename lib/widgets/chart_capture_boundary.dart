@@ -13,12 +13,19 @@ class ChartCaptureBoundary extends StatelessWidget {
   final GlobalKey captureKey;
   final Widget child;
 
-  const ChartCaptureBoundary({super.key, required this.captureKey, required this.child});
+  const ChartCaptureBoundary({
+    super.key,
+    required this.captureKey,
+    required this.child,
+  });
 
   /// Renders [key]'s subtree to a PNG. Returns null if the key isn't
   /// currently attached to a live RenderRepaintBoundary (e.g. the chart
   /// was never scrolled into view, or has no data and rendered nothing).
-  static Future<Uint8List?> captureFrom(GlobalKey key, {double pixelRatio = 2.0}) async {
+  static Future<Uint8List?> captureFrom(
+    GlobalKey key, {
+    double pixelRatio = 2.0,
+  }) async {
     final boundary = key.currentContext?.findRenderObject();
     if (boundary is! RenderRepaintBoundary) return null;
     final image = await boundary.toImage(pixelRatio: pixelRatio);

@@ -39,7 +39,9 @@ exports.syncPublicProfile = onDocumentWritten("users/{uid}", async (event) => {
   const publicProfile = {};
   for (const key of ["role", "name", "fullName", "photoUrl", "barangay", "municipality", "province", "approvalStatus", "rating", "reviewCount"]) {
     const value = data[key];
-    if (typeof value === "string" && value.length <= 200) publicProfile[key] = value;
+    // Photo URLs (Google account photos especially) can run well past 200.
+    const maxLength = key === "photoUrl" ? 2000 : 200;
+    if (typeof value === "string" && value.length <= maxLength) publicProfile[key] = value;
     else if ((key === "rating" || key === "reviewCount") && typeof value === "number" && Number.isFinite(value)) {
       publicProfile[key] = value;
     }
@@ -145,6 +147,11 @@ exports.sendMessageNotification = onDocumentCreated(
     const message = event.data.data();
     const { conversationId } = event.params;
 
+    // A receipt card is announced by the "Order Completed" notification
+    // (notifyOrderStatusChange) — a second "New message" push for the same
+    // event would just be noise.
+    if (message.type === "receipt") return;
+
     const convSnap = await db.collection("conversations").doc(conversationId).get();
     if (!convSnap.exists) return;
     const conv = convSnap.data();
@@ -153,8 +160,13 @@ exports.sendMessageNotification = onDocumentCreated(
     const recipientId = participants.find((id) => id !== message.senderId);
     if (!recipientId) return;
 
+    const senderProfile = await db.collection("users").doc(message.senderId).get();
+    const senderData = senderProfile.exists ? senderProfile.data() : {};
     const senderName =
-      (conv.participantNames && conv.participantNames[message.senderId]) || "Someone";
+      senderData.name ||
+      senderData.fullName ||
+      (conv.participantNames && conv.participantNames[message.senderId]) ||
+      "Someone";
 
     await notifyUser(recipientId, {
       title: "New message",
@@ -231,6 +243,18 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
   }
   if (before.status === after.status) return;
 
+  // Record when the order reached this stage, for the Order Timeline on the
+  // details screen. The farmer's own write only carries status + updatedAt
+  // (completedAt is already stamped by the client), so the stage time is
+  // that same updatedAt. This second write doesn't change status, so the
+  // triggers on this document return early when it re-fires them.
+  const stageField = { confirmed: "confirmedAt", shipped: "shippedAt", rejected: "rejectedAt" }[after.status];
+  if (stageField && after[stageField] == null) {
+    await event.data.after.ref.update({
+      [stageField]: after.updatedAt || FieldValue.serverTimestamp(),
+    });
+  }
+
   const statusLabels = {
     confirmed: "confirmed",
     shipped: "shipped",
@@ -240,9 +264,15 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
   const label = statusLabels[after.status];
   if (!label) return;
 
+  // Completion also tells the buyer their receipt is ready (issued by
+  // issueOrderReceipt below from this same status change). Tapping it opens
+  // the order's details, where View Receipt is.
+  const completed = after.status === "completed";
   await notifyUser(after.buyerId, {
-    title: `Order ${label}`,
-    body: `Your order for ${after.productName || "a product"} was ${label}.`,
+    title: completed ? "Order Completed" : `Order ${label}`,
+    body: completed
+      ? `Your ${after.productName || "product"} order has been completed. Your transaction receipt is now available.`
+      : `Your order for ${after.productName || "a product"} was ${label}.`,
     type: "order_status",
     relatedId: event.params.orderId,
     data: { orderId: event.params.orderId, status: after.status },
@@ -362,10 +392,429 @@ exports.recordMarketSale = onDocumentUpdated("orders/{orderId}", async (event) =
       unit: (after.unit || "").toString().trim(),
       status: "completed",
       createdAt: after.updatedAt || FieldValue.serverTimestamp(),
+      ...(await marketSaleDemandFields(after)),
     },
     { merge: true }
   );
 });
+
+// What the Farmer Dashboard's Best-Selling Products / Top Buyer Locations
+// need on top of the basics above (see market_demand_service.dart): the
+// order type, the category, and the buyer's general area — municipality or
+// city only, never the buyer's identity, barangay or address.
+// (backfill_market_sales.js fills the same fields in for sales recorded
+// before these existed — keep the two in step.)
+async function marketSaleDemandFields(order) {
+  let buyerArea = "";
+  if (order.buyerId) {
+    const buyerSnap = await db.collection("users").doc(order.buyerId).get();
+    const municipality = buyerSnap.exists ? buyerSnap.data().municipality : null;
+    if (typeof municipality === "string") buyerArea = municipality.trim();
+  }
+  return {
+    pricingType: order.pricingType === "wholesale" ? "wholesale" : "retail",
+    category: (order.category || "").toString().trim(),
+    buyerArea,
+    completedAt: order.completedAt || order.updatedAt || FieldValue.serverTimestamp(),
+  };
+}
+
+// ---------------------------------------------------------------
+// Order completed -> issue its Transaction Receipt.
+//
+// 1. receipts/{orderId}: a frozen copy of the transaction values, taken
+//    from the order document (never from the product listing, whose price
+//    and stock can change later). Clients can read it but never write it
+//    (see firestore.rules), so neither side can edit an issued receipt.
+//    The app renders the PDF from this record.
+// 2. A 'receipt' message in the existing farmer–buyer conversation (created
+//    only if the two have never chatted), so both can open the receipt from
+//    Messages and the buyer gets Review Product.
+//
+// Idempotent: both documents have ids derived from the order id and are
+// only ever created, so retries can't duplicate or overwrite them.
+// ---------------------------------------------------------------
+
+// Mirrors orderDisplayId / receiptNumberFor in lib/services/order_format.dart
+// — the year is taken in Philippine time on both sides.
+function orderCode(orderId, createdAt) {
+  const code = orderId.replace(/[^A-Za-z0-9]/g, "").slice(0, 6).toUpperCase();
+  const ms = createdAt && typeof createdAt.toMillis === "function" ? createdAt.toMillis() : Date.now();
+  const year = new Date(ms + 8 * 60 * 60 * 1000).getUTCFullYear();
+  return `${year}-${code}`;
+}
+
+function isAlreadyExists(err) {
+  return err && (err.code === 6 || err.code === "already-exists");
+}
+
+exports.issueOrderReceipt = onDocumentUpdated("orders/{orderId}", async (event) => {
+  const before = event.data.before.data();
+  const order = event.data.after.data();
+  if (before.status === "completed" || order.status !== "completed") return;
+  if (!order.sellerId || !order.buyerId) return;
+
+  const { orderId } = event.params;
+  const code = orderCode(orderId, order.createdAt);
+  const orderDisplayId = `AGR-${code}`;
+  const receiptNumber = `RCT-${code}`;
+
+  const subtotal = typeof order.subtotal === "number" ? order.subtotal : Number(order.total) || 0;
+  const isDelivery = order.deliveryMethod === "delivery";
+  const deliveryFee = isDelivery && typeof order.deliveryFee === "number" ? order.deliveryFee : null;
+  // Unknown when the delivery fee was arranged outside the order.
+  const total = isDelivery && deliveryFee == null
+    ? null
+    : (typeof order.grandTotal === "number" ? order.grandTotal : subtotal + (deliveryFee || 0));
+
+  // General area only (barangay, municipality) — never an exact address.
+  const sellerSnap = await db.collection("users").doc(order.sellerId).get();
+  const seller = sellerSnap.exists ? sellerSnap.data() : {};
+  const sellerArea = [seller.barangay, seller.municipality]
+    .filter((v) => typeof v === "string" && v.trim())
+    .join(", ");
+
+  const pick = (key) => (order[key] === undefined ? null : order[key]);
+  try {
+    await db.collection("receipts").doc(orderId).create({
+      receiptNumber,
+      orderDisplayId,
+      orderId,
+      status: "completed",
+      generatedAt: FieldValue.serverTimestamp(),
+      sellerId: order.sellerId,
+      sellerName: order.sellerName || "Farmer",
+      sellerArea,
+      buyerId: order.buyerId,
+      buyerName: order.buyerName || "Buyer",
+      productId: pick("productId"),
+      productName: order.productName || "Product",
+      pricingType: order.pricingType || "retail",
+      quantity: pick("quantity"),
+      unit: order.unit || "",
+      quantityLabel: pick("quantityLabel"),
+      pricePerUnit: order.pricePerUnit ?? order.unitPrice ?? null,
+      subtotal,
+      deliveryMethod: order.deliveryMethod || "",
+      deliveryArrangement: pick("deliveryArrangement"),
+      deliveryFee,
+      grandTotal: total,
+      createdAt: pick("createdAt"),
+      confirmedAt: pick("confirmedAt"),
+      shippedAt: pick("shippedAt"),
+      completedAt: order.completedAt || order.updatedAt || FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    if (!isAlreadyExists(err)) throw err;
+  }
+
+  const conversationId = [order.sellerId, order.buyerId].sort().join("_");
+  const convRef = db.collection("conversations").doc(conversationId);
+  const msgRef = convRef.collection("messages").doc(`receipt_${orderId}`);
+  try {
+    await msgRef.create({
+      senderId: order.sellerId,
+      type: "receipt",
+      orderId,
+      orderDisplayId,
+      receiptNumber,
+      productId: pick("productId"),
+      productName: order.productName || "Product",
+      subtotal,
+      total,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    if (isAlreadyExists(err)) return; // Already in the conversation.
+    throw err;
+  }
+
+  const preview = {
+    lastMessage: `Transaction receipt · Order #${orderDisplayId}`,
+    lastMessageTime: FieldValue.serverTimestamp(),
+    lastSenderId: order.sellerId,
+    unreadCount: { [order.buyerId]: FieldValue.increment(1) },
+    // Real content: this is what puts the thread in both Messages lists
+    // (see MessageService.hasMessageActivity).
+    hasMessages: true,
+  };
+  const convSnap = await convRef.get();
+  if (convSnap.exists) {
+    await convRef.set(preview, { merge: true });
+  } else {
+    await convRef.set({
+      participants: [order.buyerId, order.sellerId],
+      participantNames: {
+        [order.buyerId]: order.buyerName || "Buyer",
+        [order.sellerId]: order.sellerName || "Farmer",
+      },
+      farmerId: order.sellerId,
+      farmerName: order.sellerName || "Farmer",
+      productId: pick("productId"),
+      productName: order.productName || "Product",
+      productImageUrl: order.imageUrl || "",
+      farmerImage: order.imageUrl || "",
+      ...preview,
+    });
+  }
+});
+
+// Account emails (verification, password reset, new-device alert) are sent
+// through Gmail SMTP — see account_emails.js and mailer.js.
+Object.assign(exports, require("./account_emails"));
+
+// 6-digit email verification code for email/password sign-ups — see
+// email_otp.js.
+Object.assign(exports, require("./email_otp"));
+
+// ---------------------------------------------------------------
+// Order delay / reschedule (see OrderService.reportDelay and friends).
+//
+// A confirmed order the farmer cannot fulfil on time is not failed or
+// re-created: the farmer reports a delay with a reason and a proposed new
+// date, and the buyer accepts it or cancels. Same order id throughout; no
+// penalty is recorded against either side for any reason given.
+//
+//   delay reported / updated  -> the buyer is told why, and the new date
+//   buyer accepted the date   -> the farmer is told
+//   buyer cancelled           -> the farmer is told, and the quantity the
+//                                order had reserved goes back to the
+//                                listing, exactly once (stockRestoredAt
+//                                marks it; a buyer cannot write a
+//                                product's stock, so it is done here)
+//
+// Nothing here runs on a date passing: a requested or proposed date is
+// never a deadline that changes an order by itself.
+// ---------------------------------------------------------------
+const DELAY_REASON_TEXT = {
+  weather: "weather conditions",
+  transport: "a road or transportation issue",
+  supply: "a harvest or supply delay",
+  other: "an unexpected delay",
+};
+
+function formatManilaDate(timestamp) {
+  if (!timestamp || typeof timestamp.toDate !== "function") return null;
+  return timestamp.toDate().toLocaleDateString("en-US", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+exports.handleOrderReschedule = onDocumentUpdated("orders/{orderId}", async (event) => {
+  const before = event.data.before.data();
+  const after = event.data.after.data();
+  const orderId = event.params.orderId;
+  const product = after.productName || "product";
+  const delayBefore = before.delay || {};
+  const delayAfter = after.delay || {};
+
+  // ---- Buyer cancelled ----
+  if (before.status !== "cancelled" && after.status === "cancelled") {
+    const orderRef = event.data.after.ref;
+    await db.runTransaction(async (tx) => {
+      const order = (await tx.get(orderRef)).data();
+      if (!order || order.status !== "cancelled" || order.stockRestoredAt) return;
+      const quantity = typeof order.quantity === "number" ? order.quantity : Number(order.quantity) || 0;
+      if (order.productId && quantity > 0) {
+        const productRef = db.collection("products").doc(order.productId);
+        const productSnap = await tx.get(productRef);
+        if (productSnap.exists) {
+          const current = Number(productSnap.data().quantity) || 0;
+          tx.update(productRef, { quantity: current + quantity });
+        }
+      }
+      tx.update(orderRef, { stockRestoredAt: FieldValue.serverTimestamp() });
+    });
+
+    if (after.sellerId) {
+      await notifyUser(after.sellerId, {
+        title: "Order Cancelled",
+        body: `${after.buyerName || "The buyer"} cancelled the ${product} order after the delay. The quantity has been returned to your listing.`,
+        type: "order_status",
+        relatedId: orderId,
+        data: { orderId, status: "cancelled" },
+        dedupeId: `${event.id}-cancelled`,
+      });
+    }
+    return;
+  }
+
+  if (after.status !== "confirmed") return;
+
+  // ---- Farmer reported (or updated) a delay ----
+  const reportedBefore = delayBefore.reportedAt ? delayBefore.reportedAt.toMillis() : 0;
+  const reportedAfter = delayAfter.reportedAt ? delayAfter.reportedAt.toMillis() : 0;
+  if (delayAfter.status === "proposed" && reportedAfter && reportedAfter !== reportedBefore) {
+    const reason = DELAY_REASON_TEXT[delayAfter.reason] || DELAY_REASON_TEXT.other;
+    const date = formatManilaDate(delayAfter.proposedDate);
+    await notifyUser(after.buyerId, {
+      title: "Order Delayed",
+      body:
+        `Your ${product} order has been delayed due to ${reason}. ` +
+        `${after.sellerName || "The farmer"} proposed a new fulfillment date` +
+        `${date ? `: ${date}` : ""}.`,
+      type: "order_status",
+      relatedId: orderId,
+      data: { orderId, status: "delayed" },
+      dedupeId: `${event.id}-delay`,
+    });
+    return;
+  }
+
+  // ---- Buyer accepted the proposed date ----
+  if (delayBefore.status === "proposed" && delayAfter.status === "accepted" && after.sellerId) {
+    const date = formatManilaDate(after.confirmedFulfillmentDate);
+    await notifyUser(after.sellerId, {
+      title: "New Date Accepted",
+      body: `${after.buyerName || "The buyer"} accepted the new date${date ? ` (${date})` : ""} for the ${product} order.`,
+      type: "order_status",
+      relatedId: orderId,
+      data: { orderId, status: "confirmed" },
+      dedupeId: `${event.id}-accepted`,
+    });
+  }
+});
+
+// ---------------------------------------------------------------
+// Completed sales per product: products/{productId}.completedOrderCount.
+//
+// A buyer cannot read other buyers' orders (firestore.rules), so the app
+// cannot count a product's completed orders itself — this keeps that one
+// number on the listing for Recommended Products and marketplace ranking
+// (see product_recommendation_service.dart).
+//
+// Only orders whose status is 'completed' are counted: pending, confirmed,
+// shipped and rejected orders never are. Counted afresh each time rather
+// than incremented, so a redelivered event cannot inflate it, and an order
+// that somehow left 'completed' would be dropped again. The field is not
+// among those a farmer may write.
+// ---------------------------------------------------------------
+async function recountCompletedOrders(productId) {
+  if (typeof productId !== "string" || !productId) return;
+  const snap = await db.collection("orders")
+    .where("productId", "==", productId)
+    .where("status", "==", "completed")
+    .count()
+    .get();
+  try {
+    await db.collection("products").doc(productId).update({
+      completedOrderCount: snap.data().count,
+    });
+  } catch (err) {
+    // The listing itself was deleted — nothing to keep a count on.
+    if (err.code !== 5) throw err;
+  }
+}
+
+exports.syncProductCompletedOrders = onDocumentWritten("orders/{orderId}", async (event) => {
+  const before = event.data.before.exists ? event.data.before.data() : null;
+  const after = event.data.after.exists ? event.data.after.data() : null;
+  const wasCompleted = !!before && before.status === "completed";
+  const isCompleted = !!after && after.status === "completed";
+  if (wasCompleted === isCompleted && (before && before.productId) === (after && after.productId)) return;
+
+  const productIds = new Set([before && before.productId, after && after.productId].filter(Boolean));
+  for (const productId of productIds) {
+    await recountCompletedOrders(productId);
+  }
+});
+
+// ---------------------------------------------------------------
+// Trending Searches: anonymous per-day counts of what buyers search for.
+//
+// The Buyer Search screen logs each committed search to searchEvents
+// (already normalized: lowercase, trimmed, single spaces). This folds every
+// new event into searchTrends/{sha1(term)}:
+//   { term, days: { 'YYYY-MM-DD': count }, updatedAt }
+// which is what the app reads for Trending Searches (see
+// lib/services/search_trends.dart). No buyer id is ever written there.
+//
+// One buyer counts once per term per day: searchTrendVotes holds a marker
+// per (day, term, buyer), created before counting, so repeated searches —
+// or a redelivered event — are not counted again. Clients have no access
+// to those markers (see firestore.rules).
+// ---------------------------------------------------------------
+const TREND_DAYS_KEPT = 30;
+
+function manilaDay(date) {
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+exports.aggregateSearchTrend = onDocumentCreated("searchEvents/{eventId}", async (event) => {
+  const data = event.data.data() || {};
+  const uid = typeof data.userId === "string" ? data.userId : "";
+  const term = (typeof data.query === "string" ? data.query : "")
+    .trim().toLowerCase().replace(/\s+/g, " ");
+  // Too short to mean anything, or too long to be a real search term.
+  if (!uid || term.length < 2 || term.length > 60) return;
+
+  const termId = require("crypto").createHash("sha1").update(term).digest("hex");
+  const now = new Date();
+  const day = manilaDay(now);
+
+  try {
+    await db.collection("searchTrendVotes").doc(`${day}_${termId}_${uid}`).create({
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  } catch (err) {
+    if (err.code === 6) return; // This buyer already counted for this term today.
+    throw err;
+  }
+
+  const oldestKept = manilaDay(new Date(now.getTime() - TREND_DAYS_KEPT * 24 * 60 * 60 * 1000));
+  const trendRef = db.collection("searchTrends").doc(termId);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(trendRef);
+    const previous = (snap.exists && snap.data().days) || {};
+    const days = {};
+    for (const [key, count] of Object.entries(previous)) {
+      if (key >= oldestKept) days[key] = count;
+    }
+    days[day] = (days[day] || 0) + 1;
+    tx.set(trendRef, { term, days, updatedAt: FieldValue.serverTimestamp() });
+  });
+});
+
+// ---------------------------------------------------------------
+// Saved Products: how many buyers have bookmarked each listing.
+//
+// A buyer saving a product writes users/{uid}/savedProducts/{productId}
+// (see saved_products_service.dart); removing it deletes that document.
+// This mirrors each save to products/{productId}/saves/{uid} and stores
+// the size of that subcollection as products/{productId}.saveCount — the
+// only thing the farmer ever sees ("12 saves").
+//
+// Counted, not incremented: one document per buyer means the same buyer
+// saving twice, or this event being delivered twice, cannot inflate the
+// number. Who saved stays private — firestore.rules gives clients no
+// access to the saves subcollection, and saveCount is not in the fields a
+// farmer may write.
+// ---------------------------------------------------------------
+exports.syncProductSaveCount = onDocumentWritten(
+  "users/{uid}/savedProducts/{productId}",
+  async (event) => {
+    const { uid, productId } = event.params;
+    const productRef = db.collection("products").doc(productId);
+    const saveRef = productRef.collection("saves").doc(uid);
+
+    if (event.data.after.exists) {
+      await saveRef.set({ savedAt: FieldValue.serverTimestamp() });
+    } else {
+      await saveRef.delete();
+    }
+
+    const count = (await productRef.collection("saves").count().get()).data().count;
+    try {
+      await productRef.update({ saveCount: count });
+    } catch (err) {
+      // The listing itself was deleted — nothing to count for.
+      if (err.code !== 5) throw err;
+    }
+  }
+);
 
 async function validCompletedReview(reviewDoc) {
   const review = reviewDoc.data();

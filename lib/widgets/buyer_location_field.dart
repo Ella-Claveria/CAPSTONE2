@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'buyer_location_picker.dart';
+import 'glow_tap_field.dart';
 import '../theme/app_theme.dart';
 
 /// Tap-to-open field backing the buyer location popup (see
@@ -32,22 +33,13 @@ class BuyerLocationField extends StatelessWidget {
       children: [
         Text(label, style: AppTheme.label()),
         const SizedBox(height: 8),
-        GestureDetector(
+        // The same pill field as Registration (see GlowField).
+        GlowTapField(
+          icon: Icons.location_on_outlined,
+          value: value?.readable,
+          hint: 'Tap to set your location',
+          trailing: Icons.chevron_right,
           onTap: () => _open(context),
-          child: InputDecorator(
-            decoration: AppTheme.inputBox(
-              hint: 'Tap to set your location',
-              icon: Icons.location_on_outlined,
-              suffix: const Icon(Icons.chevron_right, color: Colors.grey),
-            ),
-            isEmpty: value == null,
-            child: value != null
-                ? Text(
-                    value!.readable,
-                    style: const TextStyle(color: Colors.black87, fontSize: 14.5),
-                  )
-                : null,
-          ),
         ),
         if (errorText != null) ...[
           const SizedBox(height: 6),
@@ -57,7 +49,10 @@ class BuyerLocationField extends StatelessWidget {
               Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
               const SizedBox(width: 4),
               Expanded(
-                child: Text(errorText!, style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+                child: Text(
+                  errorText!,
+                  style: TextStyle(color: Colors.red.shade700, fontSize: 11),
+                ),
               ),
             ],
           ),

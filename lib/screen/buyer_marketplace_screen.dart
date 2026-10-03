@@ -1,9 +1,13 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/product_share_service.dart';
+import '../services/notification_permission_prompt.dart';
 import '../services/push_notification_service.dart';
 import 'role_selection_screen.dart';
+import '../widgets/agri_dialog.dart';
 import '../widgets/coach_mark.dart';
-import '../widgets/notification_bell.dart';
+import '../widgets/agri_header.dart';
 import '../widgets/unread_messages_dot.dart';
 import 'buyer_explore_screen.dart';
 import 'chat_list_screen.dart';
@@ -11,7 +15,6 @@ import 'buyer_orders_screen.dart';
 import 'buyer_profile_screen.dart';
 import 'notifications_screen.dart';
 import '../l10n/app_localizations.dart';
-import '../l10n/locale_controller.dart';
 
 // A one-shot "command channel", not persisted UI state — see the matching
 // comment on globalFarmerTabIndex in farmer_home_screen.dart.
@@ -27,7 +30,7 @@ class BuyerMarketplaceScreen extends StatefulWidget {
 }
 
 class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _bg = Colors.white;
 
   late int _navIndex;
@@ -43,8 +46,20 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     // If the app was launched (cold start) by tapping a push notification,
     // this replays that navigation now that routing has actually finished.
     PushNotificationService.consumePendingNavigation();
+    // Likewise for a shared product link that opened the app.
+    ProductLinkService.homeReady();
     globalMarketplaceIndex.addListener(_onGlobalIndexChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _showWalkthrough());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _onEnteredApp());
+  }
+
+  // Runs once this home screen is actually on screen — i.e. after login
+  // and email verification are behind the user. The notification rationale
+  // waits for the first-time walkthrough so the two never appear on top of
+  // each other.
+  Future<void> _onEnteredApp() async {
+    await _showWalkthrough();
+    if (!mounted) return;
+    await NotificationPermissionPrompt.instance.onEnteredApp(context);
   }
 
   void _onGlobalIndexChanged() {
@@ -82,24 +97,15 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   }
 
   Future<void> _logout(BuildContext context) async {
-    final confirm = await showDialog<bool>(
+    final confirm = await showAgriConfirm(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Log Out'),
-        content: const Text('Are you sure you want to log out?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Log Out', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
+      icon: Icons.logout,
+      tone: AgriTone.destructive,
+      title: 'Log Out',
+      message: 'Are you sure you want to log out?',
+      confirmLabel: 'Log Out',
     );
-    if (confirm != true) return;
+    if (!confirm) return;
     await AuthService().logOut();
     if (!context.mounted) return;
     Navigator.pushAndRemoveUntil(
@@ -132,52 +138,13 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
       },
       child: Scaffold(
         backgroundColor: _bg,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          elevation: 1,
-          iconTheme: const IconThemeData(color: _dark),
-          titleSpacing: 16,
-          title: Container(
-            width: 46,
-            height: 46,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _bg,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: ClipOval(
-              child: Image.asset(
-                'assets/images/logo.png',
-                width: 36,
-                height: 36,
-                fit: BoxFit.cover,
-                errorBuilder: (c, e, s) =>
-                    const Icon(Icons.agriculture, color: _dark, size: 26),
-              ),
-            ),
+        appBar: AgriHeader(
+          bellKey: _notificationsKey,
+          onLogoTap: () => setState(() => _navIndex = 0),
+          onNotificationsPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const NotificationsScreen()),
           ),
-          actions: [
-            IconButton(
-              onPressed: () => _showLanguagePicker(context),
-              icon: const Icon(Icons.language, color: _dark, size: 22),
-            ),
-            NotificationBell(
-              key: _notificationsKey,
-              color: _dark,
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const NotificationsScreen()),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
         ),
         body: SafeArea(
           child: IndexedStack(index: _navIndex, children: pages),
@@ -189,11 +156,27 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
 
   Widget _buildBottomNavBar() {
     final t = AppLocalizations.of(context)!;
-    return BottomAppBar(
-      color: Colors.white,
-      elevation: 10,
-      child: SizedBox(
-        height: 60,
+    return SafeArea(
+      top: false,
+      child: Container(
+        height: 68,
+        margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.62),
+          borderRadius: BorderRadius.circular(36),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.72),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF8EB99A).withValues(alpha: 0.22),
+              blurRadius: 20,
+              spreadRadius: 1,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
         child: Row(
           children: [
             _navItem(0, Icons.explore_outlined, Icons.explore, t.navExplore),
@@ -227,11 +210,11 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     bool showUnreadDot = false,
   }) {
     final selected = _navIndex == index;
-    final color = selected ? _dark : Colors.grey;
+    final color = selected ? _dark : const Color(0xFFAAB4AC);
     final iconWidget = Icon(
       selected ? activeIcon : icon,
       color: color,
-      size: 24,
+      size: 20,
     );
     return Expanded(
       child: InkWell(
@@ -242,86 +225,16 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             showUnreadDot ? UnreadMessagesDot(child: iconWidget) : iconWidget,
-            const SizedBox(height: 3),
+            const SizedBox(height: 2),
             Text(
               label,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 9.5,
                 color: color,
-                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  void _showLanguagePicker(BuildContext context) {
-    final t = AppLocalizations.of(context)!;
-    final currentCode = LocaleController.instance.locale?.languageCode ?? 'en';
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 18, 20, 4),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    t.selectLanguage,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                ),
-              ),
-              RadioGroup<String>(
-                groupValue: currentCode,
-                onChanged: (value) {
-                  if (value == null) return;
-                  LocaleController.instance.setLocale(Locale(value));
-                  Navigator.pop(sheetContext);
-                  _showLanguageNote(value == 'en' ? t.english : t.tagalog);
-                },
-                child: Column(
-                  children: [
-                    RadioListTile<String>(
-                      title: Text(t.english),
-                      value: 'en',
-                      activeColor: _dark,
-                    ),
-                    RadioListTile<String>(
-                      title: Text(t.tagalog),
-                      value: 'tl',
-                      activeColor: _dark,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showLanguageNote(String languageName) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor: _dark,
-        content: Text(
-          AppLocalizations.of(context)!.languageChanged(languageName),
         ),
       ),
     );

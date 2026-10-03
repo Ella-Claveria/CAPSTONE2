@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'connectivity_service.dart';
+import 'delivery_coverage.dart';
 import 'market_price_helpers.dart';
 import 'pricing_tier_service.dart';
 import '../data/commodity_master_list.dart';
@@ -35,6 +36,13 @@ class OrderService {
     required String buyerAddress,
     required String deliveryMethod,
     DateTime? neededBy,
+    // The buyer's general location, re-checked against the listing's
+    // delivery coverage when deliveryMethod is 'delivery'.
+    BuyerArea? buyerArea,
+    // True when the buyer is outside the standard coverage but arranged
+    // delivery with the farmer in Messages — the fee is then always "to be
+    // arranged", and the farmer can still decline the order.
+    bool longDistanceArranged = false,
   }) async {
     // An order must never be silently queued for later — if it can't be
     // confirmed against live Firestore data right now, it doesn't happen.
@@ -69,9 +77,15 @@ class OrderService {
         // name for older listings that predate the Unit field, never
         // trusting a possibly-stale caller value for what actually
         // controls inventory-deduction and order-quantity semantics.
-        final realUnit = ((productData?['unit'] as String?)?.trim().isNotEmpty ?? false)
+        final realUnit =
+            ((productData?['unit'] as String?)?.trim().isNotEmpty ?? false)
             ? productData!['unit'] as String
-            : unitForProductName((productData?['commodity'] ?? productData?['name'] ?? productName).toString());
+            : unitForProductName(
+                (productData?['commodity'] ??
+                        productData?['name'] ??
+                        productName)
+                    .toString(),
+              );
 
         final available =
             (productSnapshot.data()?['quantity'] as num?)?.toDouble() ?? 0;
@@ -81,13 +95,16 @@ class OrderService {
           );
         }
 
-        final retailPrice = (productData?['retailPrice'] as num?) ??
+        final retailPrice =
+            (productData?['retailPrice'] as num?) ??
             (productData?['price'] as num?) ??
             unitPrice;
-        final wholesaleEnabled = productData != null &&
+        final wholesaleEnabled =
+            productData != null &&
             PricingTierService.wholesaleAvailable(productData);
         final wholesalePrice = productData?['wholesalePrice'] as num?;
-        final wholesaleMinimum = productData?['wholesaleMinimumQuantity'] as num?;
+        final wholesaleMinimum =
+            productData?['wholesaleMinimumQuantity'] as num?;
         final quote = PricingTierService.quote(
           quantity: q,
           retailPrice: retailPrice,
@@ -97,6 +114,40 @@ class OrderService {
         );
         final price = quote.unitPrice;
         final total = quote.subtotal;
+
+        // Fulfillment, against the listing as it is now. 'total' stays the
+        // product subtotal (revenue analytics read it); the delivery fee and
+        // the amount including it are stored separately.
+        final fulfillment = <String, dynamic>{};
+        if (deliveryMethod == 'delivery') {
+          if (productData?['deliveryAvailable'] != true) {
+            throw StateError('Delivery is no longer offered for this product.');
+          }
+          final coverage = DeliveryCoverage.fromProduct(productData!);
+          final reach = buyerArea == null
+              ? DeliveryReach.unknownLocation
+              : coverage.reach(buyerArea);
+          if (!longDistanceArranged && reach != DeliveryReach.covered) {
+            throw StateError(
+              'Delivery no longer covers your area. Choose pick-up or '
+              'message the farmer to arrange delivery.',
+            );
+          }
+          final feeKnown = !longDistanceArranged && coverage.feeKnown;
+          fulfillment.addAll({
+            'deliveryArrangement': longDistanceArranged
+                ? 'longDistance'
+                : 'standard',
+            'deliveryFeeType': feeKnown ? 'fixed' : 'arranged',
+            'deliveryFee': feeKnown ? coverage.fee : null,
+            'grandTotal': feeKnown ? total + coverage.fee! : null,
+          });
+        } else if (deliveryMethod == 'pickup') {
+          if (productData?['pickupOnly'] != true) {
+            throw StateError('Pick-up is no longer offered for this product.');
+          }
+          fulfillment['grandTotal'] = total;
+        }
 
         final orderRef = _orders.doc();
         transaction.update(productRef, {
@@ -128,13 +179,24 @@ class OrderService {
           'subtotal': total,
           'total': total,
           'deliveryMethod': deliveryMethod,
-          if (neededBy != null) 'neededBy': Timestamp.fromDate(neededBy),
+          ...fulfillment,
+          // The buyer's preferred date — a request for the farmer to
+          // consider, never a deadline that fails the order. 'neededBy'
+          // is the same value under its older name.
+          if (neededBy != null) ...{
+            'requestedFulfillmentDate': Timestamp.fromDate(neededBy),
+            'neededBy': Timestamp.fromDate(neededBy),
+          },
           'status': 'pending',
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         });
       });
       return null;
+    } on StateError catch (e) {
+      // Our own checks above (stock, listing, fulfillment) — already
+      // written for the buyer.
+      return e.message;
     } on FirebaseException catch (e) {
       final reason = (e.message ?? '').trim();
       if (reason.isNotEmpty) {
@@ -213,8 +275,9 @@ class OrderService {
         final productId = orderData['productId']?.toString();
         final qty = (orderData['quantity'] as num?) ?? 0;
         if (productId != null && productId.isNotEmpty) {
-          final productRef =
-              FirebaseFirestore.instance.collection('products').doc(productId);
+          final productRef = FirebaseFirestore.instance
+              .collection('products')
+              .doc(productId);
           final productSnapshot = await transaction.get(productRef);
           if (productSnapshot.exists) {
             final current =
@@ -233,6 +296,89 @@ class OrderService {
       return e.message;
     } catch (e) {
       return 'Could not reject the order. Please try again.';
+    }
+  }
+
+  // ---- Delay / reschedule ----
+  // All three keep the same order: same id, same reserved stock, same
+  // prices. Nothing is re-ordered and no stock is deducted again. Firestore
+  // rules allow each only to the right person, in the right state, touching
+  // only these fields.
+
+  /// Farmer: report a delay on a confirmed order and propose a new date.
+  Future<String?> reportDelay({
+    required String id,
+    required String reason,
+    required DateTime proposedDate,
+    String note = '',
+  }) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+    try {
+      await _orders.doc(id).update({
+        'delay': {
+          'reason': reason,
+          'note': note.trim(),
+          'proposedDate': Timestamp.fromDate(proposedDate),
+          'reportedAt': FieldValue.serverTimestamp(),
+          'status': 'proposed',
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return null;
+    } catch (_) {
+      return 'Could not report the delay. Please try again.';
+    }
+  }
+
+  /// Buyer: accept the date the farmer proposed. It becomes the order's
+  /// confirmed fulfillment date.
+  Future<String?> acceptProposedDate(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final ref = _orders.doc(id);
+        final data = (await transaction.get(ref)).data();
+        final delay = data?['delay'];
+        if (data == null ||
+            data['status'] != 'confirmed' ||
+            delay is! Map ||
+            delay['status'] != 'proposed' ||
+            delay['proposedDate'] is! Timestamp) {
+          throw StateError('There is no proposed date to accept any more.');
+        }
+        transaction.update(ref, {
+          'delay': {...delay, 'status': 'accepted'},
+          'confirmedFulfillmentDate': delay['proposedDate'],
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+      return null;
+    } on StateError catch (e) {
+      return e.message;
+    } catch (_) {
+      return 'Could not accept the new date. Please try again.';
+    }
+  }
+
+  /// Buyer: cancel an order whose new date they do not want. The reserved
+  /// quantity is given back to the farmer's listing by the
+  /// handleOrderReschedule Cloud Function (a buyer cannot write to a
+  /// product's stock).
+  Future<String?> cancelDelayedOrder(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+    try {
+      await _orders.doc(id).update({
+        'status': 'cancelled',
+        'cancelReason': 'delay',
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return null;
+    } catch (_) {
+      return 'Could not cancel the order. Please try again.';
     }
   }
 }

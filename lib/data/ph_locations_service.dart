@@ -30,14 +30,22 @@ class PhProvince {
   final String code;
   final String name;
   final String regionCode;
-  const PhProvince({required this.code, required this.name, required this.regionCode});
+  const PhProvince({
+    required this.code,
+    required this.name,
+    required this.regionCode,
+  });
 }
 
 class PhCityMunicipality {
   final String code;
   final String name;
   final bool isCity;
-  const PhCityMunicipality({required this.code, required this.name, required this.isCity});
+  const PhCityMunicipality({
+    required this.code,
+    required this.name,
+    required this.isCity,
+  });
 }
 
 class PhBarangay {
@@ -72,10 +80,16 @@ class PhLocationsService {
   Future<List<PhRegion>> fetchRegions() async {
     if (_regions != null) return _regions!;
     final raw = await _getJsonList('/regions/');
-    _regions = raw
-        .map((e) => PhRegion(code: e['code'] as String, name: e['name'] as String))
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    _regions =
+        raw
+            .map(
+              (e) => PhRegion(
+                code: e['code'] as String,
+                name: e['name'] as String,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
     return _regions!;
   }
 
@@ -83,14 +97,17 @@ class PhLocationsService {
     final cached = _provincesByRegion[regionCode];
     if (cached != null) return cached;
     final raw = await _getJsonList('/regions/$regionCode/provinces/');
-    final list = raw
-        .map((e) => PhProvince(
-              code: e['code'] as String,
-              name: e['name'] as String,
-              regionCode: regionCode,
-            ))
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    final list =
+        raw
+            .map(
+              (e) => PhProvince(
+                code: e['code'] as String,
+                name: e['name'] as String,
+                regionCode: regionCode,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
     _provincesByRegion[regionCode] = list;
     return list;
   }
@@ -112,14 +129,17 @@ class PhLocationsService {
         ? '/provinces/$provinceCode/cities-municipalities/'
         : '/regions/$regionCode/cities-municipalities/';
     final raw = await _getJsonList(path);
-    final list = raw
-        .map((e) => PhCityMunicipality(
-              code: e['code'] as String,
-              name: e['name'] as String,
-              isCity: e['isCity'] == true,
-            ))
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    final list =
+        raw
+            .map(
+              (e) => PhCityMunicipality(
+                code: e['code'] as String,
+                name: e['name'] as String,
+                isCity: e['isCity'] == true,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
     _citiesByParent[parentCode] = list;
     return list;
   }
@@ -127,12 +147,45 @@ class PhLocationsService {
   Future<List<PhBarangay>> fetchBarangays(String cityMunicipalityCode) async {
     final cached = _barangaysByCity[cityMunicipalityCode];
     if (cached != null) return cached;
-    final raw = await _getJsonList('/cities-municipalities/$cityMunicipalityCode/barangays/');
-    final list = raw
-        .map((e) => PhBarangay(code: e['code'] as String, name: e['name'] as String))
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
+    final raw = await _getJsonList(
+      '/cities-municipalities/$cityMunicipalityCode/barangays/',
+    );
+    final list =
+        raw
+            .map(
+              (e) => PhBarangay(
+                code: e['code'] as String,
+                name: e['name'] as String,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
     _barangaysByCity[cityMunicipalityCode] = list;
+    return list;
+  }
+
+  List<({String name, String province})>? _allCities;
+
+  /// Every city/municipality in the Philippines with its province name, for
+  /// a searchable list (the farmer's delivery Custom Areas). Metro Manila
+  /// cities have no province, so they get "Metro Manila"; other cities
+  /// independent of a province get an empty province.
+  Future<List<({String name, String province})>>
+  fetchAllCitiesMunicipalities() async {
+    if (_allCities != null) return _allCities!;
+    final provinces = await _getJsonList('/provinces/');
+    final provinceNames = {
+      for (final p in provinces) p['code'] as String: p['name'] as String,
+    };
+    final raw = await _getJsonList('/cities-municipalities/');
+    final list = raw.map((e) {
+      final provinceCode = e['provinceCode'];
+      final province = provinceCode is String
+          ? (provinceNames[provinceCode] ?? '')
+          : (e['regionCode'] == '130000000' ? 'Metro Manila' : '');
+      return (name: e['name'] as String, province: province);
+    }).toList()..sort((a, b) => a.name.compareTo(b.name));
+    _allCities = list;
     return list;
   }
 
@@ -153,5 +206,6 @@ class PhLocationsService {
     return null;
   }
 
-  String _normalize(String s) => s.trim().toLowerCase().replaceAll(RegExp(r'^city of\s+'), '');
+  String _normalize(String s) =>
+      s.trim().toLowerCase().replaceAll(RegExp(r'^city of\s+'), '');
 }

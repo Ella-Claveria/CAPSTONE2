@@ -60,12 +60,27 @@ class ReviewService {
         return 'Please add a short review description.';
       }
 
-      final buyerName = await _resolveBuyerName();
-
       // One review per order (doc ID == orderId), so re-submitting edits
       // the existing review instead of creating a duplicate.
       final reviewRef = _reviews.doc(orderId);
       final orderRef = _db.collection('orders').doc(orderId);
+
+      // A review must belong to a real completed transaction: this buyer's
+      // own order, completed, for this exact product. Firestore rules
+      // enforce the same; checking here gives a clear message instead of a
+      // permission error.
+      final order = (await orderRef.get()).data();
+      if (order == null || order['buyerId'] != buyerId) {
+        return 'Only the buyer of this order can review it.';
+      }
+      if ((order['status'] ?? '').toString().toLowerCase() != 'completed') {
+        return 'You can review this product once the order is completed.';
+      }
+      if (order['productId'] != productId || order['sellerId'] != sellerId) {
+        return 'This review does not match the product in that order.';
+      }
+
+      final buyerName = await _resolveBuyerName();
 
       await _db.runTransaction((transaction) async {
         final existingReview = await transaction.get(reviewRef);

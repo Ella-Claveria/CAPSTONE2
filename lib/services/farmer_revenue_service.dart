@@ -74,8 +74,9 @@ class FarmerRevenueService {
       final date = DateTime(month.year, month.month, day);
       var revenue = 0.0;
       for (final order in orders) {
-        if ((order['status'] ?? '').toString().toLowerCase() != 'completed')
+        if ((order['status'] ?? '').toString().toLowerCase() != 'completed') {
           continue;
+        }
         final completedAt = _completionDate(order);
         if (completedAt == null || completedAt.isBefore(verifiedAt)) continue;
         if (completedAt.year != date.year ||
@@ -332,8 +333,9 @@ class FarmerRevenueService {
     // QueryDocumentSnapshots.
     final activePricesByCommodity = <String, List<double>>{};
     for (final product in products) {
-      if (product['isArchived'] == true || product['isSuspended'] == true)
+      if (product['isArchived'] == true || product['isSuspended'] == true) {
         continue;
+      }
       final rawQuantity = product['quantity'];
       final quantity = rawQuantity is num
           ? rawQuantity.toDouble()

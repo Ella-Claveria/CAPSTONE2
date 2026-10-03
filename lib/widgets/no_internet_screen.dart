@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 
 /// Shown instead of the app whenever a real internet connection could not
@@ -28,12 +29,20 @@ class NoInternetScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.cloud_off_rounded, size: 72, color: Color(0xFF2E7D32)),
+                const Icon(
+                  Icons.cloud_off_rounded,
+                  size: 72,
+                  color: AppTheme.dark,
+                ),
                 const SizedBox(height: 20),
                 Text(
                   message,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 15, height: 1.4, color: Colors.black87),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    height: 1.4,
+                    color: Colors.black87,
+                  ),
                 ),
                 const SizedBox(height: 28),
                 SizedBox(
@@ -44,15 +53,20 @@ class NoInternetScreen extends StatelessWidget {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
                           )
                         : const Icon(Icons.refresh_rounded),
                     label: Text(checking ? 'Checking…' : 'Retry'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2E7D32),
+                      backgroundColor: AppTheme.dark,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                   ),
                 ),

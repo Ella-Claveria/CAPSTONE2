@@ -47,28 +47,35 @@ class LoginHero extends StatelessWidget {
             child: SafeArea(
               bottom: false,
               child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset(
-                      'assets/images/logo.png',
-                      height: 84,
-                      errorBuilder: (context, error, stackTrace) =>
-                          const Icon(Icons.agriculture, size: 64, color: Colors.white),
-                    ),
-                    const SizedBox(height: 10),
-                    const AgriTradeText(fontSize: 32, light: true),
-                    const SizedBox(height: 6),
-                    Text(
-                      tagline,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 2,
-                        color: Colors.white.withValues(alpha: 0.85),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Image.asset(
+                        'assets/images/logo.png',
+                        height: 84,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Icon(
+                              Icons.agriculture,
+                              size: 64,
+                              color: Colors.white,
+                            ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 10),
+                      const AgriTradeText(fontSize: 32, light: true),
+                      const SizedBox(height: 6),
+                      Text(
+                        tagline,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 2,
+                          color: Colors.white.withValues(alpha: 0.85),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -94,7 +101,11 @@ class _HeroLeafDecoration extends StatelessWidget {
           top: 10,
           child: Transform.rotate(
             angle: -0.35,
-            child: Icon(Icons.eco, size: 150, color: Colors.white.withValues(alpha: 0.05)),
+            child: Icon(
+              Icons.eco,
+              size: 150,
+              color: Colors.white.withValues(alpha: 0.05),
+            ),
           ),
         ),
         Positioned(
@@ -102,12 +113,14 @@ class _HeroLeafDecoration extends StatelessWidget {
           bottom: -10,
           child: Transform.rotate(
             angle: 0.5,
-            child: Icon(Icons.eco, size: 190, color: Colors.white.withValues(alpha: 0.05)),
+            child: Icon(
+              Icons.eco,
+              size: 190,
+              color: Colors.white.withValues(alpha: 0.05),
+            ),
           ),
         ),
-        Positioned.fill(
-          child: CustomPaint(painter: _VineSwooshPainter()),
-        ),
+        Positioned.fill(child: CustomPaint(painter: _VineSwooshPainter())),
       ],
     );
   }
@@ -124,13 +137,28 @@ class _VineSwooshPainter extends CustomPainter {
 
     final path1 = Path()
       ..moveTo(-20, size.height * 0.62)
-      ..quadraticBezierTo(size.width * 0.35, size.height * 0.48, size.width * 0.75, size.height * 0.66)
-      ..quadraticBezierTo(size.width * 0.95, size.height * 0.74, size.width + 20, size.height * 0.6);
+      ..quadraticBezierTo(
+        size.width * 0.35,
+        size.height * 0.48,
+        size.width * 0.75,
+        size.height * 0.66,
+      )
+      ..quadraticBezierTo(
+        size.width * 0.95,
+        size.height * 0.74,
+        size.width + 20,
+        size.height * 0.6,
+      );
     canvas.drawPath(path1, paint);
 
     final path2 = Path()
       ..moveTo(-20, size.height * 0.8)
-      ..quadraticBezierTo(size.width * 0.4, size.height * 0.95, size.width + 20, size.height * 0.78);
+      ..quadraticBezierTo(
+        size.width * 0.4,
+        size.height * 0.95,
+        size.width + 20,
+        size.height * 0.78,
+      );
     canvas.drawPath(path2, paint..color = Colors.white.withValues(alpha: 0.04));
   }
 

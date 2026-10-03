@@ -1,4 +1,6 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
+import '../widgets/agri_dialog.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:typed_data';
 
@@ -26,7 +28,7 @@ class AddReviewScreen extends StatefulWidget {
 }
 
 class _AddReviewScreenState extends State<AddReviewScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _accent = Color(0xFFDCEDC8);
 
   final _reviewService = ReviewService();
@@ -45,27 +47,25 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
   }
 
   Future<void> _pickImage() async {
-    final source = await showModalBottomSheet<ImageSource>(
+    final source = await showAgriSheet<ImageSource>(
       context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.camera_alt_outlined),
-                title: const Text('Take a photo'),
-                onTap: () => Navigator.pop(context, ImageSource.camera),
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Choose from gallery'),
-                onTap: () => Navigator.pop(context, ImageSource.gallery),
-              ),
-            ],
+      title: 'Add a photo',
+      builder: (context) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AgriSheetAction(
+            icon: Icons.camera_alt_outlined,
+            label: 'Take a photo',
+            onTap: () => Navigator.pop(context, ImageSource.camera),
           ),
-        );
-      },
+          AgriSheetAction(
+            icon: Icons.photo_library_outlined,
+            label: 'Choose from gallery',
+            onTap: () => Navigator.pop(context, ImageSource.gallery),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
     );
 
     if (source == null) return;

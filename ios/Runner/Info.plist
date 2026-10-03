@@ -29,7 +29,20 @@
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>AgriTrade accesses selected photos so you can send images in chat and upload product images.</string>
 		<key>NSLocationWhenInUseUsageDescription</key>
-		<string>AgriTrade uses your location to show how far away nearby farms are on the map.</string>
+		<string>AgriTrade uses your location to show how far away nearby farms are, and to share your location in a chat when you choose to, for delivery or pick-up.</string>
+		<key>FlutterDeepLinkingEnabled</key>
+		<false/>
+		<key>CFBundleURLTypes</key>
+		<array>
+			<dict>
+				<key>CFBundleURLName</key>
+				<string>agritrade</string>
+				<key>CFBundleURLSchemes</key>
+				<array>
+					<string>agritrade</string>
+				</array>
+			</dict>
+		</array>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
 		<key>UIApplicationSceneManifest</key>

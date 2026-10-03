@@ -22,8 +22,14 @@ class AgriTradeText extends StatelessWidget {
       text: TextSpan(
         style: GoogleFonts.lilitaOne(fontSize: fontSize),
         children: [
-          TextSpan(text: 'Agri', style: TextStyle(color: light ? _agriLight : _agri)),
-          TextSpan(text: 'Trade+', style: TextStyle(color: light ? _tradeLight : _trade)),
+          TextSpan(
+            text: 'Agri',
+            style: TextStyle(color: light ? _agriLight : _agri),
+          ),
+          TextSpan(
+            text: 'Trade+',
+            style: TextStyle(color: light ? _tradeLight : _trade),
+          ),
         ],
       ),
     );

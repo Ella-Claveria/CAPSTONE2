@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import '../services/auth_routing_service.dart';
 import '../services/audit_log_service.dart';
-import '../services/notification_permission_prompt.dart';
 import '../theme/app_theme.dart';
 import '../screen/auth_route_handler.dart';
 import '../screen/forgot_password_screen.dart';
@@ -136,7 +135,13 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     }
 
     if (error == 'EMAIL_NOT_REGISTERED') {
-      if (_isAdmin) AuditLogService.logPreAuth(AuditAction.loginFailed, email: email, details: error);
+      if (_isAdmin) {
+        AuditLogService.logPreAuth(
+          AuditAction.loginFailed,
+          email: email,
+          details: error,
+        );
+      }
       setState(() {
         _loading = false;
         _emailNotRegistered = true;
@@ -148,7 +153,13 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
       // Only the admin login door is audited — the mobile farmer/buyer
       // doors share this same widget but aren't in scope for the Admin
       // Portal's audit trail (see AuditLogService).
-      if (_isAdmin) AuditLogService.logPreAuth(AuditAction.loginFailed, email: email, details: error);
+      if (_isAdmin) {
+        AuditLogService.logPreAuth(
+          AuditAction.loginFailed,
+          email: email,
+          details: error,
+        );
+      }
       setState(() => _loading = false);
       _showMessage(error);
       return;
@@ -169,7 +180,10 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
     if (_isAdmin) {
       if (result.decision == AuthRouteDecision.adminDashboard) {
-        AuditLogService.log(AuditAction.loginSuccess, 'Signed in to the Admin Portal.');
+        AuditLogService.log(
+          AuditAction.loginSuccess,
+          'Signed in to the Admin Portal.',
+        );
         _saveAdminCredentials(email, password);
       } else {
         // Valid credentials, but this account isn't an admin (or something
@@ -205,10 +219,6 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
     if (!mounted) return;
     setState(() => _loading = false);
-    if (result.isSignedIn && (role == 'farmer' || role == 'buyer')) {
-      await NotificationPermissionPrompt.instance.afterLogin(context);
-    }
-    if (!mounted) return;
     // pushAndRemoveUntil (inside applyAuthRouteResult) clears splash/
     // role-selection/login from the stack, so the back button on Home has
     // nothing left to pop to.
@@ -227,19 +237,24 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
       case GoogleSignInOutcome.error:
         setState(() => _googleLoading = false);
-        _showMessage(result.message ?? 'Google sign-in failed. Please try again.');
+        _showMessage(
+          result.message ?? 'Google sign-in failed. Please try again.',
+        );
         return;
 
       case GoogleSignInOutcome.needsProfile:
         setState(() => _googleLoading = false);
         Navigator.push(
           context,
-          slideRoute(GoogleCompleteProfileScreen(
-            uid: result.uid!,
-            email: result.email ?? '',
-            initialName: result.displayName,
-            initialRole: widget.role ?? 'buyer',
-          )),
+          slideRoute(
+            GoogleCompleteProfileScreen(
+              uid: result.uid!,
+              email: result.email ?? '',
+              initialName: result.displayName,
+              initialPhotoUrl: result.photoUrl,
+              initialRole: widget.role ?? 'buyer',
+            ),
+          ),
         );
         return;
 
@@ -269,11 +284,6 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
         }
 
         if (!mounted) return;
-        if (routeResult.isSignedIn &&
-            (routeResult.role == 'farmer' || routeResult.role == 'buyer')) {
-          await NotificationPermissionPrompt.instance.afterLogin(context);
-        }
-        if (!mounted) return;
         setState(() => _googleLoading = false);
         await applyAuthRouteResult(context, routeResult);
         return;
@@ -281,7 +291,9 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   // Shown instead of the generic wrong-password message when AuthService
@@ -307,22 +319,31 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
               children: [
                 Text(
                   'Email not registered',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5, color: Colors.amber.shade900),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13.5,
+                    color: Colors.amber.shade900,
+                  ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   "There's no account with this email yet.",
-                  style: TextStyle(fontSize: 12.5, color: Colors.amber.shade900),
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: Colors.amber.shade900,
+                  ),
                 ),
                 if (!_isAdmin) ...[
                   const SizedBox(height: 6),
                   TextButton(
                     onPressed: () => Navigator.push(
                       context,
-                      slideRoute(RegisterScreen(
-                        initialRole: widget.role ?? 'buyer',
-                        initialEmail: _emailController.text.trim(),
-                      )),
+                      slideRoute(
+                        RegisterScreen(
+                          initialRole: widget.role ?? 'buyer',
+                          initialEmail: _emailController.text.trim(),
+                        ),
+                      ),
                     ),
                     style: TextButton.styleFrom(
                       foregroundColor: AppTheme.dark,
@@ -330,7 +351,13 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    child: const Text('Create One', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    child: const Text(
+                      'Create One',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
                   ),
                 ],
               ],
@@ -345,120 +372,171 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
   Widget build(BuildContext context) {
     return AutofillGroup(
       child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(AppLocalizations.of(context)!.emailAddress, style: const TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        GlowField(
-          controller: _emailController,
-          keyboardType: TextInputType.emailAddress,
-          hint: 'you@example.com',
-          icon: Icons.email_outlined,
-          textInputAction: TextInputAction.next,
-          onSubmitted: (_) => FocusScope.of(context).nextFocus(),
-          autofillHints: const [AutofillHints.email, AutofillHints.username],
-        ),
-        const SizedBox(height: 16),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(AppLocalizations.of(context)!.password, style: const TextStyle(fontWeight: FontWeight.bold)),
-            GestureDetector(
-              onTap: () => Navigator.push(
-                context,
-                slideRoute(ForgotPasswordScreen(
-                  initialEmail: _emailController.text.trim(),
-                  isAdmin: _isAdmin,
-                )),
-              ),
-              child: Text(AppLocalizations.of(context)!.forgotPassword, style: const TextStyle(color: AppTheme.dark, fontSize: 13, fontWeight: FontWeight.w600)),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        GlowField(
-          controller: _passwordController,
-          obscureText: _obscurePassword,
-          hint: 'Password',
-          icon: Icons.lock_outline,
-          textInputAction: TextInputAction.done,
-          onSubmitted: (_) => _loading ? null : _login(),
-          autofillHints: const [AutofillHints.password],
-          suffix: IconButton(
-            icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility, color: Colors.grey[600]),
-            onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            AppLocalizations.of(context)!.emailAddress,
+            style: const TextStyle(fontWeight: FontWeight.bold),
           ),
-        ),
-        if (_emailNotRegistered) ...[
-          const SizedBox(height: 14),
-          _emailNotRegisteredPrompt(),
-        ],
-        const SizedBox(height: 20),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: _loading ? null : _login,
-            style: AppTheme.primaryButton(),
-            child: _loading
-                ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(AppLocalizations.of(context)!.loginButton, style: AppTheme.buttonText()),
-                      const SizedBox(width: 8),
-                      const Icon(Icons.arrow_forward, size: 20, color: Colors.white),
-                    ],
-                  ),
+          const SizedBox(height: 8),
+          GlowField(
+            controller: _emailController,
+            keyboardType: TextInputType.emailAddress,
+            hint: 'you@example.com',
+            icon: Icons.email_outlined,
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+            autofillHints: const [AutofillHints.email, AutofillHints.username],
           ),
-        ),
-        // Admin accounts are created manually via the Firebase Console
-        // (see the header comment on _login's expectedRole), so there's no
-        // "sign up" concept for that door — same reasoning excludes Google
-        // sign-in there too.
-        if (!_isAdmin) ...[
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(child: Divider(color: Colors.grey[300])),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Text('or', style: TextStyle(color: Colors.grey[500], fontSize: 12.5)),
+              Text(
+                AppLocalizations.of(context)!.password,
+                style: const TextStyle(fontWeight: FontWeight.bold),
               ),
-              Expanded(child: Divider(color: Colors.grey[300])),
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  slideRoute(
+                    ForgotPasswordScreen(
+                      initialEmail: _emailController.text.trim(),
+                      isAdmin: _isAdmin,
+                    ),
+                  ),
+                ),
+                child: Text(
+                  AppLocalizations.of(context)!.forgotPassword,
+                  style: const TextStyle(
+                    color: AppTheme.dark,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 8),
+          GlowField(
+            controller: _passwordController,
+            obscureText: _obscurePassword,
+            hint: 'Password',
+            icon: Icons.lock_outline,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _loading ? null : _login(),
+            autofillHints: const [AutofillHints.password],
+            suffix: IconButton(
+              icon: Icon(
+                _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                color: Colors.grey[600],
+              ),
+              onPressed: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
+            ),
+          ),
+          if (_emailNotRegistered) ...[
+            const SizedBox(height: 14),
+            _emailNotRegisteredPrompt(),
+          ],
+          const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
-            child: OutlinedButton(
-              onPressed: (_loading || _googleLoading) ? null : _continueWithGoogle,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                side: BorderSide(color: Colors.grey[300]!),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-              ),
-              child: _googleLoading
+            child: ElevatedButton(
+              onPressed: _loading ? null : _login,
+              style: AppTheme.primaryButton(),
+              child: _loading
                   ? const SizedBox(
                       height: 20,
                       width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black54),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        SvgPicture.asset('assets/images/google_logo.svg', width: 19, height: 19),
-                        const SizedBox(width: 10),
                         Text(
-                          'Continue with Google',
-                          style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600, color: Colors.black87),
+                          AppLocalizations.of(context)!.loginButton,
+                          style: AppTheme.buttonText(),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.arrow_forward,
+                          size: 20,
+                          color: Colors.white,
                         ),
                       ],
                     ),
             ),
           ),
+          // Admin accounts are created manually via the Firebase Console
+          // (see the header comment on _login's expectedRole), so there's no
+          // "sign up" concept for that door — same reasoning excludes Google
+          // sign-in there too.
+          if (!_isAdmin) ...[
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Expanded(child: Divider(color: Colors.grey[300])),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  child: Text(
+                    'or',
+                    style: TextStyle(color: Colors.grey[500], fontSize: 12.5),
+                  ),
+                ),
+                Expanded(child: Divider(color: Colors.grey[300])),
+              ],
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: (_loading || _googleLoading)
+                    ? null
+                    : _continueWithGoogle,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  side: BorderSide(color: Colors.grey[300]!),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                ),
+                child: _googleLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.black54,
+                        ),
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SvgPicture.asset(
+                            'assets/images/google_logo.svg',
+                            width: 19,
+                            height: 19,
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            'Continue with Google',
+                            style: TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+          ],
         ],
-      ],
       ),
     );
   }

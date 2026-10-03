@@ -27,6 +27,10 @@ enum AuthRouteDecision {
   blockedNonAdminOnWeb,
   missingProfile,
   missingRole,
+  // The account is suspended or banned (accountStatus on users/{uid}, set
+  // only by an Admin). Blocked for every role, on login and on a restored
+  // session alike.
+  accountRestricted,
   error,
 }
 
@@ -42,14 +46,13 @@ class AuthRouteResult {
   /// use this to decide whether to remember the login for a "continue as"
   /// tile next time.
   bool get isSignedIn => switch (decision) {
-        AuthRouteDecision.blockedAdminOnMobile ||
-        AuthRouteDecision.blockedNonAdminOnWeb ||
-        AuthRouteDecision.missingProfile ||
-        AuthRouteDecision.missingRole ||
-        AuthRouteDecision.error =>
-          false,
-        _ => true,
-      };
+    AuthRouteDecision.blockedAdminOnMobile ||
+    AuthRouteDecision.blockedNonAdminOnWeb ||
+    AuthRouteDecision.missingProfile ||
+    AuthRouteDecision.missingRole ||
+    AuthRouteDecision.error => false,
+    _ => true,
+  };
 }
 
 class AuthRoutingService {
@@ -63,18 +66,23 @@ class AuthRoutingService {
   static Future<AuthRouteResult> decide(String uid) async {
     Map<String, dynamic>? data;
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
       if (!doc.exists) {
         return const AuthRouteResult(
           decision: AuthRouteDecision.missingProfile,
-          message: 'We could not find your account details. Please contact support.',
+          message:
+              'We could not find your account details. Please contact support.',
         );
       }
       data = doc.data();
     } catch (_) {
       return const AuthRouteResult(
         decision: AuthRouteDecision.error,
-        message: 'Could not verify your account. Check your connection and try again.',
+        message:
+            'Could not verify your account. Check your connection and try again.',
       );
     }
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -103,11 +111,36 @@ class AuthRoutingService {
       // real profile write still has the right role from registration
       // (see PendingRegistrationProfile), unaffected by this fallback.
       if (!emailVerified) {
-        return const AuthRouteResult(decision: AuthRouteDecision.emailVerificationRequired);
+        return const AuthRouteResult(
+          decision: AuthRouteDecision.emailVerificationRequired,
+        );
       }
       return const AuthRouteResult(
         decision: AuthRouteDecision.missingProfile,
-        message: 'We could not find your account details. Please contact support.',
+        message:
+            'We could not find your account details. Please contact support.',
+      );
+    }
+
+    // A signed-in session is not standing permission: a suspended or
+    // banned account is stopped here even if this device still holds a
+    // valid Firebase session. (Missing accountStatus means active, the
+    // same convention firestore.rules uses.)
+    final accountStatus = (data['accountStatus'] ?? 'active').toString();
+    if (accountStatus != 'active') {
+      final reason =
+          (accountStatus == 'banned'
+                  ? data['banReason']
+                  : data['suspensionReason'])
+              ?.toString()
+              .trim();
+      return AuthRouteResult(
+        decision: AuthRouteDecision.accountRestricted,
+        role: data['role'] as String?,
+        message:
+            '${accountStatus == 'banned' ? 'Your AgriTrade+ account has been deactivated.' : 'Your AgriTrade+ account is currently suspended.'}'
+            '${reason == null || reason.isEmpty ? '' : ' Reason: $reason'}'
+            ' Please contact support if you think this is a mistake.',
       );
     }
 
@@ -120,8 +153,15 @@ class AuthRoutingService {
       );
     }
 
-    final isApprovedAdminIdentity = role == 'admin' &&
-        authenticatedEmail?.trim().toLowerCase() == _adminEmailWithoutVerification;
+    // emailVerified is Firebase Auth's own flag: a Google account has it
+    // from Google, and an email/password account gets it when its 6-digit
+    // code is accepted (functions/email_otp.js, which stamps
+    // emailOtpVerified on this doc at the same moment). Either way it is
+    // then true on every later login, so the code is only ever asked once.
+    final isApprovedAdminIdentity =
+        role == 'admin' &&
+        authenticatedEmail?.trim().toLowerCase() ==
+            _adminEmailWithoutVerification;
     if (!emailVerified && !isApprovedAdminIdentity) {
       return AuthRouteResult(
         decision: AuthRouteDecision.emailVerificationRequired,
@@ -133,12 +173,16 @@ class AuthRoutingService {
     // ---- Web build: Admin Dashboard only ----
     if (kIsWeb) {
       if (role == 'admin') {
-        return AuthRouteResult(decision: AuthRouteDecision.adminDashboard, role: role);
+        return AuthRouteResult(
+          decision: AuthRouteDecision.adminDashboard,
+          role: role,
+        );
       }
       return AuthRouteResult(
         decision: AuthRouteDecision.blockedNonAdminOnWeb,
         role: role,
-        message: 'This account is not authorized to access the Admin Dashboard.',
+        message:
+            'This account is not authorized to access the Admin Dashboard.',
       );
     }
 
@@ -147,7 +191,8 @@ class AuthRoutingService {
       return AuthRouteResult(
         decision: AuthRouteDecision.blockedAdminOnMobile,
         role: role,
-        message: 'Admin accounts can only access the web-based Admin Dashboard.',
+        message:
+            'Admin accounts can only access the web-based Admin Dashboard.',
       );
     }
     if (role == 'buyer') {
@@ -159,8 +204,14 @@ class AuthRoutingService {
     // operation change it); we only ever read it here.
     final approvalStatus = data['approvalStatus'] as String?;
     if (approvalStatus == 'approved') {
-      return AuthRouteResult(decision: AuthRouteDecision.farmerHome, role: role);
+      return AuthRouteResult(
+        decision: AuthRouteDecision.farmerHome,
+        role: role,
+      );
     }
-    return AuthRouteResult(decision: AuthRouteDecision.farmerPendingReview, role: role);
+    return AuthRouteResult(
+      decision: AuthRouteDecision.farmerPendingReview,
+      role: role,
+    );
   }
 }

@@ -82,7 +82,11 @@ class _GlowFieldState extends State<GlowField> {
               padding: const EdgeInsets.only(left: 12),
               child: Text(
                 widget.prefixText!,
-                style: const TextStyle(color: AppTheme.dark, fontSize: 15, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  color: AppTheme.dark,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           Expanded(
@@ -104,7 +108,10 @@ class _GlowFieldState extends State<GlowField> {
                 focusedBorder: InputBorder.none,
                 errorBorder: InputBorder.none,
                 focusedErrorBorder: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(vertical: 18, horizontal: 12),
+                contentPadding: const EdgeInsets.symmetric(
+                  vertical: 18,
+                  horizontal: 12,
+                ),
               ),
             ),
           ),

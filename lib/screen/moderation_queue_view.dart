@@ -27,7 +27,7 @@ import 'admin_dashboard_screen.dart'
 /// account-level actions, `accountStatus` on the reported farmer's
 /// users/{uid} doc. Report volume and confirmed-violation count are kept
 /// strictly separate (see _FarmerViolationHistory).
-enum _ModTab { pending, underReview, resolved, violations }
+enum _ModTab { pending, underReview, resolved, violations, priceFlags }
 
 String? _firstNonEmpty(List<dynamic> candidates) {
   for (final c in candidates) {
@@ -268,10 +268,12 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                   stream: DashboardDataService.instance.usersStream,
                   builder: (context, usersSnap) {
                     final snapshots = [reportsSnap, usersSnap];
-                    if (snapshots.any((s) => s.hasError))
+                    if (snapshots.any((s) => s.hasError)) {
                       return const AdminStreamError();
-                    if (snapshots.any((s) => !s.hasData))
+                    }
+                    if (snapshots.any((s) => !s.hasData)) {
                       return const AdminLoadingSpinner();
+                    }
 
                     final usersByUid = <String, Map<String, dynamic>>{
                       for (final d in usersSnap.data!.docs) d.id: d.data(),
@@ -348,6 +350,10 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                             .where((r) => r.violationConfirmed)
                             .toList();
                         break;
+                      case _ModTab.priceFlags:
+                        // Not report-driven — see _PriceFlagsSection.
+                        bucketRows = [];
+                        break;
                     }
 
                     final rows =
@@ -357,8 +363,9 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                             return false;
                           }
                           if (_reasonFilter != 'All' &&
-                              r.reason != _reasonFilter)
+                              r.reason != _reasonFilter) {
                             return false;
+                          }
                           final q = _search.trim().toLowerCase();
                           if (q.isEmpty) return true;
                           return r.farmerName.toLowerCase().contains(q) ||
@@ -453,7 +460,8 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                           ),
                           const SizedBox(height: 16),
 
-                          if (_tab != _ModTab.violations) ...[
+                          if (_tab != _ModTab.violations &&
+                              _tab != _ModTab.priceFlags) ...[
                             _ReportFilterBar(
                               c: c,
                               search: _search,
@@ -470,7 +478,9 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                             const SizedBox(height: 16),
                           ],
 
-                          if (_tab == _ModTab.violations)
+                          if (_tab == _ModTab.priceFlags)
+                            const _PriceFlagsSection()
+                          else if (_tab == _ModTab.violations)
                             _buildViolationsSection(c, allRows)
                           else if (bucketRows.isEmpty)
                             AdminEmptyState(
@@ -511,6 +521,8 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
         return 'No resolved reports yet.';
       case _ModTab.violations:
         return 'No confirmed violations.';
+      case _ModTab.priceFlags:
+        return 'No price flags.';
     }
   }
 
@@ -524,6 +536,8 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
         return 'Dismissed and completed reports will appear here.';
       case _ModTab.violations:
         return 'Farmers/listings with an Admin-confirmed violation will appear here.';
+      case _ModTab.priceFlags:
+        return 'Listings priced far above the AI suggested range will appear here.';
     }
   }
 
@@ -596,7 +610,7 @@ class _ModTabBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget tabButton(_ModTab t, String label, int count) {
+    Widget tabButton(_ModTab t, String label, [int? count]) {
       final selected = t == tab;
       return Padding(
         padding: const EdgeInsets.only(right: 8),
@@ -609,7 +623,7 @@ class _ModTabBar extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               child: Text(
-                '$label ($count)',
+                count == null ? label : '$label ($count)',
                 style: TextStyle(
                   color: selected ? c.green : c.textSecondary,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
@@ -628,6 +642,7 @@ class _ModTabBar extends StatelessWidget {
         tabButton(_ModTab.underReview, 'Under Review', underReviewCount),
         tabButton(_ModTab.resolved, 'Resolved', resolvedCount),
         tabButton(_ModTab.violations, 'Violations', violationsCount),
+        tabButton(_ModTab.priceFlags, 'Price Flags'),
       ],
     );
   }
@@ -818,6 +833,160 @@ class _ReportTable extends StatelessWidget {
           }).toList(),
         ),
       ),
+    );
+  }
+}
+
+// ============================================================
+// PRICE FLAGS TAB — listings a farmer posted at a price far above the
+// AI suggested range (the `priceFlag` field add_product_screen.dart saves
+// on "Post Anyway"). Review-only: the flag is informational and never
+// hides, suspends or penalises a listing by itself.
+// ============================================================
+
+class _PriceFlagsSection extends StatefulWidget {
+  const _PriceFlagsSection();
+
+  @override
+  State<_PriceFlagsSection> createState() => _PriceFlagsSectionState();
+}
+
+class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
+  // Held in state so a parent rebuild doesn't resubscribe the listener.
+  final Stream<QuerySnapshot<Map<String, dynamic>>> _flagged = FirebaseFirestore
+      .instance
+      .collection('products')
+      .where('priceFlag.type', isEqualTo: 'high_price')
+      .snapshots();
+
+  String _peso(dynamic value) =>
+      value is num ? '₱${value.toStringAsFixed(2)}' : '—';
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _flagged,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const AdminStreamError();
+        if (!snapshot.hasData) return const AdminLoadingSpinner();
+
+        final docs = [...snapshot.data!.docs]
+          ..sort((a, b) {
+            final at = a.data()['priceFlag']?['flaggedAt'];
+            final bt = b.data()['priceFlag']?['flaggedAt'];
+            return (bt is Timestamp ? bt.millisecondsSinceEpoch : 0).compareTo(
+              at is Timestamp ? at.millisecondsSinceEpoch : 0,
+            );
+          });
+        if (docs.isEmpty) {
+          return const AdminEmptyState(
+            icon: Icons.price_check_outlined,
+            title: 'No price flags.',
+            subtitle:
+                'Listings priced far above the AI suggested range will appear here.',
+          );
+        }
+
+        final rows = <DataRow>[];
+        for (final doc in docs) {
+          final product = doc.data();
+          final flag = Map<String, dynamic>.from(product['priceFlag'] as Map);
+          final unit = (flag['unit'] ?? product['unit'] ?? '').toString();
+          final flaggedAt = flag['flaggedAt'];
+          for (final raw in (flag['items'] as List? ?? const [])) {
+            final item = Map<String, dynamic>.from(raw as Map);
+            rows.add(
+              DataRow(
+                cells: [
+                  DataCell(
+                    Text(
+                      (flag['productName'] ?? product['name'] ?? '—')
+                          .toString(),
+                    ),
+                  ),
+                  DataCell(Text((product['farmerName'] ?? '—').toString())),
+                  DataCell(
+                    Text(_capitalize((item['pricingType'] ?? '').toString())),
+                  ),
+                  DataCell(Text('${_peso(item['enteredPrice'])} / $unit')),
+                  DataCell(
+                    Text(
+                      '${_peso(item['suggestedLowerPrice'])} – ${_peso(item['suggestedUpperPrice'])}',
+                    ),
+                  ),
+                  DataCell(
+                    AdminStatusBadge(
+                      text: '${item['percentAbove'] ?? '—'}% above',
+                      color: c.red,
+                      bg: c.redBg,
+                    ),
+                  ),
+                  DataCell(Text((item['dataAvailability'] ?? '—').toString())),
+                  DataCell(
+                    Text(
+                      [
+                        flag['label'],
+                        flag['reason'],
+                      ].whereType<String>().join(' — '),
+                    ),
+                  ),
+                  DataCell(
+                    AdminStatusBadge(
+                      text: (flag['reviewStatus'] ?? 'Price Review Required')
+                          .toString(),
+                      color: c.amber,
+                      bg: c.amberBg,
+                    ),
+                  ),
+                  DataCell(
+                    Text(
+                      _formatDate(flaggedAt is Timestamp ? flaggedAt : null),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+        }
+
+        return Container(
+          decoration: BoxDecoration(
+            color: c.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: c.border),
+          ),
+          padding: const EdgeInsets.all(8),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
+              dataRowColor: WidgetStateProperty.all(Colors.transparent),
+              columnSpacing: 28,
+              horizontalMargin: 12,
+              headingTextStyle: TextStyle(
+                color: c.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+              dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
+              columns: const [
+                DataColumn(label: Text('Product')),
+                DataColumn(label: Text('Farmer')),
+                DataColumn(label: Text('Price Type')),
+                DataColumn(label: Text('Entered Price')),
+                DataColumn(label: Text('Suggested Range')),
+                DataColumn(label: Text('Above Range')),
+                DataColumn(label: Text('Data Availability')),
+                DataColumn(label: Text('Reason')),
+                DataColumn(label: Text('Status')),
+                DataColumn(label: Text('Flagged')),
+              ],
+              rows: rows,
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1370,8 +1539,9 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                 foregroundColor: Colors.white,
               ),
               onPressed: () {
-                if (requireReason && reasonController.text.trim().isEmpty)
+                if (requireReason && reasonController.text.trim().isEmpty) {
                   return;
+                }
                 Navigator.of(dialogContext).pop(true);
               },
               child: Text(actionLabel),

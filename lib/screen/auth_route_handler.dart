@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../widgets/agri_dialog.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../services/auth_routing_service.dart';
@@ -22,7 +23,10 @@ import 'email_verification_screen.dart';
 /// Always clears the navigation stack (pushAndRemoveUntil) so the device's
 /// back button can never return to a screen that belonged to a role/session
 /// that's no longer valid.
-Future<void> applyAuthRouteResult(BuildContext context, AuthRouteResult result) async {
+Future<void> applyAuthRouteResult(
+  BuildContext context,
+  AuthRouteResult result,
+) async {
   if (result.isSignedIn) {
     SessionTimeoutService.instance.recordActivity();
   }
@@ -37,11 +41,13 @@ Future<void> applyAuthRouteResult(BuildContext context, AuthRouteResult result) 
       _replaceWith(context, const BuyerMarketplaceScreen());
       return;
     case AuthRouteDecision.emailVerificationRequired:
-      _replaceWith(context, EmailVerificationScreen(
-        role: result.role ?? 'buyer',
-        email: FirebaseAuth.instance.currentUser?.email ?? '',
-        sendInitialEmail: false,
-      ));
+      _replaceWith(
+        context,
+        EmailVerificationScreen(
+          role: result.role ?? 'buyer',
+          email: FirebaseAuth.instance.currentUser?.email ?? '',
+        ),
+      );
       return;
     case AuthRouteDecision.adminDashboard:
       _replaceWith(context, AdminDashboardScreen());
@@ -50,13 +56,17 @@ Future<void> applyAuthRouteResult(BuildContext context, AuthRouteResult result) 
     case AuthRouteDecision.blockedNonAdminOnWeb:
     case AuthRouteDecision.missingProfile:
     case AuthRouteDecision.missingRole:
+    case AuthRouteDecision.accountRestricted:
     case AuthRouteDecision.error:
       await _blockAndReturnToLogin(context, result.message);
       return;
   }
 }
 
-Future<void> _blockAndReturnToLogin(BuildContext context, String? message) async {
+Future<void> _blockAndReturnToLogin(
+  BuildContext context,
+  String? message,
+) async {
   // Never rely on just hiding a screen — always fully sign the disallowed
   // session out before returning to login. Goes through AuthService (not
   // FirebaseAuth directly) so this device's FCM token is also cleaned up
@@ -64,17 +74,21 @@ Future<void> _blockAndReturnToLogin(BuildContext context, String? message) async
   await AuthService().signOut();
   if (!context.mounted) return;
 
-  await showDialog<void>(
+  await showAgriDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (dialogContext) => AlertDialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    builder: (dialogContext) => AgriDialog(
+      icon: Icons.lock_outline,
+      tone: AgriTone.warning,
       title: const Text('Unable to Sign In'),
-      content: Text(message ?? 'You are not able to access this at the moment.'),
+      content: Text(
+        message ?? 'You are not able to access this at the moment.',
+      ),
       actions: [
-        TextButton(
+        AgriDialogButton(
+          label: 'OK',
+          kind: AgriButtonKind.primary,
           onPressed: () => Navigator.of(dialogContext).pop(),
-          child: const Text('OK'),
         ),
       ],
     ),
@@ -83,7 +97,10 @@ Future<void> _blockAndReturnToLogin(BuildContext context, String? message) async
   if (!context.mounted) return;
   // Web's door is the admin login; mobile's is role selection — each
   // platform returns to its own entry point, never the other's.
-  _replaceWith(context, kIsWeb ? const LoginScreen(role: 'admin') : const RoleSelectionScreen());
+  _replaceWith(
+    context,
+    kIsWeb ? const LoginScreen(role: 'admin') : const RoleSelectionScreen(),
+  );
 }
 
 void _replaceWith(BuildContext context, Widget screen) {

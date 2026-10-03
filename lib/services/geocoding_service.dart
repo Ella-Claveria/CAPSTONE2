@@ -31,12 +31,80 @@ class ResolvedAddress {
   final String? barangay;
   final String? city;
   final String? province;
-  const ResolvedAddress({this.barangay, this.city, this.province});
 
-  String get readable =>
-      [barangay, city, province].where((s) => s != null && s.isNotEmpty).join(', ');
+  /// e.g. "Calabarzon" — Google's top-level area for the Philippines.
+  final String? region;
+
+  /// ISO country code of the result, e.g. "PH".
+  final String? countryCode;
+
+  const ResolvedAddress({
+    this.barangay,
+    this.city,
+    this.province,
+    this.region,
+    this.countryCode,
+  });
+
+  String get readable => [
+    barangay,
+    city,
+    province,
+  ].where((s) => s != null && s.isNotEmpty).join(', ');
 
   bool get isEmpty => barangay == null && city == null && province == null;
+}
+
+/// Reads a Google Geocoding API `results` list into an address.
+///
+/// For the Philippines, Google's levels are:
+///   administrative_area_level_1  region        (Calabarzon)
+///   administrative_area_level_2  province      (Batangas)
+///   locality                     city / municipality (Malvar)
+///   sublocality / neighborhood / administrative_area_level_3+  barangay
+/// Each piece is taken from the first result that has it — the top result
+/// is often a street or plus-code entry missing one of them — and no piece
+/// is required: whatever is found is returned.
+ResolvedAddress parseGeocodeResults(List<dynamic> results) {
+  String? first(List<String> wanted) {
+    for (final type in wanted) {
+      for (final result in results) {
+        final components =
+            (result as Map<String, dynamic>)['address_components'] as List? ??
+            const [];
+        for (final raw in components) {
+          final component = raw as Map<String, dynamic>;
+          final types = (component['types'] as List? ?? const [])
+              .cast<String>();
+          if (!types.contains(type)) continue;
+          final name =
+              (component[type == 'country' ? 'short_name' : 'long_name']
+                      as String?)
+                  ?.trim();
+          if (name != null && name.isNotEmpty) return name;
+        }
+      }
+    }
+    return null;
+  }
+
+  final region = first(['administrative_area_level_1']);
+  return ResolvedAddress(
+    barangay: first([
+      'sublocality_level_1',
+      'sublocality',
+      'neighborhood',
+      'administrative_area_level_5',
+      'administrative_area_level_4',
+      'administrative_area_level_3',
+    ]),
+    city: first(['locality', 'postal_town']),
+    // Metro Manila's cities sit directly under the region, with no
+    // province level — the region then stands in for it.
+    province: first(['administrative_area_level_2']) ?? region,
+    region: region,
+    countryCode: first(['country']),
+  );
 }
 
 class GeocodingService {
@@ -85,42 +153,44 @@ class GeocodingService {
   /// callers decide how to surface that (e.g. "couldn't detect your
   /// address, please pick it from the list instead").
   static Future<ResolvedAddress?> reverseGeocode(double lat, double lng) async {
+    return (await reverseGeocodeDetailed(lat, lng)).address;
+  }
+
+  /// [reverseGeocode] plus why it failed, for callers that need to tell
+  /// "the lookup did not work" (network, API key, quota — `status` is the
+  /// API's own, e.g. REQUEST_DENIED) from "it worked but found little".
+  static Future<({ResolvedAddress? address, String status, String? error})>
+  reverseGeocodeDetailed(double lat, double lng) async {
     try {
       final uri = Uri.https('maps.googleapis.com', '/maps/api/geocode/json', {
         'latlng': '$lat,$lng',
+        'region': 'ph',
         'key': _apiKey,
       });
       final res = await http.get(uri).timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return null;
-
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      if (body['status'] != 'OK') return null;
-      final results = body['results'] as List?;
-      if (results == null || results.isEmpty) return null;
-
-      String? barangay;
-      String? municipality;
-      String? province;
-      final components = (results.first as Map<String, dynamic>)['address_components'] as List? ?? [];
-      for (final raw in components) {
-        final c = raw as Map<String, dynamic>;
-        final types = (c['types'] as List).cast<String>();
-        final name = (c['long_name'] as String?)?.trim();
-        if (name == null || name.isEmpty) continue;
-        if (barangay == null && (types.contains('sublocality') || types.contains('sublocality_level_1'))) {
-          barangay = name;
-        } else if (municipality == null &&
-            (types.contains('locality') || types.contains('administrative_area_level_2'))) {
-          municipality = name;
-        } else if (province == null && types.contains('administrative_area_level_1')) {
-          province = name;
-        }
+      if (res.statusCode != 200) {
+        return (address: null, status: 'HTTP_${res.statusCode}', error: null);
       }
 
-      final addr = ResolvedAddress(barangay: barangay, city: municipality, province: province);
-      return addr.isEmpty ? null : addr;
-    } catch (_) {
-      return null;
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final status = (body['status'] ?? 'UNKNOWN').toString();
+      final results = body['results'] as List?;
+      if (status != 'OK' || results == null || results.isEmpty) {
+        return (
+          address: null,
+          status: status,
+          error: body['error_message']?.toString(),
+        );
+      }
+
+      final addr = parseGeocodeResults(results);
+      return (
+        address: addr.isEmpty ? null : addr,
+        status: addr.isEmpty ? 'NO_ADDRESS_COMPONENTS' : 'OK',
+        error: null,
+      );
+    } catch (e) {
+      return (address: null, status: 'EXCEPTION', error: e.toString());
     }
   }
 
@@ -131,7 +201,9 @@ class GeocodingService {
   /// uses instead of ever inventing a barangay/city center itself; a
   /// failure here is non-fatal — the readable address is still saved,
   /// just without a coordinate (see buyer_location_picker.dart).
-  static Future<({double lat, double lng})?> forwardGeocode(String address) async {
+  static Future<({double lat, double lng})?> forwardGeocode(
+    String address,
+  ) async {
     try {
       final uri = Uri.https('maps.googleapis.com', '/maps/api/geocode/json', {
         'address': address,
@@ -147,7 +219,8 @@ class GeocodingService {
       if (results == null || results.isEmpty) return null;
 
       final location =
-          (results.first as Map<String, dynamic>)['geometry']?['location'] as Map<String, dynamic>?;
+          (results.first as Map<String, dynamic>)['geometry']?['location']
+              as Map<String, dynamic>?;
       final lat = (location?['lat'] as num?)?.toDouble();
       final lng = (location?['lng'] as num?)?.toDouble();
       if (lat == null || lng == null) return null;

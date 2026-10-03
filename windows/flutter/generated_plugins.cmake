@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  app_links
   cloud_firestore
   connectivity_plus
   file_selector_windows
@@ -10,6 +11,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   firebase_core
   geolocator_windows
   printing
+  share_plus
   url_launcher_windows
 )
 

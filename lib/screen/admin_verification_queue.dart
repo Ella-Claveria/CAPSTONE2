@@ -34,7 +34,7 @@ class _VerificationQueueViewState extends State<VerificationQueueView> {
   ];
 
   void _approveFarmer(int index) {
-    // Logic: In a real app, update Firestore status to 'Approved' 
+    // Logic: In a real app, update Firestore status to 'Approved'
     // and trigger Firebase Auth to send the Verification Email here.
     setState(() {
       _pendingFarmers[index]['status'] = 'Approved';
@@ -42,7 +42,9 @@ class _VerificationQueueViewState extends State<VerificationQueueView> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Approved ${_pendingFarmers[index]['name']}. Verification email sent.'),
+        content: Text(
+          'Approved ${_pendingFarmers[index]['name']}. Verification email sent.',
+        ),
         backgroundColor: Colors.green[800],
       ),
     );
@@ -51,7 +53,9 @@ class _VerificationQueueViewState extends State<VerificationQueueView> {
   void _requestUpdate(int index) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Update requested for ${_pendingFarmers[index]['name']}.'),
+        content: Text(
+          'Update requested for ${_pendingFarmers[index]['name']}.',
+        ),
         backgroundColor: Colors.orange[800],
       ),
     );
@@ -104,11 +108,17 @@ class _VerificationQueueViewState extends State<VerificationQueueView> {
                             children: [
                               Text(
                                 farmer['name'],
-                                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
                               ),
                               Text(
                                 '${farmer['id']} • Submitted ${farmer['date']}',
-                                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                style: TextStyle(
+                                  color: Colors.grey[600],
+                                  fontSize: 13,
+                                ),
                               ),
                             ],
                           ),
@@ -125,14 +135,20 @@ class _VerificationQueueViewState extends State<VerificationQueueView> {
                         // Action Buttons
                         isApproved
                             ? Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.green[50],
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                                 child: Text(
                                   'Approved - Email Sent',
-                                  style: TextStyle(color: Colors.green[800], fontWeight: FontWeight.w600),
+                                  style: TextStyle(
+                                    color: Colors.green[800],
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               )
                             : Row(
@@ -141,7 +157,9 @@ class _VerificationQueueViewState extends State<VerificationQueueView> {
                                     onPressed: () => _requestUpdate(index),
                                     style: OutlinedButton.styleFrom(
                                       foregroundColor: Colors.orange[800],
-                                      side: BorderSide(color: Colors.orange.shade200),
+                                      side: BorderSide(
+                                        color: Colors.orange.shade200,
+                                      ),
                                     ),
                                     child: const Text('Request Update'),
                                   ),

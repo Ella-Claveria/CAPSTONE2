@@ -38,8 +38,10 @@ class MessageService {
     return ids.join('_');
   }
 
-  /// Creates the conversation if it doesn't exist yet, or refreshes the
-  /// product context if it does. Safe to call every time a buyer taps
+  /// Prepares the conversation with a farmer about a product: refreshes the
+  /// product context of an existing thread, or — if the two have never
+  /// exchanged anything — holds it as a draft that is only written when a
+  /// first message is sent. Safe to call every time a buyer taps
   /// "Message Seller" on a product.
   Future<String> startOrGetConversation({
     required String otherUserId,
@@ -80,8 +82,8 @@ class MessageService {
         .collection('conversations')
         .doc(conversationId);
 
-    await chatDocRef.set({
-      'participants': [currentUserId, otherUserId],
+    // Product context and names — no lastMessage: nothing has been said.
+    final context = <String, dynamic>{
       'participantNames': {
         currentUserId: currentUserName,
         otherUserId: otherUserName,
@@ -104,21 +106,131 @@ class MessageService {
       'wholesalePrice': wholesalePrice,
       'wholesaleMinimumQuantity': wholesaleMinimumQuantity,
       'retailMaximumQuantity': retailMaximumQuantity,
-      'lastMessage': 'Inquiry about $productName',
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastSenderId': currentUserId,
-    }, SetOptions(merge: true));
+    };
+
+    if ((await chatDocRef.get()).exists) {
+      // An existing thread: just bring its product context up to date. Its
+      // last message, time and unread counts are left exactly as they are
+      // — opening the chat is not a message.
+      _drafts.remove(conversationId);
+      await chatDocRef.set(context, SetOptions(merge: true));
+    } else {
+      // No thread yet: nothing is written. It is created by the first
+      // message actually sent (see _ensureConversation); leaving the chat
+      // without sending leaves no trace.
+      _drafts[conversationId] = {
+        'participants': [currentUserId, otherUserId],
+        ...context,
+      };
+    }
 
     return conversationId;
   }
 
+  /// The one conversation between an order's farmer and buyer. If the two
+  /// have never chatted it is held as a draft and created by the first
+  /// message sent (see _ensureConversation) — only
+  /// then. Unlike [startOrGetConversation] it can
+  /// be called from either side and never overwrites an existing
+  /// conversation's product context. Used by the Orders screens.
+  Future<String> ensureOrderConversation({
+    required String sellerId,
+    required String sellerName,
+    required String buyerId,
+    required String buyerName,
+    required String productId,
+    required String productName,
+    required String productImageUrl,
+  }) async {
+    await _requireOnline();
+    final conversationId = conversationIdFor(sellerId, buyerId);
+    final ref = _conversations.doc(conversationId);
+    if ((await ref.get()).exists) {
+      _drafts.remove(conversationId);
+      return conversationId;
+    }
+
+    // Not written yet — created by the first message actually sent.
+    _drafts[conversationId] = {
+      'participants': [buyerId, sellerId],
+      'participantNames': {buyerId: buyerName, sellerId: sellerName},
+      'farmerId': sellerId,
+      'farmerName': sellerName,
+      'productId': productId,
+      'productName': productName,
+      'productImageUrl': productImageUrl,
+      'farmerImage': productImageUrl,
+    };
+    return conversationId;
+  }
+
+  /// Puts the receipt card of a completed order into the conversation, if
+  /// it isn't there already. The issueOrderReceipt Cloud Function normally
+  /// does this the moment the order completes; this is the farmer's manual
+  /// "send receipt" for when it hasn't. One card per order (the message id
+  /// is derived from the order id), and Firestore rules only accept it from
+  /// the seller of a completed order. The card carries no editable values —
+  /// the receipt itself is always opened from the transaction record.
+  Future<void> sendReceiptMessage({
+    required String conversationId,
+    required String buyerId,
+    required String orderId,
+    required String orderDisplayId,
+    required String receiptNumber,
+    required String productId,
+    required String productName,
+    required num subtotal,
+    required num? total,
+  }) async {
+    await _requireOnline();
+    final convRef = _conversations.doc(conversationId);
+    final msgRef = convRef.collection('messages').doc('receipt_$orderId');
+    if ((await msgRef.get()).exists) return;
+
+    await _ensureConversation(conversationId);
+    final batch = _firestore.batch();
+    batch.set(msgRef, {
+      'senderId': currentUid,
+      'type': 'receipt',
+      'orderId': orderId,
+      'orderDisplayId': orderDisplayId,
+      'receiptNumber': receiptNumber,
+      'productId': productId,
+      'productName': productName,
+      'subtotal': subtotal,
+      'total': total,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    batch.update(convRef, {
+      'lastMessage': 'Transaction receipt · Order #$orderDisplayId',
+      'lastMessageTime': FieldValue.serverTimestamp(),
+      'lastSenderId': currentUid,
+      'unreadCount.$buyerId': FieldValue.increment(1),
+      'hasMessages': true,
+    });
+    await batch.commit();
+  }
+
+  /// Sends an order-options card (Retail, plus Wholesale when the listing
+  /// offers it) for one product, at the prices current when sent. The
+  /// buyer's choice is re-checked against the listing before ordering.
   Future<void> sendPricingOptions({
     required String conversationId,
     required String otherUserId,
     required num retailPrice,
     num? wholesalePrice,
-    required int wholesaleMinimumQuantity,
-    required int retailMaximumQuantity,
+    required num wholesaleMinimumQuantity,
+    int retailMaximumQuantity = 1, // Legacy field, kept for older readers.
+    String? productId,
+    String? productName,
+    String? unit,
+    bool wholesaleEnabled = true,
+    // Delivery/pick-up availability as shown to the buyer when sent, e.g.
+    // "Delivery: Within Laurel · ₱50.00" (see ChatProduct.deliveryLabel).
+    bool? deliveryAvailable,
+    bool? pickupAvailable,
+    String? deliveryLabel,
+    String? pickupLabel,
   }) async {
     await _requireOnline();
     final me = _auth.currentUser!;
@@ -127,19 +239,31 @@ class MessageService {
     final messageData = <String, dynamic>{
       'senderId': me.uid,
       'type': 'pricingOptions',
+      'productId': ?productId,
+      'productName': ?productName,
+      'unit': ?unit,
       'retailPrice': retailPrice,
-      'wholesalePrice': wholesalePrice,
+      'wholesaleEnabled': wholesaleEnabled,
+      'wholesalePrice': wholesaleEnabled ? wholesalePrice : null,
       'wholesaleMinimumQuantity': wholesaleMinimumQuantity,
       'retailMaximumQuantity': retailMaximumQuantity,
+      'deliveryAvailable': ?deliveryAvailable,
+      'pickupAvailable': ?pickupAvailable,
+      'deliveryLabel': ?deliveryLabel,
+      'pickupLabel': ?pickupLabel,
       'createdAt': FieldValue.serverTimestamp(),
     };
+    await _ensureConversation(conversationId);
     final batch = _firestore.batch();
     batch.set(msgRef, messageData);
     batch.update(convRef, {
-      'lastMessage': 'Pricing options sent',
+      'lastMessage': productName == null
+          ? 'Order options sent'
+          : 'Order options for $productName',
       'lastMessageTime': FieldValue.serverTimestamp(),
       'lastSenderId': me.uid,
       'unreadCount.$otherUserId': FieldValue.increment(1),
+      'hasMessages': true,
     });
     await batch.commit();
   }
@@ -224,6 +348,7 @@ class MessageService {
     final convRef = _conversations.doc(conversationId);
     final msgRef = convRef.collection('messages').doc();
 
+    await _ensureConversation(conversationId);
     final batch = _firestore.batch();
     final messageData = {
       'senderId': FirebaseAuth.instance.currentUser!.uid,
@@ -245,6 +370,7 @@ class MessageService {
       'lastMessageTime': FieldValue.serverTimestamp(),
       'lastSenderId': me.uid,
       'unreadCount.$otherUserId': FieldValue.increment(1),
+      'hasMessages': true,
     });
     await batch.commit();
   }
@@ -264,6 +390,7 @@ class MessageService {
     final convRef = _conversations.doc(conversationId);
     final msgRef = convRef.collection('messages').doc();
 
+    await _ensureConversation(conversationId);
     final batch = _firestore.batch();
     batch.set(msgRef, {
       'senderId': me.uid,
@@ -277,6 +404,7 @@ class MessageService {
       'lastMessageTime': FieldValue.serverTimestamp(),
       'lastSenderId': me.uid,
       'unreadCount.$otherUserId': FieldValue.increment(1),
+      'hasMessages': true,
     });
     await batch.commit();
   }
@@ -295,6 +423,7 @@ class MessageService {
     final convRef = _conversations.doc(conversationId);
     final msgRef = convRef.collection('messages').doc();
 
+    await _ensureConversation(conversationId);
     final batch = _firestore.batch();
     final messageData = {
       'senderId': me.uid,
@@ -311,19 +440,102 @@ class MessageService {
       'lastMessageTime': FieldValue.serverTimestamp(),
       'lastSenderId': me.uid,
       'unreadCount.$otherUserId': FieldValue.increment(1),
+      'hasMessages': true,
     });
     await batch.commit();
   }
 
   /// Call when the user opens a conversation, to zero out their unread badge.
   Future<void> markConversationRead(String conversationId) async {
+    // A chat that is still only a draft has no thread to mark, and opening
+    // it must not create one.
+    if (_drafts.containsKey(conversationId)) return;
     final conversation = _conversations.doc(conversationId);
     final batch = _firestore.batch();
     batch.update(conversation, {'unreadCount.$currentUid': 0});
     batch.set(conversation.collection('reads').doc(currentUid), {
       'lastReadAt': FieldValue.serverTimestamp(),
     });
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (_) {
+      // No such thread (nothing sent yet), or offline — nothing to mark.
+    }
+  }
+
+  // ---- Draft conversations ----
+  // Tapping "Message" (or opening a chat from an order) for a pair that has
+  // never exchanged anything does not write a conversation: its details are
+  // kept here, in memory, and the document is created by the first message
+  // that is really sent — text, photo, location, order options or receipt.
+  // Leaving without sending leaves nothing in Firestore and nothing in
+  // either person's Messages list.
+  static final Map<String, Map<String, dynamic>> _drafts = {};
+
+  Future<void> _ensureConversation(String conversationId) async {
+    final draft = _drafts[conversationId];
+    if (draft == null) return;
+    await _conversations
+        .doc(conversationId)
+        .set(draft, SetOptions(merge: true));
+    _drafts.remove(conversationId);
+  }
+
+  // ---- Which conversations belong in the Messages list ----
+  // Only ones with real content. Every send marks the conversation
+  // `hasMessages: true`. Conversations from before that flag existed are
+  // judged by their last message: a real one counts; the old placeholder
+  // text written just for opening a chat ("Inquiry about …", "Order for
+  // …") does not prove anything, so those are checked once for an actual
+  // message (and marked, if they have one).
+  static final Map<String, bool> _checkedActivity = {};
+  static final Set<String> _checkingActivity = {};
+
+  static bool _isPlaceholderPreview(String lastMessage) =>
+      lastMessage.isEmpty ||
+      lastMessage.startsWith('Inquiry about ') ||
+      lastMessage.startsWith('Order for ');
+
+  /// True if [data] (conversation [conversationId]) has real message
+  /// activity and should be listed; false if it is an empty shell. Returns
+  /// false while an old conversation is still being checked, then calls
+  /// [onResolved] so the list can rebuild.
+  bool hasMessageActivity(
+    String conversationId,
+    Map<String, dynamic> data, {
+    void Function()? onResolved,
+  }) {
+    if (data['hasMessages'] == true) return true;
+    if (!_isPlaceholderPreview((data['lastMessage'] ?? '').toString())) {
+      return true;
+    }
+    final checked = _checkedActivity[conversationId];
+    if (checked != null) return checked;
+
+    if (_checkingActivity.add(conversationId)) {
+      final ref = _conversations.doc(conversationId);
+      ref
+          .collection('messages')
+          .limit(1)
+          .get()
+          .then((snap) {
+            final has = snap.docs.isNotEmpty;
+            _checkedActivity[conversationId] = has;
+            if (has) {
+              // So it never needs checking again, on any device.
+              ref.update({'hasMessages': true}).catchError((_) {});
+            }
+          })
+          .catchError((_) {
+            // Could not check (offline): leave it hidden for now and try
+            // again the next time the list is opened.
+          })
+          .whenComplete(() {
+            _checkingActivity.remove(conversationId);
+            onResolved?.call();
+          });
+    }
+    return false;
   }
 
   String otherParticipant(List<dynamic> participants) {

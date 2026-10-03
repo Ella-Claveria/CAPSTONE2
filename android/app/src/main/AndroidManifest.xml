@@ -48,7 +48,40 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Shared product links (see product_share_service.dart):
+                 https://agritrade-bef87.web.app/product/<id> opens the app
+                 on that product. Android only hands https links straight to
+                 the app once the domain is verified, which needs
+                 web/.well-known/assetlinks.json (with this app's signing
+                 certificate fingerprint) deployed to Firebase Hosting;
+                 until then the link opens the web app in the browser. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="https"
+                    android:host="agritrade-bef87.web.app"
+                    android:pathPrefix="/product/"/>
+            </intent-filter>
+            <!-- The app's own scheme: agritrade://product/<id>. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="agritrade" android:host="product"/>
+            </intent-filter>
+            <!-- Links are handled by ProductLinkService (app_links), not by
+                 Flutter pushing the link's path as a route name. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false"/>
         </activity>
+        <!-- Crop & rotate screen for product photos (image_cropper). -->
+        <activity
+            android:name="com.yalantis.ucrop.UCropActivity"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.AppCompat.Light.NoActionBar" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

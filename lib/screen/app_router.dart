@@ -114,6 +114,27 @@ class _AppRouterState extends State<AppRouter> {
 
     try {
       await user.reload();
+    } on FirebaseAuthException catch (e) {
+      // The saved session is no longer valid (account disabled or deleted,
+      // or its token was revoked/expired) — that is not a connection
+      // problem, so sign out and go back to login rather than "offline".
+      const invalidSession = {
+        'user-disabled',
+        'user-not-found',
+        'user-token-expired',
+        'invalid-user-token',
+      };
+      if (invalidSession.contains(e.code)) {
+        try {
+          await FirebaseAuth.instance.signOut();
+        } catch (_) {}
+        if (!mounted) return;
+        _goTo(const RoleSelectionScreen());
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _offline = true);
+      return;
     } catch (_) {
       if (!mounted) return;
       setState(() => _offline = true);

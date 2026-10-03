@@ -72,12 +72,17 @@ class _ConnectivityBannerState extends State<ConnectivityBanner> {
               child: Material(
                 color: _offline ? Colors.red[700] : Colors.green[700],
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 6,
+                    horizontal: 12,
+                  ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        _offline ? Icons.cloud_off_outlined : Icons.sync_rounded,
+                        _offline
+                            ? Icons.cloud_off_outlined
+                            : Icons.sync_rounded,
                         color: Colors.white,
                         size: 14,
                       ),
@@ -88,7 +93,10 @@ class _ConnectivityBannerState extends State<ConnectivityBanner> {
                               ? 'No internet connection — some actions are unavailable until you\'re back online.'
                               : 'Back online — refreshing…',
                           style: const TextStyle(
-                              color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
                           textAlign: TextAlign.center,
                         ),
                       ),

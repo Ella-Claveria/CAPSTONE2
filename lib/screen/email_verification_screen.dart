@@ -5,12 +5,13 @@
 // verification via email for all registered users."
 //
 // HOW IT WORKS:
-// After signing up, Firebase sends a verification link to the
-// user's email. Until they click that link, their account is
-// "unverified". This screen waits for that to happen, checking
-// automatically every 4 seconds — the user doesn't even need to
-// press anything, they just tap the link, switch back to the
-// app, and it moves on by itself.
+// After signing up, a 6-digit code is emailed to the user's
+// address. The code is generated, stored (hashed) and checked by
+// Cloud Functions (functions/email_otp.js) — this screen only
+// asks for one, collects what the user types and sends it to be
+// checked. Until a correct code is entered the account stays
+// "unverified" and every login is routed back here (see
+// AuthRoutingService).
 //
 // Once verified, the full profile collected at registration
 // (name, barangay, certificate, etc. — see PendingRegistrationProfile)
@@ -21,21 +22,27 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
+import '../services/email_mask.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import 'login_screen.dart';
+import 'page_transitions.dart';
 import 'pending_approval_screen.dart';
+import 'register_screen.dart';
+import 'role_selection_screen.dart';
 
 class EmailVerificationScreen extends StatefulWidget {
   final String role; // 'farmer' or 'buyer'
-  final String email; // shown on screen so they know where to look
-  final bool sendInitialEmail;
+  final String email; // shown masked, so they know where to look
   // Everything collected on the registration form that still needs to be
   // written to Firestore once verification succeeds (see
   // AuthService.completeRegistration). Null when resuming an existing
-  // unverified session from a fresh app launch — _checkVerified falls
+  // unverified session from a fresh app launch — _finishVerified falls
   // back to AuthService.loadPendingProfile in that case, since this
   // constructor argument doesn't survive the app being closed.
   final PendingRegistrationProfile? pendingProfile;
@@ -44,7 +51,6 @@ class EmailVerificationScreen extends StatefulWidget {
     super.key,
     required this.role,
     required this.email,
-    this.sendInitialEmail = true,
     this.pendingProfile,
   });
 
@@ -54,70 +60,77 @@ class EmailVerificationScreen extends StatefulWidget {
 }
 
 class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
-  final _authService = AuthService();
+  static const _codeLength = 6;
 
-  Timer? _pollTimer; // checks verification automatically
+  final _authService = AuthService();
+  final _codeController = TextEditingController();
+  final _codeFocus = FocusNode();
+
   Timer? _cooldownTimer; // counts down the resend button
   int _cooldown = 0; // seconds left before resend is allowed
-  bool _checking = false;
+  bool _requesting = false;
+  bool _verifying = false;
   bool _navigatingAway = false;
-
-  // The link we most recently sent is only honored by this screen for 5
-  // minutes — see _checkExpiry's doc comment for the caveat on what that
-  // actually means.
-  static const _linkValidFor = Duration(minutes: 5);
-  DateTime? _emailSentAt;
-  bool _expired = false;
 
   @override
   void initState() {
     super.initState();
+    _codeController.addListener(_onCodeChanged);
+    _codeFocus.addListener(_onCodeChanged);
 
-    // Registration reaches this screen once after creating the account, so
-    // send exactly one initial message here. Existing unverified sessions
-    // enter with sendInitialEmail=false and can resend only on request.
-    if (widget.sendInitialEmail) _sendEmail(initial: true);
-
-    // Then quietly check every 4 seconds whether they've clicked it, and
-    // whether the 5-minute window on the link we sent has run out.
-    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _checkVerified(silent: true);
-      _checkExpiry();
-    });
+    // Ask for a code once, when the screen opens. Whether an email actually
+    // goes out is the server's call: it sends only if there is no code this
+    // account could still use, so opening this screen again (a rebuild, a
+    // hot restart, reopening the app) never sends a duplicate.
+    _requestCode(resend: false);
   }
 
   @override
   void dispose() {
-    // Very important: stop the timers when leaving this screen,
-    // or they keep running in the background and cause errors.
-    _pollTimer?.cancel();
+    // Very important: stop the timer when leaving this screen,
+    // or it keeps running in the background and causes errors.
     _cooldownTimer?.cancel();
+    _codeController.dispose();
+    _codeFocus.dispose();
     super.dispose();
   }
 
-  // ----------------------------------------------------------
-  // Send (or resend) the verification email.
-  // ----------------------------------------------------------
-  Future<void> _sendEmail({bool initial = false}) async {
-    final error = await _authService.sendVerificationEmail();
-    if (!mounted) return;
+  void _onCodeChanged() {
+    if (mounted) setState(() {});
+  }
 
-    if (error != null) {
-      _showMessage(error);
+  // ----------------------------------------------------------
+  // Ask for a code (or, with resend, a new one that replaces it).
+  // ----------------------------------------------------------
+  Future<void> _requestCode({required bool resend}) async {
+    if (_requesting || _navigatingAway) return;
+    setState(() => _requesting = true);
+
+    final result = await _authService.requestEmailOtp(resend: resend);
+    if (!mounted) return;
+    setState(() => _requesting = false);
+
+    if (result.alreadyVerified) {
+      await _finishVerified();
       return;
     }
-
-    if (!initial) {
-      _showMessage('Verification link resent.');
+    if (result.resendAfterSeconds > 0) {
+      _startCooldown(result.resendAfterSeconds);
     }
+    if (result.error != null) {
+      _showMessage(result.error!);
+      return;
+    }
+    if (result.sent) {
+      // The previous code (if any) no longer works — don't leave it typed in.
+      if (resend) _codeController.clear();
+      _showMessage('Verification code sent', isError: false);
+    }
+  }
 
-    // Start a 60-second cooldown so they can't spam the button, and reset
-    // this screen's 5-minute window on the freshly-sent link.
-    setState(() {
-      _cooldown = 60;
-      _emailSentAt = DateTime.now();
-      _expired = false;
-    });
+  // The server enforces the wait; this only keeps the button honest about it.
+  void _startCooldown(int seconds) {
+    setState(() => _cooldown = seconds);
     _cooldownTimer?.cancel();
     _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -129,80 +142,72 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
     });
   }
 
-  // Firebase itself doesn't expose a way to shorten a verification link's
-  // own validity from the client SDK, so this is this screen's own
-  // enforcement instead: once 5 minutes pass without verifying, it stops
-  // encouraging use of the link it already sent and pushes "Resend email"
-  // instead — but if the original link still happens to get clicked after
-  // that (Firebase's own, longer expiry hasn't necessarily run out), it's
-  // still honored rather than fought; _checkVerified keeps polling
-  // regardless of _expired.
-  void _checkExpiry() {
-    if (_expired || _emailSentAt == null) return;
-    if (DateTime.now().difference(_emailSentAt!) >= _linkValidFor) {
-      setState(() => _expired = true);
+  // ----------------------------------------------------------
+  // Send the typed code to be checked.
+  // ----------------------------------------------------------
+  Future<void> _verify() async {
+    final code = _codeController.text;
+    if (code.length != _codeLength || _verifying || _navigatingAway) return;
+    setState(() => _verifying = true);
+
+    try {
+      final error = await _authService.verifyEmailOtp(code);
+      if (!mounted) return;
+      if (error != null) {
+        _codeController.clear();
+        _showMessage(error);
+        return;
+      }
+      await _finishVerified();
+    } finally {
+      if (mounted) setState(() => _verifying = false);
     }
   }
 
   // ----------------------------------------------------------
-  // Ask Firebase: has this user clicked the link yet?
-  //
-  // "silent" means it was the automatic check, so we don't show
-  // an error message if they haven't verified yet.
+  // The server has marked this email verified: pick that up in this
+  // session, write the profile, and continue to the account's flow.
   // ----------------------------------------------------------
-  Future<void> _checkVerified({bool silent = false}) async {
-    if (_checking || _navigatingAway) return;
-    _checking = true;
-
-    if (!silent) setState(() {});
+  Future<void> _finishVerified() async {
+    if (_navigatingAway) return;
+    _navigatingAway = true;
 
     try {
-      final verified = await _authService.isEmailVerified();
+      final verificationError = await _authService.refreshVerifiedEmailToken();
       if (!mounted) return;
+      if (verificationError != null) {
+        _navigatingAway = false;
+        _showMessage(verificationError);
+        return;
+      }
 
-      if (verified) {
-        _navigatingAway = true;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final profile = uid == null
+          ? null
+          : (widget.pendingProfile ??
+                await _authService.loadPendingProfile(uid));
+      final resolvedRole = profile?.role ?? widget.role;
+      final profileError = await _completeRegistrationIfNeeded(
+        uid,
+        profile,
+        resolvedRole,
+      );
+      if (!mounted) return;
+      if (profileError != null) {
+        _navigatingAway = false;
+        _showMessage(profileError);
+        return;
+      }
 
-        final verificationError = await _authService
-            .refreshVerifiedEmailToken();
-        if (!mounted) return;
-        if (verificationError != null) {
-          _navigatingAway = false;
-          _showMessage(verificationError);
-          return;
-        }
-
-        final uid = FirebaseAuth.instance.currentUser?.uid;
-        final profile = uid == null
-            ? null
-            : (widget.pendingProfile ??
-                  await _authService.loadPendingProfile(uid));
-        final resolvedRole = profile?.role ?? widget.role;
-        final profileError = await _completeRegistrationIfNeeded(
-          uid,
-          profile,
-          resolvedRole,
+      if (resolvedRole == 'farmer') {
+        Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (_) => const PendingApprovalScreen(justVerified: true),
+          ),
+          (route) => false,
         );
-        if (!mounted) return;
-        if (profileError != null) {
-          _navigatingAway = false;
-          _showMessage(profileError);
-          return;
-        }
-
-        if (resolvedRole == 'farmer') {
-          _pollTimer?.cancel();
-          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => const PendingApprovalScreen(justVerified: true),
-            ),
-            (route) => false,
-          );
-        } else {
-          await _backToLogin();
-        }
-      } else if (!silent) {
-        _showMessage('Not verified yet. Please check your inbox.');
+      } else {
+        await _backToLogin();
       }
     } catch (_) {
       if (mounted) {
@@ -210,7 +215,6 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
         _showMessage('Could not finish verification. Please try again.');
       }
     } finally {
-      _checking = false;
       if (mounted) setState(() {});
     }
   }
@@ -218,8 +222,9 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
   // Writes the full Firestore profile for the very first time — see
   // AuthService.completeRegistration's doc comment. Skipped (not an
   // error) if a doc already exists for this uid, which covers both "this
-  // already ran once" (e.g. a duplicate poll tick) and a legacy account
-  // that was fully registered before this deferred-write design existed.
+  // already ran once" and a legacy account that was fully registered
+  // before this deferred-write design existed (the server stamps
+  // emailOtpVerified on an existing doc itself).
   Future<String?> _completeRegistrationIfNeeded(
     String? uid,
     PendingRegistrationProfile? profile,
@@ -246,6 +251,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
           profile?.supportedProductsAcknowledged ?? false,
       barangay: profile?.barangay,
       certificateUrl: profile?.certificateUrl,
+      emailOtpVerified: true,
     );
     if (error == null) await _authService.clearPendingProfile(uid);
     return error;
@@ -255,9 +261,9 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
   // Verifying an email signs the account out again and sends them back to
   // the login screen — the account isn't considered "logged in" for real
   // until they actually enter their password again afterward. This is a
-  // deliberate security step, not a bug: it stops anyone who intercepted
+  // deliberate security step, not a bug: it stops anyone who got hold of
   // the (still-open) sign-up session on this device from riding it straight
-  // into the app just because the link got clicked.
+  // into the app just because the code was entered.
   // ----------------------------------------------------------
   Future<void> _backToLogin() async {
     try {
@@ -273,224 +279,379 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
         builder: (_) => LoginScreen(
           role: widget.role,
           flashMessage: 'Email verified! Please log in to continue.',
+          // The only route left: its back arrow would pop to nothing.
+          disableBackNavigation: true,
         ),
       ),
       (route) => false, // clears the back stack
     );
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  // ----------------------------------------------------------
+  // Leaving without verifying. Neither way out touches the account itself:
+  // logging in with it again, still unverified, comes straight back here
+  // (see AuthRoutingService).
+  //
+  // This screen is reached either via pushReplacement (fresh registration,
+  // other screens still underneath) or pushAndRemoveUntil (a resumed
+  // unverified session, nothing underneath), so nothing here pops or
+  // relies on what's below: both clear the stack and build the one they
+  // need.
+  // ----------------------------------------------------------
+  // The app's login screen for this platform — the same entry point
+  // auth_route_handler returns a blocked session to. On mobile that is the
+  // front door (RoleSelectionScreen: the role-agnostic login form, with no
+  // back arrow of its own). A bare LoginScreen must never be left as the
+  // only route here: its back arrow pops, and popping the last route
+  // leaves a black screen.
+  Widget _loginDoor() =>
+      kIsWeb ? const LoginScreen(role: 'admin') : const RoleSelectionScreen();
+
+  // Back (the arrow or the system back button): to Login, staying signed
+  // in. The stack is cleared, so Login is the one and only route.
+  void _backToLoginDoor() {
+    if (_navigatingAway) return;
+    _navigatingAway = true;
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => _loginDoor()),
+      (route) => false,
+    );
+  }
+
+  // "Use a different account": sign this unverified session out, then open
+  // Sign Up. The stack is rebuilt as Login -> Sign Up, exactly what tapping
+  // "Create One" on the login screen produces, so Sign Up's own back arrow
+  // and its "Log in" link (both pop) land on Login instead of on nothing.
+  Future<void> _useDifferentAccount() async {
+    if (_navigatingAway) return;
+    setState(() => _navigatingAway = true);
+    // Taken before the await: the navigator outlives this screen's context.
+    final navigator = Navigator.of(context, rootNavigator: true);
+    final role = widget.pendingProfile?.role ?? widget.role;
+    try {
+      await _authService.signOut();
+    } catch (_) {
+      try {
+        await FirebaseAuth.instance.signOut();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    navigator.pushAndRemoveUntil(
+      // Placed underneath without an animation of its own — only Sign Up
+      // is seen sliding in.
+      PageRouteBuilder(
+        pageBuilder: (_, _, _) => _loginDoor(),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+      ),
+      (route) => false,
+    );
+    // The web build is the Admin portal: there is no sign-up there.
+    if (!kIsWeb) {
+      navigator.push(slideRoute(RegisterScreen(initialRole: role)));
+    }
+  }
+
+  // A short floating toast in the app's usual style (same as Add Product /
+  // Support): dark green for confirmations, red for problems.
+  void _showMessage(String message, {bool isError = true}) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          backgroundColor: isError ? Colors.red.shade700 : AppTheme.dark,
+          content: Text(message),
+        ),
+      );
+  }
+
+  // ----------------------------------------------------------
+  // Six boxes drawn from one real text field laid over them — so typing,
+  // backspace, paste and the keyboard's own "code from email" suggestion
+  // all behave like a normal field.
+  // ----------------------------------------------------------
+  Widget _buildCodeInput() {
+    final code = _codeController.text;
+    final busy = _verifying || _navigatingAway;
+
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (var i = 0; i < _codeLength; i++) ...[
+              if (i > 0) SizedBox(width: i == _codeLength ~/ 2 ? 14 : 6),
+              Flexible(
+                child: _CodeBox(
+                  digit: i < code.length ? code[i] : '',
+                  active:
+                      _codeFocus.hasFocus &&
+                      (i == code.length ||
+                          (i == _codeLength - 1 && code.length == _codeLength)),
+                ),
+              ),
+            ],
+          ],
+        ),
+        Positioned.fill(
+          child: TextField(
+            controller: _codeController,
+            focusNode: _codeFocus,
+            enabled: !busy,
+            autofocus: true,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.done,
+            autofillHints: const [AutofillHints.oneTimeCode],
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(_codeLength),
+            ],
+            showCursor: false,
+            enableInteractiveSelection: false,
+            style: const TextStyle(color: Colors.transparent, fontSize: 1),
+            decoration: const InputDecoration(
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              disabledBorder: InputBorder.none,
+              filled: false,
+              counterText: '',
+              contentPadding: EdgeInsets.zero,
+            ),
+            onSubmitted: (_) => _verify(),
+          ),
+        ),
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgLight,
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
-            child: Container(
-              padding: const EdgeInsets.all(28),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // ---- Envelope icon ----
-                  Container(
-                    width: 84,
-                    height: 84,
-                    decoration: const BoxDecoration(
-                      color: AppTheme.accent,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.mark_email_unread_outlined,
-                      size: 42,
-                      color: AppTheme.dark,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
+    final busy = _verifying || _navigatingAway;
+    final canVerify = _codeController.text.length == _codeLength && !busy;
+    final canResend = _cooldown <= 0 && !_requesting && !busy;
 
-                  const AgriTradeText(fontSize: 22),
-                  const SizedBox(height: 14),
-
-                  Text(
-                    'Verify your email',
-                    style: AppTheme.heading(21),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 10),
-
-                  Text(
-                    'We sent a verification link to:',
-                    style: AppTheme.body(size: 13.5),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 6),
-
-                  // The email address, highlighted.
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppTheme.accent.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text(
-                      widget.email,
-                      style: AppTheme.label().copyWith(
+    return PopScope(
+      // The system back button does what the arrow does.
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _backToLoginDoor();
+      },
+      child: Scaffold(
+        backgroundColor: AppTheme.bgLight,
+        appBar: AppBar(
+          backgroundColor: AppTheme.bgLight,
+          foregroundColor: AppTheme.dark,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          automaticallyImplyLeading: false,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            tooltip: 'Back to login',
+            onPressed: busy ? null : _backToLoginDoor,
+          ),
+        ),
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // ---- Envelope icon ----
+                    Container(
+                      width: 84,
+                      height: 84,
+                      decoration: const BoxDecoration(
+                        color: AppTheme.accent,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.mark_email_unread_outlined,
+                        size: 42,
                         color: AppTheme.dark,
-                        fontSize: 13.5,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Lilita One for the wordmark and the heading; everything
+                    // else on this screen is Montserrat (AppTheme's helpers).
+                    const AgriTradeText(fontSize: 30),
+                    const SizedBox(height: 14),
+
+                    Text(
+                      'Verify your email',
+                      style: GoogleFonts.lilitaOne(
+                        fontSize: 24,
+                        color: Colors.black87,
                       ),
                       textAlign: TextAlign.center,
                     ),
-                  ),
-                  const SizedBox(height: 16),
+                    const SizedBox(height: 10),
 
-                  Text(
-                    'Open the email, tap the link, then come back here. '
-                    'This screen will continue on its own.',
-                    style: AppTheme.body(size: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 22),
+                    Text(
+                      'We sent a 6-digit verification code to:',
+                      style: AppTheme.body(size: 13.5),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
 
-                  if (_expired) ...[
+                    // Where the code went — masked, never the full address.
                     Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.amber.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.amber.shade300),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
                       ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            Icons.schedule,
-                            color: Colors.amber.shade800,
-                            size: 18,
+                      decoration: BoxDecoration(
+                        color: AppTheme.accent.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        maskEmail(widget.email),
+                        style: AppTheme.label().copyWith(
+                          color: AppTheme.dark,
+                          fontSize: 13.5,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+
+                    _buildCodeInput(),
+                    const SizedBox(height: 10),
+
+                    Text(
+                      'The code expires in 10 minutes.',
+                      style: AppTheme.body(size: 12),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+
+                    // ---- Verify ----
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: canVerify ? _verify : null,
+                        style: AppTheme.primaryButton(),
+                        child: busy
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text('Verify Code', style: AppTheme.buttonText()),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // ---- Resend, with cooldown ----
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: canResend
+                            ? () => _requestCode(resend: true)
+                            : null,
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          side: const BorderSide(color: AppTheme.mid),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(30),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              "That link has expired. Tap \"Resend email\" below to get a new one.",
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.amber.shade900,
-                                height: 1.4,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_requesting) ...[
+                              const SizedBox(
+                                height: 14,
+                                width: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.grey,
+                                ),
                               ),
+                              const SizedBox(width: 10),
+                            ],
+                            Text(
+                              _requesting
+                                  ? 'Sending code…'
+                                  : _cooldown > 0
+                                  ? 'Resend Code in ${_cooldown}s'
+                                  : 'Resend Code',
+                              style: AppTheme.body(
+                                color: canResend ? AppTheme.dark : Colors.grey,
+                                size: 14,
+                              ).copyWith(fontWeight: FontWeight.w600),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(height: 14),
-                  ],
 
-                  // ---- Manual check button ----
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _checking || _navigatingAway
-                          ? null
-                          : () => _checkVerified(silent: false),
-                      style: AppTheme.primaryButton(),
-                      child: _checking
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : Text(
-                              "I've verified it",
-                              style: AppTheme.buttonText(),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-
-                  // ---- Resend, with cooldown ----
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: _cooldown > 0 ? null : () => _sendEmail(),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        side: const BorderSide(color: AppTheme.mid),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(30),
-                        ),
-                      ),
+                    // ---- Escape hatch ----
+                    TextButton(
+                      onPressed: busy ? null : _useDifferentAccount,
                       child: Text(
-                        _cooldown > 0
-                            ? 'Resend in ${_cooldown}s'
-                            : 'Resend email',
-                        style: AppTheme.body(
-                          color: _cooldown > 0 ? Colors.grey : AppTheme.dark,
-                          size: 14,
-                        ).copyWith(fontWeight: FontWeight.w600),
+                        'Use a different account',
+                        style: AppTheme.body(size: 13),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 14),
 
-                  // ---- Escape hatch ----
-                  TextButton(
-                    onPressed: () async {
-                      await _authService.signOut();
-                      if (!context.mounted) return;
-                      // Reached either via pushReplacement (fresh
-                      // registration, LoginScreen still underneath) or
-                      // pushAndRemoveUntil (a resumed unverified session,
-                      // nothing underneath) — popUntil(isFirst) would be a
-                      // silent no-op in the second case, so go to login
-                      // directly instead of relying on what's left below.
-                      Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(
-                          builder: (_) => LoginScreen(role: widget.role),
-                        ),
-                        (route) => false,
-                      );
-                    },
-                    child: Text(
-                      'Use a different account',
-                      style: AppTheme.body(size: 13),
+                    const SizedBox(height: 4),
+                    Text(
+                      "If it's not in your Inbox, check Spam or Promotions. "
+                      'If it\'s there, mark it as "Not spam".',
+                      style: AppTheme.body(size: 11.5),
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-
-                  const SizedBox(height: 4),
-                  Text(
-                    "If it's not in your Inbox, check Spam or Promotions. "
-                    'If it\'s there, mark it as "Not spam".',
-                    style: AppTheme.body(size: 11.5),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// One digit of the code.
+class _CodeBox extends StatelessWidget {
+  final String digit;
+  final bool active;
+
+  const _CodeBox({required this.digit, required this.active});
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = digit.isNotEmpty;
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 46),
+      height: 54,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: filled ? AppTheme.accent.withValues(alpha: 0.35) : Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: active || filled ? AppTheme.dark : Colors.grey.shade300,
+          width: active ? 2 : 1.2,
+        ),
+      ),
+      child: Text(
+        digit,
+        style: AppTheme.heading(22).copyWith(color: AppTheme.dark),
       ),
     );
   }

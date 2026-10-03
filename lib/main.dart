@@ -14,7 +14,7 @@ void main() {
   // Tells Flutter to get itself ready before we run any setup code.
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Starts watching for a 15-minute-plus background idle period — see
+  // Starts watching for a 30-day-plus background inactivity period — see
   // SessionTimeoutService for why this is the only thing that should ever
   // force a signed-in user back to login (a normal close/reopen must not).
   SessionTimeoutService.instance.start(rootNavigatorKey);
@@ -33,7 +33,10 @@ class AgriTradeApp extends StatelessWidget {
   Widget build(BuildContext context) {
     // Rebuilds the whole app when the language picker changes the locale.
     return ListenableBuilder(
-      listenable: LocaleController.instance,
+      listenable: Listenable.merge([
+        LocaleController.instance,
+        ThemeController.instance,
+      ]),
       builder: (context, _) {
         return MaterialApp(
           title: 'AgriTrade+',
@@ -44,6 +47,10 @@ class AgriTradeApp extends StatelessWidget {
 
           // One line = Montserrat everywhere, plus your green theme.
           theme: AppTheme.themeData(),
+          darkTheme: AppTheme.darkThemeData(),
+          themeMode: ThemeController.instance.isDark
+              ? ThemeMode.dark
+              : ThemeMode.light,
 
           locale: LocaleController.instance.locale,
           localizationsDelegates: const [
@@ -75,9 +82,12 @@ class AgriTradeApp extends StatelessWidget {
           builder: (context, child) {
             return ConnectivityBanner(
               child: Listener(
-                onPointerDown: (_) => SessionTimeoutService.instance.recordActivity(),
-                onPointerMove: (_) => SessionTimeoutService.instance.recordActivity(),
-                onPointerSignal: (_) => SessionTimeoutService.instance.recordActivity(),
+                onPointerDown: (_) =>
+                    SessionTimeoutService.instance.recordActivity(),
+                onPointerMove: (_) =>
+                    SessionTimeoutService.instance.recordActivity(),
+                onPointerSignal: (_) =>
+                    SessionTimeoutService.instance.recordActivity(),
                 child: Focus(
                   autofocus: true,
                   onKeyEvent: (node, event) {

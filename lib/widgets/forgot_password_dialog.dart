@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import 'agri_dialog.dart';
 
 /// Shared "forgot password" flow for the farmer, buyer, and admin login
 /// screens — collects an email, sends a Firebase reset link, and reports
@@ -13,13 +14,14 @@ Future<void> showForgotPasswordDialog(
   final formKey = GlobalKey<FormState>();
   bool sending = false;
 
-  await showDialog<void>(
+  await showAgriDialog<void>(
     context: context,
     builder: (dialogContext) {
       return StatefulBuilder(
         builder: (dialogContext, setState) {
-          return AlertDialog(
+          return AgriDialog(
             title: const Text('Reset your password'),
+            scrollable: true,
             content: Form(
               key: formKey,
               child: Column(
@@ -52,15 +54,22 @@ Future<void> showForgotPasswordDialog(
               ),
             ),
             actions: [
-              TextButton(
-                onPressed: sending ? null : () => Navigator.of(dialogContext).pop(),
-                child: const Text('Cancel'),
+              AgriDialogButton(
+                label: 'Cancel',
+                onPressed: sending
+                    ? null
+                    : () => Navigator.of(dialogContext).pop(),
               ),
-              ElevatedButton(
+              AgriDialogButton(
+                label: 'Send Link',
+                kind: AgriButtonKind.primary,
+                loading: sending,
                 onPressed: sending
                     ? null
                     : () async {
-                        if (!(formKey.currentState?.validate() ?? false)) return;
+                        if (!(formKey.currentState?.validate() ?? false)) {
+                          return;
+                        }
                         setState(() => sending = true);
                         final error = await AuthService()
                             .sendPasswordResetEmail(controller.text.trim());
@@ -76,13 +85,6 @@ Future<void> showForgotPasswordDialog(
                           ),
                         );
                       },
-                child: sending
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Send Link'),
               ),
             ],
           );

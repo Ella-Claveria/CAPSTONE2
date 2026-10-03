@@ -62,6 +62,21 @@ service cloud.firestore {
       return isAdmin() || isBuyer() || isApprovedFarmer();
     }
 
+    // The account passed the email code check (see functions/email_otp.js).
+    function emailOtpVerified(uid) {
+      let path = /databases/$(database)/documents/emailVerifications/$(uid);
+      return exists(path) && get(path).data.verified == true;
+    }
+
+    // ---- Email verification codes ----
+    // Issued and checked only by the requestEmailOtp / verifyEmailOtp Cloud
+    // Functions (Admin SDK bypasses these rules). No client access at all,
+    // not even to an account's own record: it holds the hash of a 6-digit
+    // code, which is only safe while it cannot be read.
+    match /emailVerifications/{userId} {
+      allow read, write: if false;
+    }
+
     // ---- Products ----
     match /products/{productId} {
       allow read: if marketplaceUser();
@@ -86,9 +101,9 @@ service cloud.firestore {
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'name', 'category', 'commodity', 'unit', 'price', 'retailPrice',
             'wholesaleEnabled', 'wholesalePrice', 'wholesaleMinimumQuantity',
-            'retailMaximumQuantity', 'quantity', 'description', 'imageUrls',
-            'imageUrl', 'deliveryAvailable', 'pickupOnly', 'updatedAt',
-            'isArchived', 'archivedAt'
+            'retailMaximumQuantity', 'quantity', 'harvestDate', 'description', 'imageUrls',
+            'imageUrl', 'deliveryAvailable', 'pickupOnly', 'deliveryCoverage', 'updatedAt',
+            'isArchived', 'archivedAt', 'priceFlag'
           ])) ||
         (isBuyer() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['viewCount']) &&
           request.resource.data.get('viewCount', 0) == resource.data.get('viewCount', 0) + 1) ||
@@ -113,8 +128,11 @@ service cloud.firestore {
         !request.resource.data.keys().hasAny([
           'reviewedBy', 'reviewedAt', 'suspensionReason', 'suspendedUntil',
           'banReason', 'moderationUpdatedBy', 'moderationUpdatedAt',
-          'emailVerified', 'emailVerifiedAt'
-        ]);
+          'emailVerified', 'emailVerifiedAt', 'emailOtpVerifiedAt'
+        ]) &&
+        // emailOtpVerified may only be claimed once the code check passed.
+        (!('emailOtpVerified' in request.resource.data) ||
+          (request.resource.data.emailOtpVerified == true && emailOtpVerified(userId)));
       // A user may only edit their own profile fields — approvalStatus,
       // role, and the admin-review audit trail (reviewedBy/reviewedAt) must
       // all stay exactly as they were, so a Farmer account cannot bypass
@@ -133,6 +151,8 @@ service cloud.firestore {
           request.resource.data.get('authProvider', null) == resource.data.get('authProvider', null) &&
           request.resource.data.get('emailVerified', null) == resource.data.get('emailVerified', null) &&
           request.resource.data.get('emailVerifiedAt', null) == resource.data.get('emailVerifiedAt', null) &&
+          request.resource.data.get('emailOtpVerified', null) == resource.data.get('emailOtpVerified', null) &&
+          request.resource.data.get('emailOtpVerifiedAt', null) == resource.data.get('emailOtpVerifiedAt', null) &&
           request.resource.data.get('rating', null) == resource.data.get('rating', null) &&
           request.resource.data.get('reviewCount', null) == resource.data.get('reviewCount', null) &&
           request.resource.data.get('trustedBuyer', null) == resource.data.get('trustedBuyer', null) &&
@@ -167,6 +187,48 @@ service cloud.firestore {
         allow write: if request.auth != null && request.auth.uid == userId &&
           (isBuyer() || isApprovedFarmer());
       }
+
+      // A buyer's bookmarked listings (see saved_products_service.dart):
+      // just the product id and when it was saved. Private to the account.
+      match /savedProducts/{productId} {
+        allow read, delete: if signedIn() && request.auth.uid == userId;
+        allow create, update: if isBuyer() && request.auth.uid == userId &&
+          request.resource.data.keys().hasOnly(['productId', 'savedAt']) &&
+          request.resource.data.productId == productId &&
+          request.resource.data.savedAt == request.time;
+      }
+
+      // Devices (app installations) this account has signed in on — see
+      // device_trust_service.dart. The doc id is a hash of an id the app
+      // generated for itself; no hardware identifier is stored. Only the
+      // account's own signed-in user can read or write its list (an admin
+      // may read). Creating one is what makes the onNewTrustedDevice Cloud
+      // Function send the New Device Login Alert; its own bookkeeping
+      // fields (alertStatus…) are written with the Admin SDK and can't be
+      // set or changed from a client.
+      match /trustedDevices/{deviceId} {
+        allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+        allow create: if signedIn() && request.auth.uid == userId &&
+          request.resource.data.keys().hasOnly([
+            'deviceIdHash', 'platform', 'deviceName', 'appVersion',
+            'trusted', 'firstSeenAt', 'lastSeenAt'
+          ]) &&
+          request.resource.data.deviceIdHash == deviceId &&
+          deviceId.size() == 64 &&
+          request.resource.data.trusted == true &&
+          request.resource.data.platform is string &&
+          request.resource.data.platform.size() <= 40 &&
+          request.resource.data.deviceName is string &&
+          request.resource.data.deviceName.size() <= 120 &&
+          request.resource.data.firstSeenAt == request.time &&
+          request.resource.data.lastSeenAt == request.time;
+        allow update: if signedIn() && request.auth.uid == userId &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['lastSeenAt', 'appVersion']) &&
+          request.resource.data.lastSeenAt == request.time;
+        // The user removing a device from their own list.
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
     }
 
     // Collection-group counterpart of users/{uid}/private above. A
@@ -179,6 +241,18 @@ service cloud.firestore {
     // already covered by the nested rule above.
     match /{path=**}/private/{privateDocId} {
       allow read: if isAdmin();
+    }
+
+    // "Active now" status for the green dot in Messages (see
+    // presence_service.dart). Each account writes only its own doc, and
+    // only the two presence fields; any marketplace user may read it.
+    match /presence/{userId} {
+      allow read: if marketplaceUser();
+      allow create, update: if signedIn() && request.auth.uid == userId &&
+        request.resource.data.keys().hasOnly(['online', 'lastSeen']) &&
+        request.resource.data.online is bool &&
+        request.resource.data.lastSeen == request.time;
+      allow delete: if signedIn() && request.auth.uid == userId;
     }
 
     // Public, minimal profile projection maintained by a trusted Function.
@@ -222,6 +296,27 @@ service cloud.firestore {
     }
 
     // ---- Conversations & messages ----
+    // Chat is between one buyer and one farmer — never buyer to buyer or
+    // farmer to farmer.
+    function buyerAndFarmer(participants) {
+      let other = participants[0] == request.auth.uid ? participants[1] : participants[0];
+      let mine = get(userPath(request.auth.uid)).data.role;
+      let theirs = get(userPath(other)).data.role;
+      return (mine == 'buyer' && theirs == 'farmer') ||
+        (mine == 'farmer' && theirs == 'buyer');
+    }
+
+    // For reading a chat's messages / typing / read state. A conversation
+    // document only exists once a first message has been sent (opening a
+    // chat creates nothing), so a chat that is still an unsent draft has
+    // no document: its subcollections are empty and may be listened to —
+    // there is nothing in them, and nothing can be written to them until
+    // the conversation exists (every write rule below still requires it).
+    function mayReadThread(conversationId) {
+      let path = /databases/$(database)/documents/conversations/$(conversationId);
+      return !exists(path) || request.auth.uid in get(path).data.participants;
+    }
+
     match /conversations/{conversationId} {
       allow read: if marketplaceUser() && (
         resource == null ||
@@ -230,7 +325,8 @@ service cloud.firestore {
 
       allow create: if marketplaceUser() &&
         request.auth.uid in request.resource.data.participants &&
-        request.resource.data.participants.size() == 2;
+        request.resource.data.participants.size() == 2 &&
+        buyerAndFarmer(request.resource.data.participants);
 
       allow update: if marketplaceUser() &&
         request.auth.uid in resource.data.participants &&
@@ -239,15 +335,28 @@ service cloud.firestore {
           'lastMessage', 'lastMessageTime', 'participantNames', 'unreadCount', 'lastSenderId',
           'farmerId', 'farmerName', 'productId', 'productName', 'productImageUrl',
           'productPrice', 'unit', 'deliveryAvailable', 'pickupOnly', 'farmerImage',
-          'retailPrice', 'wholesalePrice', 'wholesaleMinimumQuantity', 'retailMaximumQuantity'
+          'retailPrice', 'wholesalePrice', 'wholesaleMinimumQuantity', 'retailMaximumQuantity',
+          'hasMessages'
         ]);
 
       match /messages/{messageId} {
-        allow read: if marketplaceUser() && request.auth.uid in
-          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow read: if marketplaceUser() && mayReadThread(conversationId);
+        // A 'receipt' message (the receipt card of a completed order) is
+        // normally written by the issueOrderReceipt Cloud Function. A client
+        // may only add it as the seller of that completed order, to the
+        // conversation with that order's buyer, under the one id reserved
+        // for it — so nobody can post a made-up receipt card.
         allow create: if marketplaceUser() &&
           request.resource.data.senderId == request.auth.uid &&
-          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
+          (request.resource.data.get('type', '') != 'receipt' || (
+            request.resource.data.orderId is string &&
+            messageId == 'receipt_' + request.resource.data.orderId &&
+            get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.sellerId == request.auth.uid &&
+            get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.status == 'completed' &&
+            get(/databases/$(database)/documents/orders/$(request.resource.data.orderId)).data.buyerId in
+              get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants
+          ));
         allow update: if marketplaceUser() &&
           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']) &&
@@ -257,8 +366,7 @@ service cloud.firestore {
       }
 
       match /typing/{uid} {
-        allow read: if marketplaceUser() && request.auth.uid in
-          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow read: if marketplaceUser() && mayReadThread(conversationId);
         allow create, update: if marketplaceUser() && request.auth.uid == uid &&
           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
           request.resource.data.keys().hasOnly(['isTyping', 'updatedAt']) &&
@@ -267,8 +375,7 @@ service cloud.firestore {
       }
 
       match /reads/{uid} {
-        allow read: if marketplaceUser() && request.auth.uid in
-          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants;
+        allow read: if marketplaceUser() && mayReadThread(conversationId);
         allow create, update: if marketplaceUser() && request.auth.uid == uid &&
           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participants &&
           request.resource.data.keys().hasOnly(['lastReadAt']) &&
@@ -341,7 +448,62 @@ service cloud.firestore {
           (resource.data.status == 'shipped' && request.resource.data.status == 'completed')
         );
 
+      // ---- Delay / reschedule (confirmed orders only) ----
+      // The same order throughout: none of these may touch its buyer,
+      // seller, product, quantity or prices.
+
+      // Seller reports a delay and proposes a new date. Status stays
+      // 'confirmed'.
+      allow update: if isApprovedFarmer()
+        && resource.data.sellerId == request.auth.uid
+        && resource.data.status == 'confirmed'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['delay', 'updatedAt'])
+        && request.resource.data.delay.keys().hasOnly(['reason', 'note', 'proposedDate', 'reportedAt', 'status'])
+        && request.resource.data.delay.reason in ['weather', 'transport', 'supply', 'other']
+        && request.resource.data.delay.proposedDate is timestamp
+        && request.resource.data.delay.reportedAt == request.time
+        && request.resource.data.delay.status == 'proposed'
+        && request.resource.data.delay.note is string
+        && request.resource.data.delay.note.size() <= 200;
+
+      // Buyer accepts the proposed date: it becomes the confirmed
+      // fulfillment date, and nothing else about the proposal may change.
+      allow update: if isBuyer()
+        && resource.data.buyerId == request.auth.uid
+        && resource.data.status == 'confirmed'
+        && resource.data.delay.status == 'proposed'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['delay', 'confirmedFulfillmentDate', 'updatedAt'])
+        && request.resource.data.delay.status == 'accepted'
+        && request.resource.data.delay.diff(resource.data.delay).affectedKeys().hasOnly(['status'])
+        && request.resource.data.confirmedFulfillmentDate == resource.data.delay.proposedDate;
+
+      // Buyer cancels instead of accepting the new date. Only possible
+      // while a proposed date is waiting for their answer; the reserved
+      // stock is returned by the handleOrderReschedule Cloud Function.
+      allow update: if isBuyer()
+        && resource.data.buyerId == request.auth.uid
+        && resource.data.status == 'confirmed'
+        && resource.data.delay.status == 'proposed'
+        && request.resource.data.status == 'cancelled'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelReason', 'cancelledAt', 'updatedAt'])
+        && request.resource.data.cancelReason == 'delay'
+        && request.resource.data.cancelledAt == request.time;
+
       allow delete: if false;
+    }
+
+    // ---- Transaction receipts — one per completed order (doc id ==
+    // orderId), written only by issueOrderReceipt in Cloud Functions (Admin
+    // SDK bypasses these rules). A frozen copy of the transaction values:
+    // the order's farmer and buyer can read it, nobody can edit it. ----
+    match /receipts/{orderId} {
+      allow read: if marketplaceUser() && (
+        resource == null ||
+        resource.data.buyerId == request.auth.uid ||
+        resource.data.sellerId == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if false;
     }
 
     // ---- Market sales (platform-wide, anonymized) — written only by
@@ -391,6 +553,14 @@ service cloud.firestore {
         (request.resource.data.rating * 2) % 1 == 0 &&
         get(/databases/$(database)/documents/orders/$(reviewId)).data.buyerId == request.auth.uid &&
         get(/databases/$(database)/documents/orders/$(reviewId)).data.status == 'completed';
+      allow update: if isApprovedFarmer() &&
+        resource.data.sellerId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'sellerReply', 'sellerReplyAt'
+        ]) &&
+        request.resource.data.sellerReply is string &&
+        request.resource.data.sellerReply.size() > 0 &&
+        request.resource.data.sellerReply.size() <= 500;
       allow update: if isAdmin() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'moderationStatus', 'moderatedBy', 'moderatedAt'
@@ -402,8 +572,12 @@ service cloud.firestore {
 
     // ---- Moderation reports (flagged listings / users) ----
     match /reports/{reportId} {
-      allow read: if request.auth != null &&
-        isAdmin();
+      // Admins see every report (Moderation Queue); anyone else may read
+      // only the reports they filed themselves (Messages → Reported).
+      allow read: if request.auth != null && (
+        isAdmin() ||
+        resource.data.reporterId == request.auth.uid
+      );
 
       allow create: if marketplaceUser() &&
         request.resource.data.reporterId == request.auth.uid &&
@@ -489,6 +663,19 @@ service cloud.firestore {
         request.resource.data.userId == request.auth.uid;
       allow read: if marketplaceUser();
       allow update, delete: if false;
+    }
+
+    // ---- Trending Searches — anonymous per-day counts per search term,
+    // written only by the aggregateSearchTrend Cloud Function (Admin SDK
+    // bypasses these rules). Holds the term and its counts, never who
+    // searched; the per-buyer markers that function uses to count each
+    // buyer once (searchTrendVotes) are not readable by anyone. ----
+    match /searchTrends/{termId} {
+      allow read: if marketplaceUser();
+      allow write: if false;
+    }
+    match /searchTrendVotes/{voteId} {
+      allow read, write: if false;
     }
 
     // ---- Admin Portal audit log — written only by the logAuditEvent

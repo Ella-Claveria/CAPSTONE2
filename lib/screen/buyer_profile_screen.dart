@@ -1,13 +1,27 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../services/auth_service.dart';
-import '../widgets/buyer_location_picker.dart';
-import '../widgets/change_password_dialog.dart';
+import '../widgets/page_header.dart';
+import '../widgets/profile_avatar.dart';
 import 'farmer_edit_profile_screen.dart';
+import 'buyer_my_reviews_screen.dart';
+import 'buyer_saved_products_screen.dart';
 import 'buyer_settings_screen.dart';
-import 'buyer_support_screen.dart';
+import 'buyer_fulfillment_preferences_screen.dart';
+import 'notifications_screen.dart';
+import '../widgets/agri_refresh_indicator.dart';
 
+/// The buyer's Profile tab. Same look as the farmer's (header, the
+/// avatar with its edit badge, name, then role-specific content), with
+/// buyer content: a small activity summary and the buyer's own features,
+/// then Log Out on its own at the bottom. There is no menu icon — every
+/// option is on the page or inside Account Settings.
+///
+/// Shows only what is fine for the profile itself — photo, name and the
+/// general saved location. The email address and other account details
+/// live in Account Settings; the exact delivery details in
+/// Delivery & Pickup.
 class BuyerProfileScreen extends StatefulWidget {
   final VoidCallback onLogout;
   const BuyerProfileScreen({super.key, required this.onLogout});
@@ -17,9 +31,31 @@ class BuyerProfileScreen extends StatefulWidget {
 }
 
 class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
-  static const Color _accent = Color(0xFFDCEDC8);
-  final _authService = AuthService();
+  static const Color _dark = AppTheme.dark;
+
+  final String? _uid = FirebaseAuth.instance.currentUser?.uid;
+
+  // Created once, not in build(), so a rebuild doesn't resubscribe.
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _profile =
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(_uid ?? 'unknown')
+          .snapshots();
+  late final Stream<int> _completedOrders = FirebaseFirestore.instance
+      .collection('orders')
+      .where('buyerId', isEqualTo: _uid ?? '')
+      .where('status', isEqualTo: 'completed')
+      .snapshots()
+      .map((snap) => snap.size);
+  late final Stream<int> _reviewsGiven = FirebaseFirestore.instance
+      .collection('productReviews')
+      .where('buyerId', isEqualTo: _uid ?? '')
+      .snapshots()
+      .map(
+        (snap) => snap.docs
+            .where((d) => d.data()['moderationStatus'] != 'removed')
+            .length,
+      );
 
   Future<void> _refreshData() async {
     await Future.delayed(const Duration(milliseconds: 700));
@@ -27,197 +63,43 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
     setState(() {});
   }
 
-  // Opens the same popup used when placing an order, pre-filled with
-  // whatever readable address is already on file, and saves whatever
-  // comes back — the "Saved Location" row below refreshes on its own
-  // since it's a live stream of the same users/{uid} doc this writes to.
-  Future<void> _editLocation(Map<String, dynamic>? data) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-
-    final region = data?['region']?.toString();
-    final province = data?['province']?.toString();
-    final city = data?['municipality']?.toString();
-    final barangay = data?['barangay']?.toString();
-
-    BuyerLocationResult? initial;
-    if (province != null &&
-        province.isNotEmpty &&
-        city != null &&
-        city.isNotEmpty &&
-        barangay != null &&
-        barangay.isNotEmpty) {
-      initial = BuyerLocationResult(
-        region: (region != null && region.isNotEmpty) ? region : province,
-        province: province,
-        city: city,
-        barangay: barangay,
-      );
-    }
-
-    final result = await showBuyerLocationPicker(context, initial: initial);
-    if (result == null || !mounted) return;
-    await _authService.saveBuyerLocation(
-      uid: uid,
-      latitude: result.latitude,
-      longitude: result.longitude,
-      region: result.region,
-      province: result.province,
-      city: result.city,
-      barangay: result.barangay,
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Location updated.')));
-  }
-
-  Widget _menuButton(BuildContext context) {
-    return PopupMenuButton<String>(
-      icon: const Icon(Icons.menu, color: _dark),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      onSelected: (value) {
-        switch (value) {
-          case 'settings':
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const BuyerSettingsScreen()),
-            );
-            break;
-          case 'password':
-            showChangePasswordDialog(context);
-            break;
-          case 'help':
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const BuyerSupportScreen()),
-            );
-            break;
-          case 'logout':
-            widget.onLogout();
-            break;
-        }
-      },
-      itemBuilder: (context) => [
-        const PopupMenuItem(
-          value: 'settings',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.settings_outlined, color: _dark),
-            title: Text(
-              'Account Settings',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'password',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.lock_outline, color: _dark),
-            title: Text(
-              'Change Password',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'help',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.help_outline, color: _dark),
-            title: Text(
-              'Help & Support',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ),
-        const PopupMenuDivider(height: 8),
-        const PopupMenuItem(
-          value: 'logout',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.logout, color: Colors.redAccent),
-            title: Text(
-              'Log Out',
-              style: TextStyle(
-                fontSize: 14.5,
-                fontWeight: FontWeight.w500,
-                color: Colors.redAccent,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  void _open(Widget screen) =>
+      Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
 
   // Same avatar-with-edit-badge treatment as the farmer profile, opening
   // the same shared EditProfileScreen — account-detail editing (name,
-  // phone, location, photo) isn't role-specific, so there's no reason to
-  // duplicate that form for buyers.
-  Widget _avatarWithEditBadge(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(user?.uid ?? '')
-          .snapshots(),
-      builder: (context, snapshot) {
-        final data = snapshot.data?.data();
-        final photoUrl = data?['photoUrl']?.toString() ?? user?.photoURL;
-        final hasPhoto = photoUrl != null && photoUrl.isNotEmpty;
-
-        return GestureDetector(
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const EditProfileScreen()),
-          ),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              CircleAvatar(
-                radius: 46,
-                backgroundColor: _accent,
-                child: hasPhoto
-                    ? ClipOval(
-                        child: Image.network(
-                          photoUrl!,
-                          width: 92,
-                          height: 92,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) =>
-                              const Icon(Icons.person, color: _dark, size: 52),
-                        ),
-                      )
-                    : const Icon(Icons.person, color: _dark, size: 52),
+  // phone, photo) isn't role-specific, so there's no reason to duplicate
+  // that form for buyers.
+  Widget _avatarWithEditBadge(String name, String? photoUrl) {
+    return GestureDetector(
+      onTap: () => _open(const EditProfileScreen()),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          ProfileAvatar(photoUrl: photoUrl, name: name, radius: 46),
+          Positioned(
+            bottom: -2,
+            right: -2,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: _dark,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 2),
               ),
-              Positioned(
-                bottom: -2,
-                right: -2,
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: _dark,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 2),
-                  ),
-                  child: const Icon(Icons.edit, color: Colors.white, size: 14),
-                ),
-              ),
-            ],
+              child: const Icon(Icons.edit, color: Colors.white, size: 14),
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
-    final name = user?.displayName ?? 'Buyer';
 
-    return RefreshIndicator(
+    return AgriRefreshIndicator(
       color: _dark,
       onRefresh: _refreshData,
       child: SingleChildScrollView(
@@ -225,221 +107,133 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
         padding: const EdgeInsets.only(bottom: 90),
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.only(right: 8, top: 4),
-              child: Align(
-                alignment: Alignment.topRight,
-                child: _menuButton(context),
-              ),
-            ),
+            const PageHeader(title: 'Profile'),
+            const SizedBox(height: 4),
 
-            _avatarWithEditBadge(context),
-            const SizedBox(height: 10),
-
-            Text(
-              name,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
-              ),
-            ),
-            const SizedBox(height: 6),
-
+            // ---- Photo, name, general location ----
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(user?.uid ?? 'unknown')
-                  .snapshots(),
+              stream: _profile,
               builder: (context, snapshot) {
-                final data = snapshot.data?.data() ?? const <String, dynamic>{};
-                final trusted = data['trustedBuyer'] == true;
-                final count =
-                    (data['trustedBuyerReviewCount'] as num?)?.toInt() ?? 0;
-                return Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 7,
-                  ),
-                  decoration: BoxDecoration(
-                    color: trusted
-                        ? const Color(0xFFE8F5E9)
-                        : Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                final data = snapshot.data?.data();
+                final name =
+                    [data?['name'], data?['fullName'], user?.displayName]
+                        .map((v) => (v ?? '').toString().trim())
+                        .firstWhere((v) => v.isNotEmpty, orElse: () => 'Buyer');
+                final photoUrl =
+                    data?['photoUrl']?.toString() ?? user?.photoURL;
+                // General area only — barangay and city, never a street
+                // address or a pin.
+                final location = [data?['barangay'], data?['municipality']]
+                    .map((v) => (v ?? '').toString().trim())
+                    .where((v) => v.isNotEmpty)
+                    .join(', ');
+
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
                     children: [
-                      Icon(
-                        trusted
-                            ? Icons.verified_rounded
-                            : Icons.star_outline_rounded,
-                        size: 16,
-                        color: trusted ? _dark : Colors.grey[600],
-                      ),
-                      const SizedBox(width: 6),
+                      _avatarWithEditBadge(name, photoUrl),
+                      const SizedBox(height: 12),
                       Text(
-                        trusted
-                            ? 'Trusted Buyer'
-                            : 'Trusted Buyer: $count/3 reviews',
-                        style: TextStyle(
-                          color: trusted ? _dark : Colors.grey[700],
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        name,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTheme.heading(22),
                       ),
+                      if (location.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.place_outlined,
+                              size: 15,
+                              color: Colors.grey[600],
+                            ),
+                            const SizedBox(width: 3),
+                            Flexible(
+                              child: Text(
+                                location,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 );
               },
             ),
-            const SizedBox(height: 8),
 
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(user?.uid ?? 'unknown')
-                  .snapshots(),
-              builder: (context, snapshot) {
-                final profile =
-                    snapshot.data?.data() ?? const <String, dynamic>{};
-                final trusted = profile['trustedBuyer'] == true;
-                final reviewCount =
-                    (profile['trustedBuyerReviewCount'] as num?)?.toInt() ?? 0;
-                return Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 7,
-                  ),
-                  decoration: BoxDecoration(
-                    color: trusted
-                        ? const Color(0xFFE8F5E9)
-                        : Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        trusted
-                            ? Icons.verified_rounded
-                            : Icons.star_outline_rounded,
-                        size: 16,
-                        color: trusted ? _dark : Colors.grey[600],
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        trusted
-                            ? 'Trusted Buyer'
-                            : 'Trusted Buyer: $reviewCount/3 reviews',
-                        style: TextStyle(
-                          color: trusted ? _dark : Colors.grey[700],
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            const SizedBox(height: 8),
+            _activitySummary(),
+            const SizedBox(height: 20),
 
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(user?.uid ?? 'unknown')
-                  .snapshots(),
-              builder: (context, snap) {
-                if (!snap.hasData) {
-                  return const SizedBox(
-                    height: 16,
-                    width: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  );
-                }
-                final data = snap.data?.data();
-                final barangay = data?['barangay']?.toString();
-                final muni = data?['municipality']?.toString() ?? '';
-                final prov = data?['province']?.toString() ?? '';
-                final readable = [
-                  barangay,
-                  muni,
-                  prov,
-                ].where((s) => s != null && s.isNotEmpty).join(', ');
-
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Saved Location',
-                      style: TextStyle(fontSize: 11.5, color: Colors.grey[500]),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      readable.isNotEmpty ? readable : 'Not set',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey[700],
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    TextButton(
-                      onPressed: () => _editLocation(data),
-                      style: TextButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text(
-                        'Edit Location',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-
-            Text(
-              user?.email ?? '',
-              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-            ),
-            const SizedBox(height: 28),
-
-            // ---- Quick links to the two real features above (mirrors ----
-            // ---- how the hamburger menu items work, just more discoverable) ----
+            // ---- Buyer features, straight on the page (no popup menu).
+            // Change Password, Privacy & Security and Help & Support are
+            // inside Account Settings, so they are not repeated here. ----
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
                 children: [
                   _profileLinkTile(
-                    icon: Icons.settings_outlined,
-                    label: 'Account Settings',
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const BuyerSettingsScreen(),
-                      ),
-                    ),
+                    icon: Icons.rate_review_outlined,
+                    label: 'My Reviews',
+                    onTap: () => _open(const BuyerMyReviewsScreen()),
                   ),
                   const SizedBox(height: 10),
                   _profileLinkTile(
-                    icon: Icons.support_agent_outlined,
-                    label: 'Help & Support',
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const BuyerSupportScreen(),
+                    icon: Icons.favorite_border_rounded,
+                    label: 'Liked Products',
+                    onTap: () => _open(const BuyerSavedProductsScreen()),
+                  ),
+                  const SizedBox(height: 10),
+                  _profileLinkTile(
+                    icon: Icons.local_shipping_outlined,
+                    label: 'Delivery & Pickup Preferences',
+                    onTap: () =>
+                        _open(const BuyerFulfillmentPreferencesScreen()),
+                  ),
+                  const SizedBox(height: 10),
+                  _profileLinkTile(
+                    icon: Icons.notifications_none_rounded,
+                    label: 'Notifications',
+                    onTap: () => _open(const NotificationsScreen()),
+                  ),
+                  const SizedBox(height: 10),
+                  _profileLinkTile(
+                    icon: Icons.settings_outlined,
+                    label: 'Account Settings',
+                    onTap: () => _open(const BuyerSettingsScreen()),
+                  ),
+                  const SizedBox(height: 18),
+                  Divider(height: 1, color: Colors.grey[300]),
+                  const SizedBox(height: 6),
+                  // Always the last thing on the page, and kept apart from
+                  // the settings above. onLogout asks for confirmation
+                  // before signing out (see BuyerMarketplaceScreen._logout).
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                    leading: const Icon(Icons.logout, color: Colors.redAccent),
+                    title: const Text(
+                      'Log Out',
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.redAccent,
                       ),
                     ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    onTap: widget.onLogout,
                   ),
                 ],
               ),
@@ -450,27 +244,95 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
     );
   }
 
+  // "12 Completed Orders | 4 Reviews Given" — real counts only. A count of
+  // zero is left out, and with nothing to show the whole row is.
+  Widget _activitySummary() {
+    return StreamBuilder<int>(
+      stream: _completedOrders,
+      builder: (context, ordersSnap) => StreamBuilder<int>(
+        stream: _reviewsGiven,
+        builder: (context, reviewsSnap) {
+          final orders = ordersSnap.data ?? 0;
+          final reviews = reviewsSnap.data ?? 0;
+          final stats = [
+            if (orders > 0)
+              (orders, orders == 1 ? 'Completed Order' : 'Completed Orders'),
+            if (reviews > 0)
+              (reviews, reviews == 1 ? 'Review Given' : 'Reviews Given'),
+          ];
+          if (stats.isEmpty) return const SizedBox.shrink();
+
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF4F7F4),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: IntrinsicHeight(
+                child: Row(
+                  children: [
+                    for (var i = 0; i < stats.length; i++) ...[
+                      if (i > 0)
+                        VerticalDivider(
+                          width: 1,
+                          thickness: 1,
+                          color: Colors.grey[300],
+                        ),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${stats[i].$1}',
+                              style: AppTheme.heading(
+                                18,
+                              ).copyWith(color: _dark),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              stats[i].$2,
+                              textAlign: TextAlign.center,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[700],
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _profileLinkTile({
     required IconData icon,
     required String label,
     required VoidCallback onTap,
   }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
+    return Material(
+      color: Colors.white,
+      elevation: 2,
+      shadowColor: Colors.black.withValues(alpha: 0.25),
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
       child: ListTile(
         leading: Icon(icon, color: _dark),
         title: Text(
           label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
         ),
         trailing: const Icon(Icons.chevron_right, color: Colors.grey),

@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -10,7 +11,11 @@ class NotificationBell extends StatelessWidget {
   final VoidCallback onPressed;
   final Color color;
 
-  const NotificationBell({super.key, required this.onPressed, this.color = const Color(0xFF1B5E20)});
+  const NotificationBell({
+    super.key,
+    required this.onPressed,
+    this.color = AppTheme.dark,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +46,10 @@ class NotificationBell extends StatelessWidget {
                   final label = count > 99 ? '99+' : '$count';
                   return Container(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
-                    constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                    constraints: const BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: Colors.redAccent,
@@ -50,7 +58,12 @@ class NotificationBell extends StatelessWidget {
                     ),
                     child: Text(
                       label,
-                      style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold, height: 1.2),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        height: 1.2,
+                      ),
                     ),
                   );
                 },

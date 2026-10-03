@@ -1,3 +1,4 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -7,9 +8,16 @@ import '../services/order_service.dart';
 import '../services/market_price_helpers.dart';
 import '../services/pricing_tier_service.dart';
 import '../services/connectivity_service.dart';
+import '../services/delivery_coverage.dart';
+import '../services/message_service.dart';
+import '../services/ph_mobile.dart';
 import '../data/commodity_master_list.dart';
+import '../widgets/agri_dialog.dart';
 import '../widgets/buyer_location_field.dart';
 import '../widgets/buyer_location_picker.dart';
+import '../widgets/glow_field.dart';
+import '../widgets/glow_tap_field.dart';
+import 'chat_screen.dart';
 
 class PlaceOrderScreen extends StatefulWidget {
   final String sellerId;
@@ -30,6 +38,10 @@ class PlaceOrderScreen extends StatefulWidget {
   // doesn't pass one explicitly.
   final String? unit;
 
+  /// Opened from a conversation: "Message Farmer" then just closes this
+  /// screen and returns a draft message (a String) to put in that chat.
+  final bool fromChat;
+
   const PlaceOrderScreen({
     super.key,
     required this.sellerId,
@@ -45,6 +57,7 @@ class PlaceOrderScreen extends StatefulWidget {
     this.maximumQuantity = 0,
     this.initialQuantity,
     this.unit,
+    this.fromChat = false,
   });
 
   @override
@@ -52,10 +65,11 @@ class PlaceOrderScreen extends StatefulWidget {
 }
 
 class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
   static const Color _accent = Color(0xFFDCEDC8);
 
-  final _formKey = GlobalKey<FormState>();
+  // Name and contact errors appear once Submit has been tried.
+  bool _showErrors = false;
   final _nameController = TextEditingController();
   final _contactController = TextEditingController();
   final _addressController = TextEditingController();
@@ -64,7 +78,13 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   final _authService = AuthService();
 
   bool _submitting = false;
-  late String _deliveryMethod;
+  bool _messaging = false;
+  // 'delivery' or 'pickup' — null until chosen (or auto-picked when only
+  // one is possible). See _syncFulfillment.
+  String? _fulfillment;
+  // The buyer confirmed the farmer agreed (in Messages) to deliver outside
+  // the listing's standard coverage.
+  bool _longDistanceAgreed = false;
   DateTime? _neededBy;
   Map<String, dynamic>? _liveProduct;
   bool _loadingProduct = true;
@@ -82,27 +102,61 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     _quantityController = TextEditingController(
       text: '${widget.initialQuantity ?? widget.minimumQuantity}',
     );
-    _deliveryMethod = widget.deliveryAvailable
-        ? 'delivery'
-        : (widget.pickupAvailable ? 'pickup' : 'unspecified');
     _quantityController.addListener(_onQuantityChanged);
+    // So their error lines clear as soon as the field is filled in.
+    _nameController.addListener(_onQuantityChanged);
+    _contactController.addListener(_onQuantityChanged);
     _loadProduct();
     _prefillLocation();
   }
 
-  // Best-effort: reuses whatever location the buyer last set on an earlier
+  // Best-effort: fills in the buyer's name and contact number from their
+  // profile, and reuses whatever location the buyer last set on an earlier
   // order (saved via AuthService.saveBuyerLocation) so they don't have to
   // redo the Region/Province/City/Barangay picker every single order.
   Future<void> _prefillLocation() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
     try {
-      final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
       final data = userDoc.data();
+
+      // Name and contact number from the buyer's own profile — a starting
+      // point only: both stay editable, and nothing the buyer has already
+      // typed is overwritten.
+      if (mounted) {
+        final name =
+            [
+                  data?['name'],
+                  data?['fullName'],
+                  FirebaseAuth.instance.currentUser?.displayName,
+                ]
+                .map((v) => (v ?? '').toString().trim())
+                .firstWhere((v) => v.isNotEmpty, orElse: () => '');
+        // Whatever format it was saved in, shown as the 10 digits after +63.
+        final contact = phMobileLocalDigits(
+          (data?['mobileNumber'] ?? data?['phone'])?.toString(),
+        );
+        if (_nameController.text.isEmpty && name.isNotEmpty) {
+          _nameController.text = name;
+        }
+        if (_contactController.text.isEmpty && contact.isNotEmpty) {
+          _contactController.text = contact;
+        }
+      }
+
       final province = data?['province']?.toString();
       final city = data?['municipality']?.toString();
       final barangay = data?['barangay']?.toString();
-      if (province == null || province.isEmpty || city == null || city.isEmpty || barangay == null || barangay.isEmpty) {
+      if (province == null ||
+          province.isEmpty ||
+          city == null ||
+          city.isEmpty ||
+          barangay == null ||
+          barangay.isEmpty) {
         return;
       }
       final region = data?['region']?.toString();
@@ -110,8 +164,12 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       double? lat;
       double? lng;
       try {
-        final geoDoc =
-            await FirebaseFirestore.instance.collection('users').doc(uid).collection('private').doc('geo').get();
+        final geoDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .collection('private')
+            .doc('geo')
+            .get();
         lat = (geoDoc.data()?['latitude'] as num?)?.toDouble();
         lng = (geoDoc.data()?['longitude'] as num?)?.toDouble();
       } catch (_) {
@@ -130,6 +188,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       setState(() {
         _buyerLocation = result;
         _addressController.text = result.readable;
+        _syncFulfillment();
       });
     } catch (_) {
       // Prefill is best-effort only — the buyer can still pick fresh.
@@ -141,6 +200,9 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       _buyerLocation = result;
       _addressController.text = result.readable;
       _locationTouched = false;
+      // A new area may be inside or outside the delivery coverage.
+      _longDistanceAgreed = false;
+      _syncFulfillment();
     });
     // Fire-and-forget: also keeps users/{uid} up to date, so the admin
     // Demand Heatmap and the next order's prefill both stay current.
@@ -168,8 +230,76 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     super.dispose();
   }
 
-  bool get _canChooseDelivery =>
-      widget.pickupAvailable || widget.deliveryAvailable;
+  // ---- Fulfillment: always from the latest listing once it has loaded ----
+  bool get _offersDelivery => _liveProduct != null
+      ? _liveProduct!['deliveryAvailable'] == true
+      : widget.deliveryAvailable;
+  bool get _offersPickup => _liveProduct != null
+      ? _liveProduct!['pickupOnly'] == true
+      : widget.pickupAvailable;
+  bool get _canChooseDelivery => _offersDelivery || _offersPickup;
+
+  DeliveryCoverage get _coverage =>
+      DeliveryCoverage.fromProduct(_liveProduct ?? const {});
+
+  BuyerArea get _buyerArea {
+    final location = _buyerLocation;
+    if (location == null) return const BuyerArea();
+    return BuyerArea(
+      barangay: location.barangay,
+      city: location.city,
+      province: location.province,
+    );
+  }
+
+  DeliveryReach get _reach => _coverage.reach(_buyerArea);
+
+  bool get _deliveryAllowed =>
+      _offersDelivery &&
+      (_reach == DeliveryReach.covered ||
+          (_reach == DeliveryReach.outside && _longDistanceAgreed));
+
+  bool get _isLongDistance =>
+      _fulfillment == 'delivery' && _reach != DeliveryReach.covered;
+
+  /// The delivery fee when it's a known amount, else null (pick-up, or
+  /// "to be arranged with seller").
+  num? get _knownDeliveryFee =>
+      _fulfillment == 'delivery' && !_isLongDistance && _coverage.feeKnown
+      ? _coverage.fee
+      : null;
+
+  bool get _deliveryFeePending =>
+      _fulfillment == 'delivery' && _knownDeliveryFee == null;
+
+  // Drops a choice the listing or the buyer's location no longer allows,
+  // and picks the only possible option when there's just one.
+  void _syncFulfillment() {
+    if (_fulfillment == 'delivery' && !_deliveryAllowed) _fulfillment = null;
+    if (_fulfillment == 'pickup' && !_offersPickup) _fulfillment = null;
+    if (_fulfillment == null) {
+      if (_deliveryAllowed && !_offersPickup) {
+        _fulfillment = 'delivery';
+      } else if (_offersPickup && !_deliveryAllowed) {
+        _fulfillment = 'pickup';
+      }
+    }
+  }
+
+  // What the summary shows — compared before and after the final re-check
+  // so the buyer never submits numbers they didn't see.
+  String get _summarySignature {
+    final quote = _currentQuote;
+    return [
+      quote.unitPrice,
+      quote.pricingType,
+      _fulfillment,
+      _knownDeliveryFee,
+      _reach.name,
+      _offersDelivery,
+      _offersPickup,
+    ].join('|');
+  }
 
   void _onQuantityChanged() {
     if (mounted) setState(() {});
@@ -185,6 +315,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       setState(() {
         _liveProduct = snap.data();
         _loadingProduct = false;
+        _syncFulfillment();
       });
     } catch (_) {
       if (!mounted) return;
@@ -195,7 +326,8 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   PricingTierQuote get _currentQuote {
     final data = _liveProduct;
     final qty = num.tryParse(_quantityController.text.trim()) ?? 0;
-    final retail = (data?['retailPrice'] as num?) ??
+    final retail =
+        (data?['retailPrice'] as num?) ??
         (data?['price'] as num?) ??
         _extractUnitPrice(widget.productPrice);
     final wholesaleEnabled = data != null
@@ -213,6 +345,15 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     );
   }
 
+  // When the buyer chose Wholesale (e.g. from an order-options message), the
+  // listing's current wholesale minimum is enforced; retail orders keep the
+  // normal rules.
+  num? get _wholesaleMinimum {
+    if (widget.pricingType != 'wholesale') return null;
+    final live = _liveProduct?['wholesaleMinimumQuantity'] as num?;
+    return live ?? widget.minimumQuantity;
+  }
+
   // The commodity's real Unit of Measurement (see commodity_master_list.dart)
   // — explicit widget.unit wins when a caller passes it, otherwise derived
   // from the product name so this never depends on parsing a display string.
@@ -228,7 +369,10 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
 
   Future<void> _submit() async {
     if (_submitting) return;
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (_nameError != null || !_contactValid || _quantityError != null) {
+      setState(() => _showErrors = true);
+      return;
+    }
     if (_addressController.text.trim().isEmpty) {
       setState(() => _locationTouched = true);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -244,6 +388,12 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       );
       return;
     }
+    if (_canChooseDelivery && _fulfillment == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose delivery or pick-up.')),
+      );
+      return;
+    }
 
     final qty = num.tryParse(_quantityController.text.trim()) ?? 1;
     setState(() => _submitting = true);
@@ -251,16 +401,16 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     if (!await ConnectivityService.instance.checkNow()) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(kNoInternetActionMessage)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
       return;
     }
 
-    // Proactive stock check so the buyer gets a friendly message instead of
-    // filling out the whole form only to have the server-side transaction
-    // in OrderService reject it. That transaction remains the source of
-    // truth — this is just a faster, friendlier first check.
+    // Final check against the latest listing — status, stock, price tier,
+    // delivery/pick-up, coverage and fee — so the buyer gets a friendly
+    // message (or a refreshed summary) instead of a surprise. The
+    // transaction in OrderService still enforces stock and fulfillment.
     try {
       final productSnap = await FirebaseFirestore.instance
           .collection('products')
@@ -293,12 +443,46 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
         );
         return;
       }
+
+      if (!mounted) return;
+      final before = _summarySignature;
+      setState(() {
+        _liveProduct = data;
+        _syncFulfillment();
+      });
+      if (_summarySignature != before) {
+        setState(() => _submitting = false);
+        await showAgriDialog<void>(
+          context: context,
+          builder: (dialogContext) => AgriDialog(
+            icon: Icons.update_rounded,
+            tone: AgriTone.warning,
+            title: const Text('Order details updated'),
+            content: const Text(
+              'The seller changed this listing (price, delivery or pick-up) '
+              'since you opened it. Please review the updated summary before '
+              'submitting.',
+            ),
+            actions: [
+              AgriDialogButton(
+                label: 'Review',
+                kind: AgriButtonKind.primary,
+                onPressed: () => Navigator.pop(dialogContext),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
     } catch (_) {
       // If the check itself fails (e.g. offline), fall through — the
       // Firestore transaction in OrderService still enforces this.
     }
 
     final quote = _currentQuote;
+    final method = _canChooseDelivery
+        ? (_fulfillment ?? 'unspecified')
+        : 'unspecified';
 
     final err = await _orderService.createOrder(
       sellerId: widget.sellerId,
@@ -309,10 +493,13 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       quantity: qty,
       unitPrice: quote.unitPrice,
       buyerName: _nameController.text.trim(),
-      buyerContact: _contactController.text.trim(),
+      // Always +639XXXXXXXXX.
+      buyerContact: phMobileE164(_contactController.text.trim()),
       buyerAddress: _addressController.text.trim(),
-      deliveryMethod: _canChooseDelivery ? _deliveryMethod : 'unspecified',
+      deliveryMethod: method,
       neededBy: _neededBy,
+      buyerArea: _buyerArea,
+      longDistanceArranged: _isLongDistance,
     );
 
     if (!mounted) return;
@@ -326,286 +513,801 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          _canChooseDelivery
-              ? 'Order request sent for $_deliveryMethod.'
-              : 'Order request sent.',
+          method == 'unspecified'
+              ? 'Order request sent.'
+              : 'Order request sent for ${method == 'pickup' ? 'pick-up' : 'delivery'}.',
         ),
       ),
     );
     Navigator.pop(context, true);
   }
 
+  // Outside the standard coverage: hand the buyer to Messages with a draft
+  // asking about long-distance delivery. From a chat, this screen just
+  // closes and returns the draft (see startChatOrder); otherwise it opens
+  // the conversation with this farmer about this product.
+  Future<void> _messageFarmer() async {
+    if (_messaging) return;
+    final qty = num.tryParse(_quantityController.text.trim());
+    final amount = qty == null || qty <= 0
+        ? ''
+        : '${formatStock(qty, _unit)} of ';
+    final area = _buyerArea.label;
+    final draft =
+        'Hi! I\'d like to order $amount${widget.productName}. I\'m in '
+        '${area.isEmpty ? 'an area' : area}, which is outside your usual '
+        'delivery area. Can you arrange delivery here, and how much would '
+        'the delivery fee be?';
+
+    if (widget.fromChat) {
+      Navigator.pop(context, draft);
+      return;
+    }
+
+    setState(() => _messaging = true);
+    try {
+      final product = _liveProduct ?? const <String, dynamic>{};
+      final conversationId = await MessageService().startOrGetConversation(
+        otherUserId: widget.sellerId,
+        otherUserName: widget.sellerName,
+        productId: widget.productId,
+        productName: widget.productName,
+        productImageUrl: widget.productImage,
+        retailPrice:
+            (product['retailPrice'] as num?) ?? (product['price'] as num?),
+        wholesalePrice: product['wholesalePrice'] as num?,
+        wholesaleMinimumQuantity:
+            (product['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1,
+        unit: _unit,
+        deliveryAvailable: _offersDelivery,
+        pickupOnly: _offersPickup,
+      );
+      if (!mounted) return;
+      await Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            conversationId: conversationId,
+            otherUserId: widget.sellerId,
+            otherUserName: widget.sellerName,
+            productId: widget.productId,
+            productName: widget.productName,
+            productImageUrl: widget.productImage,
+            initialDraft: draft,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not open Messages. Check your connection and try again.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _messaging = false);
+    }
+  }
+
+  // ---- Field validation ----
+  // Shown under each field (the Registration pattern — see _field), once
+  // the buyer has tried to submit; the quantity is checked as they type.
+  String? get _nameError =>
+      _nameController.text.trim().isEmpty ? 'Enter your name' : null;
+
+  // A contact number is required to order. A wrong first digit shows as
+  // it is typed; "required" and "not all 10 digits" after Submit — the
+  // same rules as every other mobile field (see ph_mobile.dart).
+  String? get _contactError => phMobileError(
+    _contactController.text.trim(),
+    required: true,
+    submitted: _showErrors,
+  );
+
+  bool get _contactValid => isValidPhMobile(_contactController.text.trim());
+
+  String? get _quantityError {
+    final q = num.tryParse(_quantityController.text.trim());
+    if (q == null || q <= 0) return 'Enter valid quantity';
+    if (_isCountBasedUnit && q != q.roundToDouble()) {
+      return 'Quantity for $_unit must be a whole number';
+    }
+    final wholesaleMinimum = _wholesaleMinimum;
+    if (wholesaleMinimum != null && q < wholesaleMinimum) {
+      return 'Wholesale orders need at least '
+          '${formatStock(wholesaleMinimum, _unit)}';
+    }
+    // The same stock check _submit makes against the latest listing, shown
+    // early so the buyer doesn't find out only after tapping Submit.
+    final available = _liveProduct?['quantity'] as num?;
+    if (available != null && q > available) {
+      return available <= 0
+          ? 'This item is out of stock.'
+          : 'Only ${formatStock(available, _unit)} available right now.';
+    }
+    return null;
+  }
+
+  static const Color _pageBackground = Color(0xFFF7F9F6);
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _pageBackground,
       appBar: AppBar(
-        title: const Text('Place Order'),
-        backgroundColor: Colors.white,
-        foregroundColor: _dark,
-        elevation: 1,
+        backgroundColor: _dark,
+        surfaceTintColor: _dark,
+        foregroundColor: Colors.white,
+        iconTheme: const IconThemeData(color: Colors.white),
+        elevation: 0,
+        title: Text(
+          'Place Order',
+          style: AppTheme.heading(18).copyWith(color: Colors.white),
+        ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          autovalidateMode: AutovalidateMode.onUserInteraction,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: SizedBox(
-                        width: 56,
-                        height: 56,
-                        child: widget.productImage.isNotEmpty
-                            ? Image.network(
-                                widget.productImage,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => Container(
-                                  color: _accent,
-                                  child: const Icon(
-                                    Icons.shopping_basket,
-                                    color: _dark,
-                                  ),
-                                ),
-                              )
-                            : Container(
-                                color: _accent,
-                                child: const Icon(
-                                  Icons.shopping_basket,
-                                  color: _dark,
-                                ),
-                              ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            widget.productName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _loadingProduct
-                                ? widget.productPrice
-                                : formatPriceWithUnit(_currentQuote.unitPrice, _unit),
-                            style: const TextStyle(
-                              color: _dark,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            _loadingProduct
-                                ? 'Checking pricing…'
-                                : _currentQuote.isWholesale
-                                    ? 'Wholesale price applied'
-                                    : 'Retail price applied',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: _currentQuote.isWholesale ? Colors.green[700] : Colors.grey[600],
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Seller: ${widget.sellerName}',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.black54,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextFormField(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _productSummary(),
+            const SizedBox(height: 22),
+
+            _sectionTitle('Buyer Details'),
+            const SizedBox(height: 12),
+            _field(
+              label: 'Name',
+              errorText: _showErrors ? _nameError : null,
+              child: GlowField(
                 controller: _nameController,
-                decoration: const InputDecoration(labelText: 'Name'),
-                validator: (value) => (value == null || value.trim().isEmpty)
-                    ? 'Enter your name'
-                    : null,
+                hint: 'Your full name',
+                icon: Icons.person_outline,
+                textInputAction: TextInputAction.next,
               ),
-              const SizedBox(height: 10),
-              TextFormField(
+            ),
+            _field(
+              label: 'Contact Number',
+              errorText: _contactError,
+              child: GlowField(
                 controller: _contactController,
+                hint: kPhMobileHint,
+                // Fixed and not editable; only the 10 digits after it are.
+                prefixText: kPhMobilePrefix,
+                inputFormatters: kPhMobileInputFormatters,
+                icon: Icons.phone_outlined,
                 keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Contact Number'),
-                validator: (value) => (value == null || value.trim().isEmpty)
-                    ? 'Enter a contact number'
-                    : null,
+                textInputAction: TextInputAction.next,
               ),
-              BuyerLocationField(
-                label: 'Address',
-                value: _buyerLocation,
-                errorText: _locationTouched && _buyerLocation == null ? 'Please set your location.' : null,
-                onPicked: _onLocationPicked,
-              ),
-              TextFormField(
+            ),
+            // Has its own label, error line and bottom spacing.
+            BuyerLocationField(
+              label: 'Address',
+              value: _buyerLocation,
+              errorText: _locationTouched && _buyerLocation == null
+                  ? 'Please set your location.'
+                  : null,
+              onPicked: _onLocationPicked,
+            ),
+            const SizedBox(height: 6),
+
+            _sectionTitle('Order'),
+            const SizedBox(height: 12),
+            _field(
+              label: 'Ordered Quantity ($_unit)',
+              errorText: _quantityError,
+              child: GlowField(
                 controller: _quantityController,
-                keyboardType: TextInputType.numberWithOptions(decimal: !_isCountBasedUnit),
-                decoration: InputDecoration(labelText: 'Ordered Quantity ($_unit)'),
-                validator: (value) {
-                  final q = num.tryParse((value ?? '').trim());
-                  if (q == null || q <= 0) return 'Enter valid quantity';
-                  if (_isCountBasedUnit && q != q.roundToDouble()) {
-                    return 'Quantity for $_unit must be a whole number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 10),
-              InkWell(
-                onTap: () async {
-                  final now = DateTime.now();
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: _neededBy ?? now,
-                    firstDate: DateTime(now.year, now.month, now.day),
-                    lastDate: now.add(const Duration(days: 90)),
-                  );
-                  if (picked != null && mounted) {
-                    setState(() => _neededBy = picked);
-                  }
-                },
-                borderRadius: BorderRadius.circular(12),
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Needed by (Optional)',
-                    suffixIcon: Icon(Icons.calendar_today_outlined),
-                  ),
-                  child: Text(
-                    _neededBy == null
-                        ? 'No specific date'
-                        : '${_neededBy!.month}/${_neededBy!.day}/${_neededBy!.year}',
-                  ),
+                hint: 'How many $_unit',
+                icon: Icons.scale_outlined,
+                keyboardType: TextInputType.numberWithOptions(
+                  decimal: !_isCountBasedUnit,
                 ),
               ),
-              const SizedBox(height: 12),
-              if (!_loadingProduct) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: _currentQuote.isWholesale ? Colors.green[50] : _accent.withValues(alpha: 0.55),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: _currentQuote.isWholesale ? Colors.green[200]! : Colors.grey[300]!,
-                    ),
+            ),
+            _field(
+              label: 'Needed by (Optional)',
+              caption:
+                  'Your preferred date. The farmer will confirm whether it '
+                  'can be met.',
+              child: GlowTapField(
+                icon: Icons.calendar_today_outlined,
+                value: _neededBy == null
+                    ? null
+                    : '${_neededBy!.month}/${_neededBy!.day}/${_neededBy!.year}',
+                hint: 'No specific date',
+                onTap: _pickNeededBy,
+              ),
+            ),
+
+            if (!_loadingProduct) ...[
+              _pricingCard(),
+              const SizedBox(height: 18),
+            ],
+            _fulfillmentSection(),
+            const SizedBox(height: 18),
+            if (!_loadingProduct) _orderSummary(),
+          ],
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 8,
+                offset: const Offset(0, -2),
+              ),
+            ],
+          ),
+          child: ElevatedButton(
+            onPressed: !_submitting ? _submit : null,
+            // The app's standard pill button (dark green, white text).
+            style: AppTheme.primaryButton(),
+            child: Text(
+              _submitting ? 'Submitting...' : 'Submit Order',
+              style: AppTheme.buttonText(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickNeededBy() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _neededBy ?? now,
+      firstDate: DateTime(now.year, now.month, now.day),
+      // Any date from today on — next year included. It is only a
+      // preference, so there is no tight window to enforce.
+      lastDate: DateTime(now.year + 2, now.month, now.day),
+    );
+    if (picked != null && mounted) {
+      setState(() => _neededBy = picked);
+    }
+  }
+
+  Widget _sectionTitle(String text) => Text(text, style: AppTheme.heading(16));
+
+  // Label above, pill field, error line below — exactly how the
+  // Registration form lays out each of its fields (see RegisterScreen).
+  Widget _field({
+    required String label,
+    required Widget child,
+    String? errorText,
+    String? caption,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: AppTheme.label()),
+          const SizedBox(height: 8),
+          child,
+          if (errorText != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.error_outline, size: 14, color: Colors.red.shade700),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    errorText,
+                    style: TextStyle(color: Colors.red.shade700, fontSize: 11),
                   ),
+                ),
+              ],
+            ),
+          ],
+          if (errorText == null && caption != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              caption,
+              style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  BoxDecoration get _cardDecoration => BoxDecoration(
+    color: Colors.white,
+    borderRadius: BorderRadius.circular(16),
+    border: Border.all(color: Colors.grey.shade200),
+    boxShadow: [
+      BoxShadow(
+        color: Colors.black.withValues(alpha: 0.05),
+        blurRadius: 10,
+        offset: const Offset(0, 3),
+      ),
+    ],
+  );
+
+  // ---- Product summary: image, name, the price that applies, seller ----
+  Widget _productSummary() {
+    final quote = _currentQuote;
+    Widget placeholder() => Container(
+      color: _accent,
+      child: const Icon(Icons.shopping_basket, color: _dark),
+    );
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: _cardDecoration,
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: SizedBox(
+              width: 68,
+              height: 68,
+              child: widget.productImage.isNotEmpty
+                  ? Image.network(
+                      widget.productImage,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => placeholder(),
+                    )
+                  : placeholder(),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.productName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _loadingProduct
+                      ? widget.productPrice
+                      : formatPriceWithUnit(quote.unitPrice, _unit),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    color: _dark,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  _loadingProduct
+                      ? 'Checking pricing…'
+                      : quote.isWholesale
+                      ? 'Wholesale price applied'
+                      : 'Retail price applied',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: quote.isWholesale ? _dark : Colors.grey[700],
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'Seller: ${widget.sellerName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---- Which price applies, and how far wholesale is ----
+  Widget _pricingCard() {
+    final quote = _currentQuote;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: quote.isWholesale
+            ? Colors.green[50]
+            : _accent.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: quote.isWholesale ? Colors.green[200]! : Colors.grey[300]!,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            quote.isWholesale
+                ? 'Wholesale price applied'
+                : 'Retail price applied',
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w700,
+              color: _dark,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${formatStock(quote.quantity, _unit)} × '
+            '${formatPriceWithUnit(quote.unitPrice, _unit)} '
+            '= ${formatPeso(quote.subtotal)}',
+            style: const TextStyle(fontSize: 13, color: Colors.black87),
+          ),
+          if (!quote.isWholesale &&
+              quote.quantityToWholesale != null &&
+              quote.quantityToWholesale! > 0) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Add ${formatStock(quote.quantityToWholesale!, _unit)} more '
+              'to qualify for the wholesale price.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[800]),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ---- Fulfillment: Delivery / Pick-up ----
+  Widget _fulfillmentSection() {
+    if (_loadingProduct) {
+      return Text(
+        'Checking delivery and pick-up options…',
+        style: TextStyle(fontSize: 12.5, color: Colors.grey[600]),
+      );
+    }
+    if (!_canChooseDelivery) {
+      return Text(
+        'This seller hasn\'t set delivery or pick-up for this product. You '
+        'can arrange it with them after ordering.',
+        style: TextStyle(fontSize: 12.5, color: Colors.grey[700]),
+      );
+    }
+
+    final coverage = _coverage;
+    final reach = _reach;
+    final String deliverySubtitle = switch (reach) {
+      DeliveryReach.covered =>
+        'Delivers to ${coverage.areaLabel} · Fee: ${coverage.feeLabel}',
+      DeliveryReach.outside when _longDistanceAgreed =>
+        'Long-distance delivery arranged with the farmer · '
+            'Fee: To be arranged with seller',
+      _ => 'Standard coverage: ${coverage.areaLabel}',
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionTitle('Fulfillment'),
+        const SizedBox(height: 10),
+        if (_offersDelivery)
+          _fulfillmentOption(
+            value: 'delivery',
+            icon: Icons.local_shipping_outlined,
+            title: 'Delivery',
+            subtitle: deliverySubtitle,
+            enabled: _deliveryAllowed,
+          ),
+        if (_offersDelivery && reach == DeliveryReach.unknownLocation)
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 8),
+            child: Text(
+              'Set your address above to check whether delivery reaches you.',
+              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            ),
+          ),
+        if (_offersDelivery && reach == DeliveryReach.outside)
+          _outsideCoverageCard(),
+        if (_offersPickup)
+          _fulfillmentOption(
+            value: 'pickup',
+            icon: Icons.storefront_outlined,
+            title: 'Pick-up',
+            subtitle:
+                'Collect from the farmer in ${coverage.origin.name}. '
+                'No delivery fee.',
+            enabled: true,
+          ),
+      ],
+    );
+  }
+
+  Widget _fulfillmentOption({
+    required String value,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool enabled,
+  }) {
+    final selected = _fulfillment == value;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: InkWell(
+        onTap: enabled ? () => setState(() => _fulfillment = value) : null,
+        borderRadius: BorderRadius.circular(14),
+        child: Opacity(
+          opacity: enabled ? 1 : 0.55,
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFFF4F9F1) : Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: selected ? _dark : Colors.grey.shade300,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 20,
+                  color: selected ? _dark : Colors.grey[500],
+                ),
+                const SizedBox(width: 10),
+                Icon(icon, size: 20, color: _dark),
+                const SizedBox(width: 10),
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        _currentQuote.isWholesale
-                            ? 'Wholesale price applied'
-                            : 'Retail price applied',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                        title,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
                       Text(
-                        '${formatStock(_currentQuote.quantity, _unit)} × '
-                        '${formatPriceWithUnit(_currentQuote.unitPrice, _unit)} '
-                        '= ${formatPeso(_currentQuote.subtotal)}',
-                        style: const TextStyle(fontSize: 12.5),
+                        subtitle,
+                        style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                       ),
-                      if (!_currentQuote.isWholesale &&
-                          _currentQuote.quantityToWholesale != null &&
-                          _currentQuote.quantityToWholesale! > 0) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Add ${formatStock(_currentQuote.quantityToWholesale!, _unit)} more '
-                          'to qualify for the wholesale price.',
-                          style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
-                        ),
-                      ],
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
               ],
-              if (_canChooseDelivery)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Delivery Method',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    RadioGroup<String>(
-                      groupValue: _deliveryMethod,
-                      onChanged: (value) {
-                        if (value != null) {
-                          setState(() => _deliveryMethod = value);
-                        }
-                      },
-                      child: Column(
-                        children: [
-                          if (widget.pickupAvailable)
-                            const RadioListTile<String>(
-                              value: 'pickup',
-                              title: Text('Pick-up'),
-                            ),
-                          if (widget.deliveryAvailable)
-                            const RadioListTile<String>(
-                              value: 'delivery',
-                              title: Text('Delivery'),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              else
-                const Text(
-                  'No pickup/delivery option is available for this product.',
-                ),
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: !_submitting ? _submit : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _dark,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  child: Text(_submitting ? 'Submitting...' : 'Submit Order'),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Outside the farmer's standard coverage: never treated as deliverable
+  // by default. The buyer can message the farmer, choose pick-up, or —
+  // once the farmer has agreed in Messages — continue with an arranged
+  // long-distance delivery (fee to be arranged; the farmer can still
+  // decline the order).
+  Widget _outsideCoverageCard() {
+    final warning = Colors.orange.shade800;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      decoration: BoxDecoration(
+        color: Colors.orange.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.orange.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline_rounded, size: 19, color: warning),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Delivery may not be available to your location',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: warning),
                 ),
               ),
             ],
           ),
-        ),
+          const SizedBox(height: 6),
+          Text(
+            'This seller\'s standard delivery coverage does not include your '
+            'area. You may message the farmer to ask whether long-distance '
+            'delivery can be arranged.',
+            style: TextStyle(fontSize: 12.5, color: Colors.grey[800]),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _messaging ? null : _messageFarmer,
+                  icon: const Icon(Icons.chat_bubble_outline, size: 16),
+                  label: const Text('Message Farmer'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _dark,
+                    side: const BorderSide(color: _dark),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                  ),
+                ),
+              ),
+              if (_offersPickup) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => setState(() => _fulfillment = 'pickup'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _dark,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    child: const Text('Choose Pick-up'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          CheckboxListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            controlAffinity: ListTileControlAffinity.leading,
+            activeColor: _dark,
+            value: _longDistanceAgreed,
+            onChanged: (value) => setState(() {
+              _longDistanceAgreed = value ?? false;
+              if (_longDistanceAgreed) {
+                _fulfillment = 'delivery';
+              } else if (_fulfillment == 'delivery') {
+                _fulfillment = null;
+              }
+            }),
+            title: const Text(
+              'The farmer agreed to deliver to my area',
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              'Only tick this after the farmer confirms in Messages. The '
+              'delivery fee will be arranged with the seller.',
+              style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---- Order summary (what the buyer is about to submit) ----
+  Widget _orderSummary() {
+    final quote = _currentQuote;
+    final fee = _knownDeliveryFee;
+    final String fulfillmentLabel = switch (_fulfillment) {
+      'delivery' when _isLongDistance => 'Delivery (long-distance, arranged)',
+      'delivery' => 'Delivery',
+      'pickup' => 'Pick-up',
+      _ =>
+        _canChooseDelivery ? 'Not selected yet' : 'To be arranged with seller',
+    };
+
+    final String? total;
+    final String? totalNote;
+    if (_canChooseDelivery && _fulfillment == null) {
+      total = null;
+      totalNote = 'Choose delivery or pick-up to see your total.';
+    } else if (_deliveryFeePending) {
+      total = null;
+      totalNote =
+          'Product subtotal ${formatPeso(quote.subtotal)} + delivery fee. '
+          'The final total will be confirmed with the seller.';
+    } else if (!_canChooseDelivery) {
+      total = null;
+      totalNote =
+          'Product subtotal ${formatPeso(quote.subtotal)}. Any delivery cost '
+          'is arranged with the seller.';
+    } else {
+      total = formatPeso(quote.subtotal + (fee ?? 0));
+      totalNote = null;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: _cardDecoration,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Order Summary',
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              color: Colors.black87,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _summaryRow('Product', widget.productName),
+          _summaryRow('Order type', quote.isWholesale ? 'Wholesale' : 'Retail'),
+          _summaryRow('Quantity', formatStock(quote.quantity, _unit)),
+          _summaryRow(
+            'Unit price',
+            formatPriceWithUnit(quote.unitPrice, _unit),
+          ),
+          _summaryRow('Product subtotal', formatPeso(quote.subtotal)),
+          if (_fulfillment == 'delivery')
+            _summaryRow(
+              'Delivery fee',
+              fee != null ? formatPeso(fee) : 'To be arranged with seller',
+              emphasize: fee == null,
+            ),
+          _summaryRow('Fulfillment', fulfillmentLabel),
+          const Divider(height: 18),
+          if (total != null)
+            _summaryRow('Total', total, bold: true)
+          else
+            Text(
+              totalNote ?? '',
+              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryRow(
+    String label,
+    String value, {
+    bool bold = false,
+    bool emphasize = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: Colors.grey[700],
+                fontWeight: bold ? FontWeight.w700 : FontWeight.normal,
+              ),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: bold ? 18 : 13,
+                fontWeight: bold || emphasize
+                    ? FontWeight.w700
+                    : FontWeight.w500,
+                color: bold
+                    ? _dark
+                    : emphasize
+                    ? Colors.orange.shade800
+                    : Colors.black87,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

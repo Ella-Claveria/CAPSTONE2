@@ -19,7 +19,9 @@ class RoleSelectionScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final screenHeight = MediaQuery.sizeOf(context).height;
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-    final heroHeight = keyboardOpen ? 120.0 : (screenHeight * 0.36).clamp(200.0, 320.0);
+    final heroHeight = keyboardOpen
+        ? 120.0
+        : (screenHeight * 0.36).clamp(200.0, 320.0);
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -47,7 +49,13 @@ class RoleSelectionScreen extends StatelessWidget {
               decoration: const BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-                boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 24, offset: Offset(0, -8))],
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black26,
+                    blurRadius: 24,
+                    offset: Offset(0, -8),
+                  ),
+                ],
               ),
               child: SafeArea(
                 top: false,
@@ -60,13 +68,21 @@ class RoleSelectionScreen extends StatelessWidget {
                       Text(
                         AppLocalizations.of(context)!.loginButton,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 28, color: AppTheme.dark, fontWeight: FontWeight.bold),
+                        style: const TextStyle(
+                          fontSize: 28,
+                          color: AppTheme.dark,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(height: 6),
                       Text(
                         AppLocalizations.of(context)!.loginSubtitle,
                         textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 14, color: Colors.grey[600], fontWeight: FontWeight.w500),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                       const SizedBox(height: 26),
                       const LoginFormFields(),
@@ -77,16 +93,29 @@ class RoleSelectionScreen extends StatelessWidget {
                       Center(
                         child: GestureDetector(
                           onTap: () {
-                            Navigator.push(context, slideRoute(const RegisterScreen()));
+                            Navigator.push(
+                              context,
+                              slideRoute(const RegisterScreen()),
+                            );
                           },
                           child: RichText(
                             text: TextSpan(
-                              style: GoogleFonts.montserrat(fontSize: 14, color: Colors.black87),
+                              style: GoogleFonts.montserrat(
+                                fontSize: 14,
+                                color: Colors.black87,
+                              ),
                               children: [
-                                TextSpan(text: AppLocalizations.of(context)!.noAccountSignUp),
+                                TextSpan(
+                                  text: AppLocalizations.of(
+                                    context,
+                                  )!.noAccountSignUp,
+                                ),
                                 TextSpan(
                                   text: AppLocalizations.of(context)!.createOne,
-                                  style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, color: AppTheme.dark),
+                                  style: GoogleFonts.montserrat(
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.dark,
+                                  ),
                                 ),
                               ],
                             ),

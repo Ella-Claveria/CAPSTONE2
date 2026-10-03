@@ -93,18 +93,11 @@ Future<bool> requestFarmerLocationPermission(
 Future<bool> requestBuyerLocationPermission(BuildContext context) {
   return maybeRequestLocationPermission(
     context,
-    title: 'Find Products Near You',
-    message: 'AgriTrade+ uses your location to estimate distance between '
-        'buyers and farmers, support delivery or pick-up coordination, and '
-        'improve location-based marketplace analytics.',
-    bullets: [
-      'Used to show nearby farmers and products and estimate approximate distance.',
-      'Used to support delivery and pick-up coordination for your orders.',
-      'Your location may also be used in aggregated demand analytics to help '
-          'administrators understand which areas have higher purchasing demand.',
-      'Your precise location will not be displayed publicly to other users.',
-      'You can manage location permission later in your device settings.',
-    ],
+    title: 'Allow Location Access',
+    message:
+        'AgriTrade+ uses your location to estimate distance, support '
+        'delivery or pickup, and show nearby marketplace information. Your '
+        'exact location is not shown publicly.',
     denyLabel: 'Not Now',
     allowLabel: 'Allow Location',
   );

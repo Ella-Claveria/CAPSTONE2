@@ -107,25 +107,42 @@ class TermsAndConditionsScreen extends StatelessWidget {
         backgroundColor: AppTheme.dark,
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Text('Terms & Conditions', style: GoogleFonts.montserrat(fontWeight: FontWeight.bold, fontSize: 17)),
+        title: Text(
+          'Terms & Conditions',
+          style: GoogleFonts.montserrat(
+            fontWeight: FontWeight.bold,
+            fontSize: 17,
+          ),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
         children: [
           Text(
             'AgriTrade+ Terms & Conditions',
-            style: GoogleFonts.montserrat(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87),
+            style: GoogleFonts.montserrat(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
           ),
           const SizedBox(height: 6),
           Text(
             'Please read these Terms carefully before using AgriTrade+.',
-            style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.black54),
+            style: GoogleFonts.montserrat(
+              fontSize: 12.5,
+              color: Colors.black54,
+            ),
           ),
           const SizedBox(height: 20),
           for (final section in _sections) ...[
             Text(
               section.heading,
-              style: GoogleFonts.montserrat(fontSize: 14.5, fontWeight: FontWeight.bold, color: AppTheme.dark),
+              style: GoogleFonts.montserrat(
+                fontSize: 14.5,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.dark,
+              ),
             ),
             const SizedBox(height: 6),
             for (final line in section.lines)
@@ -133,7 +150,11 @@ class TermsAndConditionsScreen extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 4, left: 2),
                 child: Text(
                   line,
-                  style: GoogleFonts.montserrat(fontSize: 12.5, color: Colors.black87, height: 1.5),
+                  style: GoogleFonts.montserrat(
+                    fontSize: 12.5,
+                    color: Colors.black87,
+                    height: 1.5,
+                  ),
                 ),
               ),
             const SizedBox(height: 14),

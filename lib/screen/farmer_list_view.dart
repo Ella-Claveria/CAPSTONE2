@@ -27,7 +27,14 @@ import 'admin_dashboard_screen.dart'
 ///
 /// Shows role == 'farmer' && approvalStatus == 'approved' only — no
 /// pending, no rejected, no buyers, no admins.
-enum _SortOption { nameAsc, nameDesc, newestApproved, oldestApproved, mostActiveListings, mostOrders }
+enum _SortOption {
+  nameAsc,
+  nameDesc,
+  newestApproved,
+  oldestApproved,
+  mostActiveListings,
+  mostOrders,
+}
 
 class _FarmerListRow {
   final String uid;
@@ -43,12 +50,17 @@ class _FarmerListRow {
     required this.completedOrders,
   });
 
-  String get fullName => (data['fullName'] ?? data['name'] ?? 'Unknown Farmer').toString();
+  String get fullName =>
+      (data['fullName'] ?? data['name'] ?? 'Unknown Farmer').toString();
   String get email => (data['email'] ?? '—').toString();
   String get barangay =>
-      (data['barangay']?.toString().trim().isNotEmpty == true) ? data['barangay'].toString() : '—';
+      (data['barangay']?.toString().trim().isNotEmpty == true)
+      ? data['barangay'].toString()
+      : '—';
   String get municipality =>
-      (data['municipality']?.toString().trim().isNotEmpty == true) ? data['municipality'].toString() : '—';
+      (data['municipality']?.toString().trim().isNotEmpty == true)
+      ? data['municipality'].toString()
+      : '—';
   Timestamp? get reviewedAt => data['reviewedAt'] as Timestamp?;
 }
 
@@ -60,13 +72,15 @@ List<_FarmerListRow> _computeFarmerRows(
   List<QueryDocumentSnapshot<Map<String, dynamic>>> productDocs,
   List<QueryDocumentSnapshot<Map<String, dynamic>>> orderDocs,
 ) {
-  final productsByFarmer = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+  final productsByFarmer =
+      <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
   for (final p in productDocs) {
     final fid = (p.data()['farmerId'] ?? '').toString();
     if (fid.isEmpty) continue;
     productsByFarmer.putIfAbsent(fid, () => []).add(p);
   }
-  final ordersByFarmer = <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+  final ordersByFarmer =
+      <String, List<QueryDocumentSnapshot<Map<String, dynamic>>>>{};
   for (final o in orderDocs) {
     final sid = (o.data()['sellerId'] ?? '').toString();
     if (sid.isEmpty) continue;
@@ -76,11 +90,18 @@ List<_FarmerListRow> _computeFarmerRows(
   return farmerDocs.map((doc) {
     final uid = doc.id;
     final products = productsByFarmer[uid] ?? const [];
-    final active = products.where((p) => (p.data()['isArchived'] ?? false) != true).length;
+    final active = products
+        .where((p) => (p.data()['isArchived'] ?? false) != true)
+        .length;
     final archived = products.length - active;
     final orders = ordersByFarmer[uid] ?? const [];
-    final completed =
-        orders.where((o) => (o.data()['status'] ?? '').toString().toLowerCase() == 'completed').length;
+    final completed = orders
+        .where(
+          (o) =>
+              (o.data()['status'] ?? '').toString().toLowerCase() ==
+              'completed',
+        )
+        .length;
     return _FarmerListRow(
       uid: uid,
       data: doc.data(),
@@ -109,8 +130,13 @@ class _FarmerListViewState extends State<FarmerListView> {
   // Report can reuse it exactly instead of re-implementing it.
   List<_FarmerListRow> _filterAndSort(List<_FarmerListRow> allRows) {
     var rows = allRows.where((r) {
-      if (_barangayFilter != 'All' && r.barangay != _barangayFilter) return false;
-      if (_municipalityFilter != 'All' && r.municipality != _municipalityFilter) return false;
+      if (_barangayFilter != 'All' && r.barangay != _barangayFilter) {
+        return false;
+      }
+      if (_municipalityFilter != 'All' &&
+          r.municipality != _municipalityFilter) {
+        return false;
+      }
       final q = _search.trim().toLowerCase();
       if (q.isEmpty) return true;
       return r.fullName.toLowerCase().contains(q) ||
@@ -127,9 +153,13 @@ class _FarmerListViewState extends State<FarmerListView> {
         case _SortOption.nameDesc:
           return b.fullName.toLowerCase().compareTo(a.fullName.toLowerCase());
         case _SortOption.newestApproved:
-          return (b.reviewedAt?.millisecondsSinceEpoch ?? 0).compareTo(a.reviewedAt?.millisecondsSinceEpoch ?? 0);
+          return (b.reviewedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+            a.reviewedAt?.millisecondsSinceEpoch ?? 0,
+          );
         case _SortOption.oldestApproved:
-          return (a.reviewedAt?.millisecondsSinceEpoch ?? 0).compareTo(b.reviewedAt?.millisecondsSinceEpoch ?? 0);
+          return (a.reviewedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+            b.reviewedAt?.millisecondsSinceEpoch ?? 0,
+          );
         case _SortOption.mostActiveListings:
           return b.activeListings.compareTo(a.activeListings);
         case _SortOption.mostOrders:
@@ -157,24 +187,38 @@ class _FarmerListViewState extends State<FarmerListView> {
         FirebaseFirestore.instance.collection('products').get(),
         FirebaseFirestore.instance.collection('orders').get(),
       ]);
-      final allRows = _computeFarmerRows(results[0].docs, results[1].docs, results[2].docs);
+      final allRows = _computeFarmerRows(
+        results[0].docs,
+        results[1].docs,
+        results[2].docs,
+      );
       final rows = _filterAndSort(allRows);
 
       final bytes = await PdfReportService.buildFarmerListReport(
         totalFarmers: allRows.length,
-        activeListingsTotal: allRows.fold<int>(0, (t, r) => t + r.activeListings),
-        completedOrdersTotal: allRows.fold<int>(0, (t, r) => t + r.completedOrders),
+        activeListingsTotal: allRows.fold<int>(
+          0,
+          (t, r) => t + r.activeListings,
+        ),
+        completedOrdersTotal: allRows.fold<int>(
+          0,
+          (t, r) => t + r.completedOrders,
+        ),
         rows: rows
-            .map((r) => (
-                  farmerId: r.uid.length > 8 ? r.uid.substring(0, 8) : r.uid,
-                  fullName: r.fullName,
-                  email: r.email,
-                  barangay: r.barangay,
-                  municipality: r.municipality,
-                  dateApproved: r.reviewedAt != null ? DateFormat('MMM d, y').format(r.reviewedAt!.toDate()) : '—',
-                  activeListings: r.activeListings,
-                  completedOrders: r.completedOrders,
-                ))
+            .map(
+              (r) => (
+                farmerId: r.uid.length > 8 ? r.uid.substring(0, 8) : r.uid,
+                fullName: r.fullName,
+                email: r.email,
+                barangay: r.barangay,
+                municipality: r.municipality,
+                dateApproved: r.reviewedAt != null
+                    ? DateFormat('MMM d, y').format(r.reviewedAt!.toDate())
+                    : '—',
+                activeListings: r.activeListings,
+                completedOrders: r.completedOrders,
+              ),
+            )
             .toList(),
       );
       if (!mounted) return;
@@ -184,10 +228,14 @@ class _FarmerListViewState extends State<FarmerListView> {
         'Exported the Farmer List report (${rows.length} of ${allRows.length} farmers shown).',
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Farmer List report exported.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Farmer List report exported.')),
+      );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Export failed: $e')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
@@ -209,10 +257,24 @@ class _FarmerListViewState extends State<FarmerListView> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Farmer List',
-                      style: TextStyle(fontSize: 30, height: 1.15, letterSpacing: -0.6, fontWeight: FontWeight.w800, color: c.textPrimary)),
-                  Text('View and manage approved farmer accounts registered in AgriTrade+.',
-                      style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5)),
+                  Text(
+                    'Farmer List',
+                    style: TextStyle(
+                      fontSize: 30,
+                      height: 1.15,
+                      letterSpacing: -0.6,
+                      fontWeight: FontWeight.w800,
+                      color: c.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    'View and manage approved farmer accounts registered in AgriTrade+.',
+                    style: TextStyle(
+                      color: c.textSecondary,
+                      fontSize: 14,
+                      height: 1.5,
+                    ),
+                  ),
                 ],
               ),
               AdminQuickActionButton(
@@ -246,122 +308,140 @@ class _FarmerListViewState extends State<FarmerListView> {
                       return const AdminLoadingSpinner();
                     }
 
-                        final farmerDocs = usersSnap.data!.docs
-                            .where((d) =>
-                                d.data()['role'] == 'farmer' && d.data()['approvalStatus'] == 'approved')
-                            .toList();
-                        final allRows = _computeFarmerRows(
-                          farmerDocs,
-                          svc.products,
-                          svc.allOrders,
-                        );
+                    final farmerDocs = usersSnap.data!.docs
+                        .where(
+                          (d) =>
+                              d.data()['role'] == 'farmer' &&
+                              d.data()['approvalStatus'] == 'approved',
+                        )
+                        .toList();
+                    final allRows = _computeFarmerRows(
+                      farmerDocs,
+                      svc.products,
+                      svc.allOrders,
+                    );
 
-                        final totalFarmers = allRows.length;
-                        final activeListingsTotal =
-                            allRows.fold<int>(0, (total, r) => total + r.activeListings);
-                        final completedOrdersTotal =
-                            allRows.fold<int>(0, (total, r) => total + r.completedOrders);
+                    final totalFarmers = allRows.length;
+                    final activeListingsTotal = allRows.fold<int>(
+                      0,
+                      (total, r) => total + r.activeListings,
+                    );
+                    final completedOrdersTotal = allRows.fold<int>(
+                      0,
+                      (total, r) => total + r.completedOrders,
+                    );
 
-                        final barangayOptions = {
-                          'All',
-                          ...allRows.map((r) => r.barangay).where((b) => b != '—'),
-                        }.toList()
-                          ..sort();
-                        final municipalityOptions = {
-                          'All',
-                          ...allRows.map((r) => r.municipality).where((m) => m != '—'),
-                        }.toList()
-                          ..sort();
+                    final barangayOptions = {
+                      'All',
+                      ...allRows.map((r) => r.barangay).where((b) => b != '—'),
+                    }.toList()..sort();
+                    final municipalityOptions = {
+                      'All',
+                      ...allRows
+                          .map((r) => r.municipality)
+                          .where((m) => m != '—'),
+                    }.toList()..sort();
 
-                        final rows = _filterAndSort(allRows);
+                    final rows = _filterAndSort(allRows);
 
-                        return SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              LayoutBuilder(builder: (context, constraints) {
-                                // A Wrap (not a fixed-childAspectRatio
-                                // GridView) so each card sizes to its own
-                                // content height — it can't overflow at any
-                                // width — while the column count still
-                                // reflows continuously with the available
-                                // space (see the same fix on the Dashboard
-                                // Overview's KPI row).
-                                const spacing = 16.0;
-                                final width = constraints.maxWidth;
-                                final columns = width >= 760 ? 3 : (width >= 480 ? 2 : 1);
-                                final cardWidth = (width - spacing * (columns - 1)) / columns;
-                                final cards = [
-                                  AdminStatCard(
-                                    label: 'Total Farmers',
-                                    value: '$totalFarmers',
-                                    delta: 'Approved & active on AgriTrade+',
-                                    icon: Icons.groups_outlined,
-                                    iconColor: (c) => c.green,
-                                    iconBg: (c) => c.greenBg,
-                                    isEmpty: totalFarmers == 0,
-                                  ),
-                                  AdminStatCard(
-                                    label: 'Active Listings',
-                                    value: '$activeListingsTotal',
-                                    delta: 'From approved farmers',
-                                    icon: Icons.inventory_2_outlined,
-                                    iconColor: (c) => c.blue,
-                                    iconBg: (c) => c.blueBg,
-                                    isEmpty: activeListingsTotal == 0,
-                                  ),
-                                  AdminStatCard(
-                                    label: 'Completed Orders',
-                                    value: '$completedOrdersTotal',
-                                    delta: 'From approved farmers',
-                                    icon: Icons.local_shipping_outlined,
-                                    iconColor: (c) => c.amber,
-                                    iconBg: (c) => c.amberBg,
-                                    isEmpty: completedOrdersTotal == 0,
-                                  ),
-                                ];
-                                return Wrap(
-                                  spacing: spacing,
-                                  runSpacing: spacing,
-                                  children: [
-                                    for (final card in cards) SizedBox(width: cardWidth, child: card),
-                                  ],
-                                );
-                              }),
-                              const SizedBox(height: 20),
-
-                              _FarmerListFilterBar(
-                                c: c,
-                                search: _search,
-                                onSearchChanged: (v) => setState(() => _search = v),
-                                barangayOptions: barangayOptions,
-                                barangayFilter: _barangayFilter,
-                                onBarangayChanged: (v) => setState(() => _barangayFilter = v),
-                                municipalityOptions: municipalityOptions,
-                                municipalityFilter: _municipalityFilter,
-                                onMunicipalityChanged: (v) => setState(() => _municipalityFilter = v),
-                                sort: _sort,
-                                onSortChanged: (v) => setState(() => _sort = v),
-                              ),
-                              const SizedBox(height: 16),
-
-                              if (allRows.isEmpty)
-                                const AdminEmptyState(
+                    return SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              // A Wrap (not a fixed-childAspectRatio
+                              // GridView) so each card sizes to its own
+                              // content height — it can't overflow at any
+                              // width — while the column count still
+                              // reflows continuously with the available
+                              // space (see the same fix on the Dashboard
+                              // Overview's KPI row).
+                              const spacing = 16.0;
+                              final width = constraints.maxWidth;
+                              final columns = width >= 760
+                                  ? 3
+                                  : (width >= 480 ? 2 : 1);
+                              final cardWidth =
+                                  (width - spacing * (columns - 1)) / columns;
+                              final cards = [
+                                AdminStatCard(
+                                  label: 'Total Farmers',
+                                  value: '$totalFarmers',
+                                  delta: 'Approved & active on AgriTrade+',
                                   icon: Icons.groups_outlined,
-                                  title: 'No verified farmers yet.',
-                                  subtitle: 'Approved Farmer accounts will appear here.',
-                                )
-                              else if (rows.isEmpty)
-                                AdminEmptyState(
-                                  icon: Icons.search_off,
-                                  title: 'No matches for the current search/filters.',
-                                  subtitle: 'Try clearing the search or filters above.',
-                                )
-                              else
-                                _FarmerListTable(c: c, rows: rows),
-                            ],
+                                  iconColor: (c) => c.green,
+                                  iconBg: (c) => c.greenBg,
+                                  isEmpty: totalFarmers == 0,
+                                ),
+                                AdminStatCard(
+                                  label: 'Active Listings',
+                                  value: '$activeListingsTotal',
+                                  delta: 'From approved farmers',
+                                  icon: Icons.inventory_2_outlined,
+                                  iconColor: (c) => c.blue,
+                                  iconBg: (c) => c.blueBg,
+                                  isEmpty: activeListingsTotal == 0,
+                                ),
+                                AdminStatCard(
+                                  label: 'Completed Orders',
+                                  value: '$completedOrdersTotal',
+                                  delta: 'From approved farmers',
+                                  icon: Icons.local_shipping_outlined,
+                                  iconColor: (c) => c.amber,
+                                  iconBg: (c) => c.amberBg,
+                                  isEmpty: completedOrdersTotal == 0,
+                                ),
+                              ];
+                              return Wrap(
+                                spacing: spacing,
+                                runSpacing: spacing,
+                                children: [
+                                  for (final card in cards)
+                                    SizedBox(width: cardWidth, child: card),
+                                ],
+                              );
+                            },
                           ),
-                        );
+                          const SizedBox(height: 20),
+
+                          _FarmerListFilterBar(
+                            c: c,
+                            search: _search,
+                            onSearchChanged: (v) => setState(() => _search = v),
+                            barangayOptions: barangayOptions,
+                            barangayFilter: _barangayFilter,
+                            onBarangayChanged: (v) =>
+                                setState(() => _barangayFilter = v),
+                            municipalityOptions: municipalityOptions,
+                            municipalityFilter: _municipalityFilter,
+                            onMunicipalityChanged: (v) =>
+                                setState(() => _municipalityFilter = v),
+                            sort: _sort,
+                            onSortChanged: (v) => setState(() => _sort = v),
+                          ),
+                          const SizedBox(height: 16),
+
+                          if (allRows.isEmpty)
+                            const AdminEmptyState(
+                              icon: Icons.groups_outlined,
+                              title: 'No verified farmers yet.',
+                              subtitle:
+                                  'Approved Farmer accounts will appear here.',
+                            )
+                          else if (rows.isEmpty)
+                            AdminEmptyState(
+                              icon: Icons.search_off,
+                              title:
+                                  'No matches for the current search/filters.',
+                              subtitle:
+                                  'Try clearing the search or filters above.',
+                            )
+                          else
+                            _FarmerListTable(c: c, rows: rows),
+                        ],
+                      ),
+                    );
                   },
                 );
               },
@@ -418,7 +498,10 @@ class _FarmerListFilterBar extends StatelessWidget {
       fillColor: c.surfaceAlt,
       isDense: true,
       contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide.none,
+      ),
     );
   }
 
@@ -435,8 +518,10 @@ class _FarmerListFilterBar extends StatelessWidget {
           width: 300,
           child: TextField(
             style: fieldStyle,
-            decoration:
-                _fieldDecoration('Search name, email, Farmer ID, barangay, municipality…', Icons.search),
+            decoration: _fieldDecoration(
+              'Search name, email, Farmer ID, barangay, municipality…',
+              Icons.search,
+            ),
             onChanged: onSearchChanged,
           ),
         ),
@@ -449,7 +534,12 @@ class _FarmerListFilterBar extends StatelessWidget {
             isExpanded: true,
             decoration: _fieldDecoration('Barangay', Icons.place_outlined),
             items: barangayOptions
-                .map((b) => DropdownMenuItem(value: b, child: Text(b, overflow: TextOverflow.ellipsis)))
+                .map(
+                  (b) => DropdownMenuItem(
+                    value: b,
+                    child: Text(b, overflow: TextOverflow.ellipsis),
+                  ),
+                )
                 .toList(),
             onChanged: (v) => v != null ? onBarangayChanged(v) : null,
           ),
@@ -461,9 +551,17 @@ class _FarmerListFilterBar extends StatelessWidget {
             style: fieldStyle,
             dropdownColor: c.surface,
             isExpanded: true,
-            decoration: _fieldDecoration('Municipality', Icons.location_city_outlined),
+            decoration: _fieldDecoration(
+              'Municipality',
+              Icons.location_city_outlined,
+            ),
             items: municipalityOptions
-                .map((m) => DropdownMenuItem(value: m, child: Text(m, overflow: TextOverflow.ellipsis)))
+                .map(
+                  (m) => DropdownMenuItem(
+                    value: m,
+                    child: Text(m, overflow: TextOverflow.ellipsis),
+                  ),
+                )
                 .toList(),
             onChanged: (v) => v != null ? onMunicipalityChanged(v) : null,
           ),
@@ -477,7 +575,12 @@ class _FarmerListFilterBar extends StatelessWidget {
             isExpanded: true,
             decoration: _fieldDecoration('Sort by', Icons.sort),
             items: _sortLabels.entries
-                .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value, overflow: TextOverflow.ellipsis)))
+                .map(
+                  (e) => DropdownMenuItem(
+                    value: e.key,
+                    child: Text(e.value, overflow: TextOverflow.ellipsis),
+                  ),
+                )
                 .toList(),
             onChanged: (v) => v != null ? onSortChanged(v) : null,
           ),
@@ -508,7 +611,11 @@ class _FarmerListTable extends StatelessWidget {
           dataRowColor: WidgetStateProperty.all(Colors.transparent),
           columnSpacing: 28,
           horizontalMargin: 12,
-          headingTextStyle: TextStyle(color: c.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+          headingTextStyle: TextStyle(
+            color: c.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
           dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
           columns: const [
             DataColumn(label: Text('Farmer ID')),
@@ -524,25 +631,41 @@ class _FarmerListTable extends StatelessWidget {
           ],
           rows: rows.map((r) {
             final farmerId = r.uid.length > 8 ? r.uid.substring(0, 8) : r.uid;
-            final dateApproved =
-                r.reviewedAt != null ? DateFormat('MMM d, y').format(r.reviewedAt!.toDate()) : '—';
+            final dateApproved = r.reviewedAt != null
+                ? DateFormat('MMM d, y').format(r.reviewedAt!.toDate())
+                : '—';
 
-            return DataRow(cells: [
-              DataCell(Text(farmerId)),
-              DataCell(Text(r.fullName)),
-              DataCell(Text(r.email)),
-              DataCell(Text(r.barangay)),
-              DataCell(Text(r.municipality)),
-              DataCell(Text(dateApproved)),
-              DataCell(Text('${r.activeListings}')),
-              DataCell(Text('${r.completedOrders}')),
-              DataCell(AdminStatusBadge(text: 'Approved', color: c.green, bg: c.greenBg)),
-              DataCell(IconButton(
-                tooltip: 'View Farmer details',
-                icon: Icon(Icons.visibility_outlined, size: 18, color: c.textSecondary),
-                onPressed: () => _showFarmerListDetails(context, uid: r.uid),
-              )),
-            ]);
+            return DataRow(
+              cells: [
+                DataCell(Text(farmerId)),
+                DataCell(Text(r.fullName)),
+                DataCell(Text(r.email)),
+                DataCell(Text(r.barangay)),
+                DataCell(Text(r.municipality)),
+                DataCell(Text(dateApproved)),
+                DataCell(Text('${r.activeListings}')),
+                DataCell(Text('${r.completedOrders}')),
+                DataCell(
+                  AdminStatusBadge(
+                    text: 'Approved',
+                    color: c.green,
+                    bg: c.greenBg,
+                  ),
+                ),
+                DataCell(
+                  IconButton(
+                    tooltip: 'View Farmer details',
+                    icon: Icon(
+                      Icons.visibility_outlined,
+                      size: 18,
+                      color: c.textSecondary,
+                    ),
+                    onPressed: () =>
+                        _showFarmerListDetails(context, uid: r.uid),
+                  ),
+                ),
+              ],
+            );
           }).toList(),
         ),
       ),
@@ -556,7 +679,10 @@ class _FarmerListTable extends StatelessWidget {
 // this page are already approved.
 // ============================================================
 
-Future<void> _showFarmerListDetails(BuildContext context, {required String uid}) {
+Future<void> _showFarmerListDetails(
+  BuildContext context, {
+  required String uid,
+}) {
   return showDialog<void>(
     context: context,
     builder: (_) => _FarmerListDetailDialog(uid: uid),
@@ -576,9 +702,13 @@ class _FarmerMarketplaceActivity {
   });
 }
 
-Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(String uid) async {
-  final products =
-      await FirebaseFirestore.instance.collection('products').where('farmerId', isEqualTo: uid).get();
+Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(
+  String uid,
+) async {
+  final products = await FirebaseFirestore.instance
+      .collection('products')
+      .where('farmerId', isEqualTo: uid)
+      .get();
   var active = 0, archived = 0;
   for (final p in products.docs) {
     if ((p.data()['isArchived'] ?? false) == true) {
@@ -588,15 +718,22 @@ Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(String uid) as
     }
   }
 
-  final orders =
-      await FirebaseFirestore.instance.collection('orders').where('sellerId', isEqualTo: uid).get();
+  final orders = await FirebaseFirestore.instance
+      .collection('orders')
+      .where('sellerId', isEqualTo: uid)
+      .get();
   final completedCount = orders.docs
-      .where((o) => (o.data()['status'] ?? '').toString().toLowerCase() == 'completed')
+      .where(
+        (o) =>
+            (o.data()['status'] ?? '').toString().toLowerCase() == 'completed',
+      )
       .length;
   // TOTAL TRANSACTION VALUE — same definition/formula as the platform-
   // wide KPI tile (DashboardAnalyticsService.platformTransactionTotal),
   // just scoped to this one farmer's own orders.
-  final totalSales = DashboardAnalyticsService.platformTransactionTotal(orders.docs);
+  final totalSales = DashboardAnalyticsService.platformTransactionTotal(
+    orders.docs,
+  );
 
   return _FarmerMarketplaceActivity(
     activeListings: active,
@@ -621,23 +758,37 @@ class _FarmerListDetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      stream: FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .snapshots(),
       builder: (context, userSnap) {
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance.collection('verificationDocs').doc(uid).snapshots(),
+          stream: FirebaseFirestore.instance
+              .collection('verificationDocs')
+              .doc(uid)
+              .snapshots(),
           builder: (context, verifSnap) {
             if (userSnap.hasError || verifSnap.hasError) {
               return AlertDialog(
                 title: const Text('Something went wrong'),
-                content: const Text('Could not load this farmer\'s details. Please try again.'),
+                content: const Text(
+                  'Could not load this farmer\'s details. Please try again.',
+                ),
                 actions: [
-                  TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
                 ],
               );
             }
             if (!userSnap.hasData || !verifSnap.hasData) {
               return const AlertDialog(
-                content: SizedBox(height: 120, child: Center(child: CircularProgressIndicator())),
+                content: SizedBox(
+                  height: 120,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
               );
             }
 
@@ -645,38 +796,53 @@ class _FarmerListDetailDialog extends StatelessWidget {
             if (user == null) {
               return AlertDialog(
                 title: const Text('Account Not Found'),
-                content: const Text('This farmer\'s account could not be found. It may have been removed.'),
+                content: const Text(
+                  'This farmer\'s account could not be found. It may have been removed.',
+                ),
                 actions: [
-                  TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Close'),
+                  ),
                 ],
               );
             }
             final verif = verifSnap.data!.data();
 
             final fullName =
-                _firstNonEmpty([verif?['fullName'], user['fullName'], user['name']]) ?? 'Unknown Farmer';
+                _firstNonEmpty([
+                  verif?['fullName'],
+                  user['fullName'],
+                  user['name'],
+                ]) ??
+                'Unknown Farmer';
             final email = (user['email'] ?? '—').toString();
             final phone = _firstNonEmpty([user['phone']]) ?? '—';
             final barangay = _firstNonEmpty([user['barangay']]) ?? '—';
             final municipality = _firstNonEmpty([user['municipality']]) ?? '—';
             final createdAt = user['createdAt'] as Timestamp?;
-            final dateRegistered =
-                createdAt != null ? DateFormat('MMM d, y – h:mm a').format(createdAt.toDate()) : '—';
+            final dateRegistered = createdAt != null
+                ? DateFormat('MMM d, y – h:mm a').format(createdAt.toDate())
+                : '—';
 
             final approvalStatus = (user['approvalStatus'] ?? '—').toString();
             final statusLabel = approvalStatus.isEmpty
                 ? '—'
                 : '${approvalStatus[0].toUpperCase()}${approvalStatus.substring(1)}';
             final submittedAt = verif?['submittedAt'] as Timestamp?;
-            final dateSubmitted =
-                submittedAt != null ? DateFormat('MMM d, y – h:mm a').format(submittedAt.toDate()) : '—';
+            final dateSubmitted = submittedAt != null
+                ? DateFormat('MMM d, y – h:mm a').format(submittedAt.toDate())
+                : '—';
             final reviewedAt = user['reviewedAt'] as Timestamp?;
-            final dateApproved =
-                reviewedAt != null ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate()) : '—';
+            final dateApproved = reviewedAt != null
+                ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate())
+                : '—';
             final reviewedByUid = _firstNonEmpty([user['reviewedBy']]);
             final reviewedBy = reviewedByUid == null
                 ? '—'
-                : (reviewedByUid.length > 8 ? reviewedByUid.substring(0, 8) : reviewedByUid);
+                : (reviewedByUid.length > 8
+                      ? reviewedByUid.substring(0, 8)
+                      : reviewedByUid);
             final document = (verif?['document'] ?? '').toString();
 
             return AlertDialog(
@@ -703,36 +869,49 @@ class _FarmerListDetailDialog extends StatelessWidget {
                       _detailRow('Reviewed By', reviewedBy),
                       const SizedBox(height: 8),
                       OutlinedButton.icon(
-                        icon: const Icon(Icons.image_search, color: Colors.blue),
+                        icon: const Icon(
+                          Icons.image_search,
+                          color: Colors.blue,
+                        ),
                         label: const Text('View Verification Document'),
-                        onPressed:
-                            document.isEmpty ? null : () => _showFarmerListDocument(context, document),
+                        onPressed: document.isEmpty
+                            ? null
+                            : () => _showFarmerListDocument(context, document),
                       ),
                       if (document.isEmpty) ...[
                         const SizedBox(height: 6),
                         Text(
                           'No verification document was submitted for this account.',
-                          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
                         ),
                       ],
                       const SizedBox(height: 10),
                       FutureBuilder<_FarmerMarketplaceActivity>(
                         future: _loadFarmerMarketplaceActivity(uid),
                         builder: (context, activitySnap) {
-                          if (activitySnap.connectionState != ConnectionState.done) {
+                          if (activitySnap.connectionState !=
+                              ConnectionState.done) {
                             return const Padding(
                               padding: EdgeInsets.symmetric(vertical: 12),
                               child: SizedBox(
                                 height: 18,
                                 width: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                             );
                           }
                           if (activitySnap.hasError || !activitySnap.hasData) {
                             return Text(
                               'Could not load marketplace activity.',
-                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 12,
+                              ),
                             );
                           }
                           final a = activitySnap.data!;
@@ -740,10 +919,22 @@ class _FarmerListDetailDialog extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               _sectionLabel('Marketplace Activity'),
-                              _detailRow('Active Listings', '${a.activeListings}'),
-                              _detailRow('Archived Products', '${a.archivedProducts}'),
-                              _detailRow('Completed Orders', '${a.completedOrders}'),
-                              _detailRow('Total Sales / Transaction Value', formatPeso(a.totalSales)),
+                              _detailRow(
+                                'Active Listings',
+                                '${a.activeListings}',
+                              ),
+                              _detailRow(
+                                'Archived Products',
+                                '${a.archivedProducts}',
+                              ),
+                              _detailRow(
+                                'Completed Orders',
+                                '${a.completedOrders}',
+                              ),
+                              _detailRow(
+                                'Total Sales / Transaction Value',
+                                formatPeso(a.totalSales),
+                              ),
                             ],
                           );
                         },
@@ -753,7 +944,10 @@ class _FarmerListDetailDialog extends StatelessWidget {
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Close'),
+                ),
               ],
             );
           },
@@ -767,7 +961,12 @@ class _FarmerListDetailDialog extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 6),
       child: Text(
         label,
-        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5, color: Colors.grey[600], letterSpacing: 0.4),
+        style: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 12.5,
+          color: Colors.grey[600],
+          letterSpacing: 0.4,
+        ),
       ),
     );
   }
@@ -780,7 +979,13 @@ class _FarmerListDetailDialog extends StatelessWidget {
         children: [
           SizedBox(
             width: 160,
-            child: Text(label, style: TextStyle(fontWeight: FontWeight.w600, color: Colors.grey[700])),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[700],
+              ),
+            ),
           ),
           Expanded(child: Text(value)),
         ],
@@ -802,7 +1007,9 @@ void _showFarmerListDocument(BuildContext context, String document) {
         errorBuilder: (_, _, _) => const Text('Failed to load document image.'),
       );
     } else if (document.isNotEmpty) {
-      final cleanBase64 = document.contains(',') ? document.split(',').last : document;
+      final cleanBase64 = document.contains(',')
+          ? document.split(',').last
+          : document;
       imageWidget = Image.memory(
         base64Decode(cleanBase64),
         width: 400,
@@ -822,7 +1029,10 @@ void _showFarmerListDocument(BuildContext context, String document) {
       title: const Text('Agricultural Certification'),
       content: imageWidget,
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
       ],
     ),
   );

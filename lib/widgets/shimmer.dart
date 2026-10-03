@@ -23,8 +23,10 @@ class Shimmer extends StatefulWidget {
 }
 
 class _ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, duration: widget.duration)..repeat();
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: widget.duration,
+  )..repeat();
 
   @override
   void dispose() {
@@ -104,7 +106,10 @@ class SkeletonCircle extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: const BoxDecoration(color: Color(0xFFE0E0E0), shape: BoxShape.circle),
+      decoration: const BoxDecoration(
+        color: Color(0xFFE0E0E0),
+        shape: BoxShape.circle,
+      ),
     );
   }
 }

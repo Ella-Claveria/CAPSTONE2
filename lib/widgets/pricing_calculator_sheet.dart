@@ -1,4 +1,6 @@
+import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
+import 'agri_dialog.dart';
 
 import '../data/commodity_master_list.dart';
 
@@ -18,15 +20,16 @@ Future<void> showPricingCalculatorSheet(
   String unit = kDefaultUnit,
 }) async {
   final isWholesale = pricingType == 'wholesale';
-  final lowerBound = isWholesale ? (minimumQuantity < 1 ? 1 : minimumQuantity) : 1;
-  final upperBound = maximumQuantity > 0 ? maximumQuantity : (isWholesale ? 9999 : lowerBound);
+  final lowerBound = isWholesale
+      ? (minimumQuantity < 1 ? 1 : minimumQuantity)
+      : 1;
+  final upperBound = maximumQuantity > 0
+      ? maximumQuantity
+      : (isWholesale ? 9999 : lowerBound);
   int quantity = lowerBound.clamp(1, upperBound);
 
-  await showModalBottomSheet<void>(
+  await showAgriPanelSheet<void>(
     context: context,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
     builder: (sheetContext) {
       return StatefulBuilder(
         builder: (sheetContext, setState) {
@@ -40,22 +43,31 @@ Future<void> showPricingCalculatorSheet(
                 children: [
                   Text(
                     isWholesale ? 'Wholesale order' : 'Retail order',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     isWholesale
                         ? 'Minimum $minimumQuantity $unit for the wholesale rate.'
                         : maximumQuantity > 0
-                            ? 'Up to $maximumQuantity $unit at the retail rate.'
-                            : 'Retail rate.',
-                    style: const TextStyle(fontSize: 12.5, color: Colors.black54),
+                        ? 'Up to $maximumQuantity $unit at the retail rate.'
+                        : 'Retail rate.',
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      color: Colors.black54,
+                    ),
                   ),
                   const SizedBox(height: 20),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('Quantity ($unit)', style: const TextStyle(fontWeight: FontWeight.w600)),
+                      Text(
+                        'Quantity ($unit)',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                       Row(
                         children: [
                           IconButton(
@@ -69,7 +81,10 @@ Future<void> showPricingCalculatorSheet(
                             child: Text(
                               '$quantity',
                               textAlign: TextAlign.center,
-                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
                           IconButton(
@@ -94,12 +109,18 @@ Future<void> showPricingCalculatorSheet(
                       children: [
                         Text(
                           '₱${unitPrice.toStringAsFixed(2)}/$unit × $quantity $unit',
-                          style: const TextStyle(fontSize: 13, color: Colors.black54),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: Colors.black54,
+                          ),
                         ),
                         Text(
                           '₱${total.toStringAsFixed(2)}',
                           style: const TextStyle(
-                              fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1B5E20)),
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.dark,
+                          ),
                         ),
                       ],
                     ),
@@ -109,10 +130,12 @@ Future<void> showPricingCalculatorSheet(
                     width: double.infinity,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1B5E20),
+                        backgroundColor: AppTheme.dark,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                       onPressed: () {
                         Navigator.of(sheetContext).pop();

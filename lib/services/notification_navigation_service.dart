@@ -1,13 +1,16 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../widgets/agri_dialog.dart';
 
 import '../main.dart' show rootNavigatorKey;
 import '../screen/buyer_marketplace_screen.dart';
 import '../screen/chat_screen.dart';
 import '../screen/farmer_home_screen.dart';
+import '../screen/order_details_screen.dart';
 import '../screen/pending_approval_screen.dart';
 import 'connectivity_service.dart';
+import 'order_format.dart';
 
 /// Where a notification of a given `type` should take the user. Used by
 /// three entry points that must never drift out of sync on this decision:
@@ -51,8 +54,9 @@ class NotificationNavigationService {
         // PendingApprovalScreen already reflects pending/approved/rejected
         // live and auto-advances to Farmer Home once approved — the same
         // screen used during the original onboarding wait.
-        Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => const PendingApprovalScreen()));
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
+        );
         return;
 
       case 'moderation_warning':
@@ -67,7 +71,11 @@ class NotificationNavigationService {
         }
         final reportId = data['reportId']?.toString();
         final productId = data['productId']?.toString();
-        await _showModerationNotice(context, reportId: reportId, productId: productId);
+        await _showModerationNotice(
+          context,
+          reportId: reportId,
+          productId: productId,
+        );
         return;
 
       default:
@@ -84,7 +92,10 @@ class NotificationNavigationService {
     Map<String, dynamic>? user;
     try {
       if (uid != null) {
-        final snap = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+        final snap = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(uid)
+            .get();
         user = snap.data();
       }
     } catch (_) {
@@ -103,36 +114,45 @@ class NotificationNavigationService {
     final String message;
     if (stillSuspended) {
       title = 'Account Suspended';
-      message = 'Your AgriTrade+ account has been temporarily suspended following an Admin review.';
+      message =
+          'Your AgriTrade+ account has been temporarily suspended following an Admin review.';
     } else if (stillBanned) {
       title = 'Account Deactivated';
-      message = 'Your AgriTrade+ account has been deactivated following an Admin review.';
+      message =
+          'Your AgriTrade+ account has been deactivated following an Admin review.';
     } else {
       // Cleared back to active since the notification was sent.
       title = 'Account Status Update';
-      message = 'This has since been resolved — your account is in good standing.';
+      message =
+          'This has since been resolved — your account is in good standing.';
     }
 
-    await showDialog<void>(
+    await showAgriDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      builder: (dialogContext) => AgriDialog(
+        icon: Icons.shield_outlined,
+        tone: stillSuspended || stillBanned
+            ? AgriTone.warning
+            : AgriTone.normal,
         title: Text(title),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(message),
-            if ((stillSuspended || stillBanned) && reason != null && reason.isNotEmpty) ...[
+            if ((stillSuspended || stillBanned) &&
+                reason != null &&
+                reason.isNotEmpty) ...[
               const SizedBox(height: 8),
               Text('Reason: $reason'),
             ],
           ],
         ),
         actions: [
-          TextButton(
+          AgriDialogButton(
+            label: 'Close',
+            kind: AgriButtonKind.primary,
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
           ),
         ],
       ),
@@ -153,11 +173,17 @@ class NotificationNavigationService {
     Map<String, dynamic>? product;
     try {
       if (reportId != null && reportId.isNotEmpty) {
-        final snap = await FirebaseFirestore.instance.collection('reports').doc(reportId).get();
+        final snap = await FirebaseFirestore.instance
+            .collection('reports')
+            .doc(reportId)
+            .get();
         report = snap.data();
       }
       if (productId != null && productId.isNotEmpty) {
-        final snap = await FirebaseFirestore.instance.collection('products').doc(productId).get();
+        final snap = await FirebaseFirestore.instance
+            .collection('products')
+            .doc(productId)
+            .get();
         product = snap.data();
       }
     } catch (_) {
@@ -168,19 +194,26 @@ class NotificationNavigationService {
 
     final reason = (report?['issueType'] ?? report?['reason'])?.toString();
     final description = report?['description']?.toString();
-    final productName = product?['name']?.toString() ?? report?['productName']?.toString();
+    final productName =
+        product?['name']?.toString() ?? report?['productName']?.toString();
 
-    await showDialog<void>(
+    await showAgriDialog<void>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(productName != null ? 'Listing Warning' : 'Account Warning'),
+      builder: (dialogContext) => AgriDialog(
+        icon: Icons.warning_amber_rounded,
+        tone: AgriTone.warning,
+        title: Text(
+          productName != null ? 'Listing Warning' : 'Account Warning',
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (productName != null) ...[
-              Text('Listing: $productName', style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text(
+                'Listing: $productName',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 8),
             ],
             if (reason != null && reason.isNotEmpty) ...[
@@ -194,9 +227,10 @@ class NotificationNavigationService {
           ],
         ),
         actions: [
-          TextButton(
+          AgriDialogButton(
+            label: 'Close',
+            kind: AgriButtonKind.primary,
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
           ),
         ],
       ),
@@ -206,7 +240,10 @@ class NotificationNavigationService {
   static Future<void> _openOrder(BuildContext context, String orderId) async {
     Map<String, dynamic>? order;
     try {
-      final snap = await FirebaseFirestore.instance.collection('orders').doc(orderId).get();
+      final snap = await FirebaseFirestore.instance
+          .collection('orders')
+          .doc(orderId)
+          .get();
       order = snap.data();
     } catch (_) {
       order = null;
@@ -241,56 +278,21 @@ class NotificationNavigationService {
 
     await Future.delayed(const Duration(milliseconds: 250));
     if (!context.mounted) return;
-    await _showOrderSummary(context, order, isSeller: isSeller);
-  }
-
-  static Future<void> _showOrderSummary(
-    BuildContext context,
-    Map<String, dynamic> order, {
-    required bool isSeller,
-  }) async {
-    const dark = Color(0xFF1B5E20);
-    final name = order['productName']?.toString() ?? 'Product';
-    final counterpart = isSeller
-        ? (order['buyerName']?.toString() ?? 'Buyer')
-        : (order['sellerName']?.toString() ?? 'Farmer');
-    final qty = order['quantityLabel']?.toString() ??
-        '${order['quantity'] ?? ''} ${order['unit'] ?? ''}'.trim();
-    final status = (order['status'] ?? 'pending').toString();
-    final totalRaw = order['total'];
-    final total = totalRaw is num ? totalRaw : (num.tryParse('$totalRaw') ?? 0);
-
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text(name),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${isSeller ? 'Buyer' : 'Farmer'}: $counterpart'),
-            if (qty.isNotEmpty) ...[const SizedBox(height: 6), Text('Quantity: $qty')],
-            const SizedBox(height: 6),
-            Text('Total: ₱${total.toStringAsFixed(0)}'),
-            const SizedBox(height: 6),
-            Text(
-              'Status: ${status.isEmpty ? status : '${status[0].toUpperCase()}${status.substring(1)}'}',
-              style: const TextStyle(fontWeight: FontWeight.w600, color: dark),
-            ),
-          ],
+    // The same full order summary the Orders tab opens from a card.
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OrderDetailsScreen(
+          orderId: orderId,
+          role: isSeller ? OrderRole.farmer : OrderRole.buyer,
+          initial: OrderInfo(orderId, order!),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Close'),
-          ),
-        ],
       ),
     );
   }
 
   static void _showMessage(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }

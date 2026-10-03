@@ -1,9 +1,12 @@
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'presence_service.dart';
 import 'push_notification_service.dart';
 
 /// Everything collected on the registration form that still needs to be
@@ -39,22 +42,53 @@ class PendingRegistrationProfile {
   });
 
   Map<String, dynamic> toJson() => {
-        'role': role,
-        'fullName': fullName,
-        'mobileNumber': mobileNumber,
-        'supportedProductsAcknowledged': supportedProductsAcknowledged,
-        'barangay': barangay,
-        'certificateUrl': certificateUrl,
-      };
+    'role': role,
+    'fullName': fullName,
+    'mobileNumber': mobileNumber,
+    'supportedProductsAcknowledged': supportedProductsAcknowledged,
+    'barangay': barangay,
+    'certificateUrl': certificateUrl,
+  };
 
-  static PendingRegistrationProfile fromJson(Map<String, dynamic> json) => PendingRegistrationProfile(
+  static PendingRegistrationProfile fromJson(Map<String, dynamic> json) =>
+      PendingRegistrationProfile(
         role: json['role'] as String? ?? 'buyer',
         fullName: json['fullName'] as String? ?? '',
         mobileNumber: json['mobileNumber'] as String?,
-        supportedProductsAcknowledged: json['supportedProductsAcknowledged'] as bool? ?? false,
+        supportedProductsAcknowledged:
+            json['supportedProductsAcknowledged'] as bool? ?? false,
         barangay: json['barangay'] as String?,
         certificateUrl: json['certificateUrl'] as String?,
       );
+}
+
+/// Result of [AuthService.requestEmailOtp].
+class EmailOtpRequestResult {
+  /// A message to show the user, or null if the request went through.
+  final String? error;
+
+  /// Which step failed, for logs and tests — never shown to the user:
+  /// 'not-found' (function not deployed / wrong region), 'unauthenticated',
+  /// 'cooldown', 'rate-limit', 'firestore-write', 'auth-lookup',
+  /// 'smtp-auth', 'smtp-connection', 'smtp-send'.
+  final String? errorCode;
+
+  /// A new code was emailed (false when the one already sent still works).
+  final bool sent;
+
+  /// The account's email is already verified — there is nothing to enter.
+  final bool alreadyVerified;
+
+  /// How long "Resend Code" should stay locked.
+  final int resendAfterSeconds;
+
+  const EmailOtpRequestResult({
+    this.error,
+    this.errorCode,
+    this.sent = false,
+    this.alreadyVerified = false,
+    this.resendAfterSeconds = 0,
+  });
 }
 
 /// What happened when the user tapped "Continue with Google".
@@ -70,6 +104,7 @@ class GoogleSignInResult {
   final String? uid;
   final String? email;
   final String? displayName;
+  final String? photoUrl;
   final String? message;
 
   const GoogleSignInResult._(
@@ -77,25 +112,39 @@ class GoogleSignInResult {
     this.uid,
     this.email,
     this.displayName,
+    this.photoUrl,
     this.message,
   });
 
-  const GoogleSignInResult.signedIn(String uid) : this._(GoogleSignInOutcome.signedIn, uid: uid);
+  const GoogleSignInResult.signedIn(String uid)
+    : this._(GoogleSignInOutcome.signedIn, uid: uid);
 
   const GoogleSignInResult.needsProfile({
     required String uid,
     required String? email,
     required String? displayName,
-  }) : this._(GoogleSignInOutcome.needsProfile, uid: uid, email: email, displayName: displayName);
+    String? photoUrl,
+  }) : this._(
+         GoogleSignInOutcome.needsProfile,
+         uid: uid,
+         email: email,
+         displayName: displayName,
+         photoUrl: photoUrl,
+       );
 
   const GoogleSignInResult.cancelled() : this._(GoogleSignInOutcome.cancelled);
 
-  const GoogleSignInResult.error(String message) : this._(GoogleSignInOutcome.error, message: message);
+  const GoogleSignInResult.error(String message)
+    : this._(GoogleSignInOutcome.error, message: message);
 }
 
 class AuthService {
   static const String adminEmailWithoutVerification = 'admin@agritrade.com';
   final FirebaseAuth _auth = FirebaseAuth.instance;
+  // Region of the account-email Cloud Functions (functions/account_emails.js).
+  static final FirebaseFunctions _accountEmails = FirebaseFunctions.instanceFor(
+    region: 'asia-southeast1',
+  );
   final _users = FirebaseFirestore.instance.collection('users');
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
   bool _googleSignInReady = false;
@@ -108,7 +157,8 @@ class AuthService {
       final refreshed = _auth.currentUser;
       if (refreshed == null) return 'Please sign in again.';
       final isAdminAccount =
-          refreshed.email?.trim().toLowerCase() == adminEmailWithoutVerification;
+          refreshed.email?.trim().toLowerCase() ==
+          adminEmailWithoutVerification;
       if (!refreshed.emailVerified && !isAdminAccount) {
         return 'Verify your email before continuing.';
       }
@@ -175,6 +225,9 @@ class AuthService {
     bool supportedProductsAcknowledged = false,
     String? barangay,
     String? certificateUrl,
+    // True when this follows a correct email code. firestore.rules only
+    // accepts the field if the server recorded that check as passed.
+    bool emailOtpVerified = false,
   }) async {
     final isFarmer = role == 'farmer';
     try {
@@ -187,18 +240,22 @@ class AuthService {
         'fullName': fullName.trim(),
         'name': fullName.trim(),
         'email': email.trim(),
-        if (mobileNumber != null && mobileNumber.isNotEmpty) 'mobileNumber': mobileNumber,
+        if (mobileNumber != null && mobileNumber.isNotEmpty)
+          'mobileNumber': mobileNumber,
         'role': role,
         'approvalStatus': isFarmer ? 'pending' : 'approved',
         // Buyers have no verification step, so they're verified on
         // creation; farmers become verified once an admin approves them
         // (see VerificationQueueView._approveFarmer).
         'isVerified': !isFarmer,
+        if (emailOtpVerified) 'emailOtpVerified': true,
         'createdAt': FieldValue.serverTimestamp(),
         'termsAccepted': true,
         'termsAcceptedAt': FieldValue.serverTimestamp(),
-        if (isFarmer) 'supportedProductsAcknowledged': supportedProductsAcknowledged,
-        if (isFarmer) 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
+        if (isFarmer)
+          'supportedProductsAcknowledged': supportedProductsAcknowledged,
+        if (isFarmer)
+          'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
         if (isFarmer && barangay != null) 'barangay': barangay,
         if (isFarmer) 'municipality': 'Laurel',
         if (isFarmer) 'province': 'Batangas',
@@ -206,13 +263,16 @@ class AuthService {
       }, SetOptions(merge: true));
 
       if (isFarmer && certificateUrl != null) {
-        await FirebaseFirestore.instance.collection('verificationDocs').doc(uid).set({
-          'document': certificateUrl,
-          'submittedAt': FieldValue.serverTimestamp(),
-          'status': 'pending',
-          'fullName': fullName.trim(),
-          'userId': uid,
-        }, SetOptions(merge: true));
+        await FirebaseFirestore.instance
+            .collection('verificationDocs')
+            .doc(uid)
+            .set({
+              'document': certificateUrl,
+              'submittedAt': FieldValue.serverTimestamp(),
+              'status': 'pending',
+              'fullName': fullName.trim(),
+              'userId': uid,
+            }, SetOptions(merge: true));
       }
       return null;
     } catch (e) {
@@ -225,10 +285,16 @@ class AuthService {
   // device that has registered more than one account never mixes them up.
   static const _pendingProfileKeyPrefix = 'pending_registration_';
 
-  Future<void> savePendingProfile(String uid, PendingRegistrationProfile profile) async {
+  Future<void> savePendingProfile(
+    String uid,
+    PendingRegistrationProfile profile,
+  ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('$_pendingProfileKeyPrefix$uid', jsonEncode(profile.toJson()));
+      await prefs.setString(
+        '$_pendingProfileKeyPrefix$uid',
+        jsonEncode(profile.toJson()),
+      );
     } catch (_) {
       // Non-fatal — completeRegistration falls back to best-effort data if
       // this was never saved or got lost (see EmailVerificationScreen).
@@ -240,7 +306,9 @@ class AuthService {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString('$_pendingProfileKeyPrefix$uid');
       if (raw == null) return null;
-      return PendingRegistrationProfile.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      return PendingRegistrationProfile.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
     } catch (_) {
       return null;
     }
@@ -324,31 +392,26 @@ class AuthService {
       final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
 
       if (latitude != null && longitude != null) {
-        batch.set(
-          userRef.collection('private').doc('geo'),
-          {
-            'latitude': latitude,
-            'longitude': longitude,
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
+        batch.set(userRef.collection('private').doc('geo'), {
+          'latitude': latitude,
+          'longitude': longitude,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
       }
 
-      if (region != null || province != null || city != null || barangay != null) {
-        batch.set(
-          userRef,
-          {
-            if (region != null) 'region': region,
-            if (province != null) 'province': province,
-            // Kept as "municipality" (not "city") so this lines up with
-            // the field name DashboardAnalyticsService's Demand Heatmap
-            // already reads for every account, farmer and buyer alike.
-            if (city != null) 'municipality': city,
-            if (barangay != null) 'barangay': barangay,
-          },
-          SetOptions(merge: true),
-        );
+      if (region != null ||
+          province != null ||
+          city != null ||
+          barangay != null) {
+        batch.set(userRef, {
+          'region': ?region,
+          'province': ?province,
+          // Kept as "municipality" (not "city") so this lines up with
+          // the field name DashboardAnalyticsService's Demand Heatmap
+          // already reads for every account, farmer and buyer alike.
+          'municipality': ?city,
+          'barangay': ?barangay,
+        }, SetOptions(merge: true));
       }
 
       await batch.commit();
@@ -397,36 +460,58 @@ class AuthService {
       final account = await _googleSignIn.authenticate();
       final idToken = account.authentication.idToken;
       if (idToken == null) {
-        return const GoogleSignInResult.error('Could not sign in with Google. Please try again.');
+        return const GoogleSignInResult.error(
+          'Could not sign in with Google. Please try again.',
+        );
       }
 
       final credential = GoogleAuthProvider.credential(idToken: idToken);
       final userCred = await _auth.signInWithCredential(credential);
       final uid = userCred.user?.uid;
       if (uid == null) {
-        return const GoogleSignInResult.error('Something went wrong. Please try again.');
+        return const GoogleSignInResult.error(
+          'Something went wrong. Please try again.',
+        );
       }
 
       final doc = await _users.doc(uid).get();
       if (doc.exists) {
+        final profile = doc.data() ?? const <String, dynamic>{};
+        final savedName = (profile['name'] ?? profile['fullName'])
+            ?.toString()
+            .trim();
+        final savedPhoto = profile['photoUrl']?.toString().trim();
+        if (savedName != null && savedName.isNotEmpty) {
+          await userCred.user?.updateDisplayName(savedName);
+        }
+        if (savedPhoto != null && savedPhoto.isNotEmpty) {
+          await userCred.user?.updatePhotoURL(savedPhoto);
+        }
         final verificationError = await refreshVerifiedEmailToken();
-        if (verificationError != null) return GoogleSignInResult.error(verificationError);
+        if (verificationError != null) {
+          return GoogleSignInResult.error(verificationError);
+        }
         return GoogleSignInResult.signedIn(uid);
       }
       return GoogleSignInResult.needsProfile(
         uid: uid,
         email: userCred.user?.email ?? account.email,
         displayName: userCred.user?.displayName ?? account.displayName,
+        photoUrl: userCred.user?.photoURL ?? account.photoUrl,
       );
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) {
         return const GoogleSignInResult.cancelled();
       }
-      return const GoogleSignInResult.error('Google sign-in failed. Please try again.');
+      return const GoogleSignInResult.error(
+        'Google sign-in failed. Please try again.',
+      );
     } on FirebaseAuthException catch (e) {
       return GoogleSignInResult.error(_messageFromCode(e.code));
     } catch (e) {
-      return const GoogleSignInResult.error('Something went wrong. Please try again.');
+      return const GoogleSignInResult.error(
+        'Something went wrong. Please try again.',
+      );
     }
   }
 
@@ -439,26 +524,34 @@ class AuthService {
     required String fullName,
     required String email,
     required String role,
+    String? photoUrl,
     // Already in "+63XXXXXXXXXX" form — see signUp's mobileNumber doc.
     String? mobileNumber,
     bool supportedProductsAcknowledged = false,
   }) async {
     try {
       await _auth.currentUser?.updateDisplayName(fullName.trim());
+      if (photoUrl != null && photoUrl.isNotEmpty) {
+        await _auth.currentUser?.updatePhotoURL(photoUrl);
+      }
       await _users.doc(uid).set({
         'fullName': fullName.trim(),
         'name': fullName.trim(),
         'email': email.trim(),
-        if (mobileNumber != null && mobileNumber.isNotEmpty) 'mobileNumber': mobileNumber,
+        if (mobileNumber != null && mobileNumber.isNotEmpty)
+          'mobileNumber': mobileNumber,
         'role': role,
         'approvalStatus': role == 'farmer' ? 'pending' : 'approved',
         'isVerified': role != 'farmer',
         'authProvider': 'google',
+        if (photoUrl != null && photoUrl.isNotEmpty) 'photoUrl': photoUrl,
         'createdAt': FieldValue.serverTimestamp(),
         'termsAccepted': true,
         'termsAcceptedAt': FieldValue.serverTimestamp(),
-        if (role == 'farmer') 'supportedProductsAcknowledged': supportedProductsAcknowledged,
-        if (role == 'farmer') 'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
+        if (role == 'farmer')
+          'supportedProductsAcknowledged': supportedProductsAcknowledged,
+        if (role == 'farmer')
+          'supportedProductsAcknowledgedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       final verificationError = await refreshVerifiedEmailToken();
       if (verificationError != null) return verificationError;
@@ -492,7 +585,8 @@ class AuthService {
         }
       }
       final isAdminAccount =
-          cred.user?.email?.trim().toLowerCase() == adminEmailWithoutVerification;
+          cred.user?.email?.trim().toLowerCase() ==
+          adminEmailWithoutVerification;
       if (cred.user?.emailVerified == true || isAdminAccount) {
         final verificationError = await refreshVerifiedEmailToken();
         if (verificationError != null) return verificationError;
@@ -524,53 +618,101 @@ class AuthService {
   // ============================================================
 
   // ----------------------------------------------------------
-  // 1. SEND THE VERIFICATION EMAIL
+  // 1. SEND THE VERIFICATION CODE
   // ----------------------------------------------------------
-  // Firebase sends a real email with a clickable link. There is
-  // nothing for the user to type — they just tap the link.
+  // The requestEmailOtp Cloud Function generates a 6-digit code and
+  // emails it (functions/email_otp.js) — the code never exists in the
+  // app until the user types it. This is the only verification email a
+  // sign-up gets; Firebase's own link email is not sent.
   //
-  // Returns null on success, or a message to show the user.
+  // resend: false is the Verify Email screen opening — the server only
+  // sends then if there is no code the user could still use, so a
+  // rebuild or reopening the app never sends a second email.
+  // resend: true is the user tapping "Resend Code".
   // ----------------------------------------------------------
-  Future<String?> sendVerificationEmail() async {
+  Future<EmailOtpRequestResult> requestEmailOtp({required bool resend}) async {
+    if (_auth.currentUser == null) {
+      return const EmailOtpRequestResult(error: 'Please sign in again.');
+    }
     try {
-      final user = FirebaseAuth.instance.currentUser;
-
-      if (user == null) {
-        return 'Walang naka-log in na account.';
-      }
-      if (user.emailVerified) {
-        return null; // already done, nothing to send
-      }
-
-      await user.sendEmailVerification();
-      return null;
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'too-many-requests') {
-        return 'Masyadong madalas. Maghintay ng ilang minuto.';
-      }
-      return 'Hindi naipadala ang email. Subukan ulit.';
+      final response = await _accountEmails
+          .httpsCallable('requestEmailOtp')
+          .call<dynamic>({'auto': !resend});
+      final data = response.data is Map ? response.data as Map : const {};
+      return EmailOtpRequestResult(
+        sent: data['sent'] == true,
+        alreadyVerified: data['alreadyVerified'] == true,
+        resendAfterSeconds: (data['resendAfterSeconds'] as num?)?.toInt() ?? 0,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      final details = e.details;
+      final retryAfter = details is Map
+          ? (details['retryAfterSeconds'] as num?)?.toInt() ?? 0
+          : 0;
+      // Which step failed on the server — see `fail()` in
+      // functions/email_otp.js for the full list.
+      final reason = details is Map ? details['reason']?.toString() : null;
+      debugPrint(
+        'requestEmailOtp failed: code=${e.code} reason=$reason '
+        'message=${e.message}',
+      );
+      return EmailOtpRequestResult(
+        error: switch (e.code) {
+          // The function's own wording: cooldown / hourly limit.
+          'resource-exhausted' =>
+            e.message ?? 'Please wait before requesting another code.',
+          'unauthenticated' =>
+            'Your session has expired. Please sign in again.',
+          // No function of that name in that region.
+          'not-found' =>
+            'Email verification is not available yet. Please try again later.',
+          'deadline-exceeded' =>
+            'Check your internet connection and try again.',
+          // Auth lookup, Firestore write or SMTP — the function says which.
+          'internal' || 'unavailable' when reason != null =>
+            e.message ??
+                'Could not send the verification code. Please try again.',
+          // 'unavailable' with no reason never reached the function.
+          'unavailable' => 'Check your internet connection and try again.',
+          _ => 'Could not send the verification code. Please try again.',
+        },
+        errorCode: reason ?? e.code,
+        resendAfterSeconds: retryAfter,
+      );
     } catch (e) {
-      return 'May problema sa koneksyon.';
+      debugPrint('requestEmailOtp failed before reaching the server: $e');
+      return const EmailOtpRequestResult(
+        error: 'Could not send the verification code. Please try again.',
+        errorCode: 'client-error',
+      );
     }
   }
 
   // ----------------------------------------------------------
-  // 2. CHECK IF THEY CLICKED THE LINK YET
+  // 2. CHECK THE CODE THE USER TYPED
   // ----------------------------------------------------------
-  // ⚠️ The reload() line is the important one. Firebase caches
-  // the old "not verified" answer, so without reload() your app
-  // would wait forever even after the user verified.
+  // Checked by the verifyEmailOtp Cloud Function, which also marks the
+  // account's email as verified. Returns null on success, or a message
+  // to show the user.
   // ----------------------------------------------------------
-  Future<bool> isEmailVerified() async {
+  Future<String?> verifyEmailOtp(String code) async {
+    if (_auth.currentUser == null) return 'Please sign in again.';
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return false;
-
-      await user.reload(); // fetch the latest status from Firebase
-      final refreshed = FirebaseAuth.instance.currentUser;
-      return refreshed?.emailVerified ?? false;
-    } catch (e) {
-      return false;
+      await _accountEmails.httpsCallable('verifyEmailOtp').call<dynamic>({
+        'code': code,
+      });
+      return null;
+    } on FirebaseFunctionsException catch (e) {
+      return switch (e.code) {
+        // The function's own wording: incorrect / expired / too many attempts.
+        'invalid-argument' ||
+        'failed-precondition' ||
+        'resource-exhausted' => e.message ?? 'Incorrect verification code.',
+        'unauthenticated' => 'Please sign in again.',
+        _ => 'Could not verify the code. Please try again.',
+      };
+    } catch (_) {
+      return 'Could not verify the code. Please try again.';
     }
   }
 
@@ -610,6 +752,9 @@ class AuthService {
     // account's fcmTokens to clean up this device's token from (see
     // PushNotificationService.unregisterToken's doc comment).
     await PushNotificationService().unregisterToken();
+    // Same reason: the "active now" dot must go off while this device can
+    // still write the account's presence doc.
+    await PresenceService.instance.goOffline();
     await FirebaseAuth.instance.signOut();
     // Also drop the cached Google session, if any, so a later "Continue
     // with Google" doesn't silently re-use it. Harmless no-op if this
@@ -630,6 +775,24 @@ class AuthService {
   // ----------------------------------------------------------
   Future<String?> sendPasswordResetEmail(String email) async {
     try {
+      // Sent by the sendPasswordResetEmail Cloud Function (AgriTrade+
+      // template, Gmail SMTP). Firebase Auth still makes and checks the
+      // reset link itself.
+      try {
+        await _accountEmails.httpsCallable('sendPasswordResetEmail').call({
+          'email': email.trim(),
+        });
+        return null;
+      } on FirebaseFunctionsException catch (e) {
+        if (e.code == 'resource-exhausted') {
+          return 'A reset email was just sent. Please wait a minute before trying again.';
+        }
+        if (e.code == 'invalid-argument') {
+          return 'Please enter a valid email address.';
+        }
+        // The function could not send it — fall back to Firebase's own
+        // email below so the password can still be reset.
+      }
       await _auth.sendPasswordResetEmail(email: email.trim());
       return null;
     } on FirebaseAuthException catch (e) {
@@ -670,6 +833,11 @@ class AuthService {
       await user.updatePassword(newPassword);
       return null;
     } on FirebaseAuthException catch (e) {
+      if (e.code == 'wrong-password' ||
+          e.code == 'invalid-credential' ||
+          e.code == 'user-mismatch') {
+        return 'Current password is incorrect.';
+      }
       return _messageFromCode(e.code);
     } catch (e) {
       return 'Could not update your password. Please try again.';

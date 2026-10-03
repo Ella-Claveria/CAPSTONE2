@@ -1,14 +1,19 @@
+import '../theme/app_theme.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/commodity_master_list.dart';
-import '../services/image_helper.dart';
-import '../services/market_price_helpers.dart';
 import '../services/product_service.dart';
+import '../services/product_recommendation_service.dart';
 import '../services/product_visibility_service.dart';
+import '../services/saved_products_service.dart';
+import '../services/search_trends.dart';
+import '../widgets/explore_product_card.dart';
+import '../widgets/save_product_button.dart';
 import '../widgets/retry_message.dart';
 import 'product_detail_screen.dart';
 import 'farmer_storefront_screen.dart';
@@ -16,7 +21,7 @@ import 'farmer_storefront_screen.dart';
 /// The dedicated Buyer Search experience — opened by tapping the (non-
 /// editable) search bar on Explore, never an inline field on the
 /// marketplace itself. Owns the whole search flow on one screen: Suggested
-/// Searches, Trending Searches, Recent Searches, Browse by Category, and
+/// Searches (while typing), Trending Searches, Recent Searches and
 /// Recommended Products while browsing, switching to a live results grid
 /// once the buyer actually searches. No bottom navigation bar, no Add to
 /// Cart (this app has no cart — tapping a product always goes straight to
@@ -29,7 +34,7 @@ class BuyerSearchScreen extends StatefulWidget {
 }
 
 class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
-  static const Color _dark = Color(0xFF1B5E20);
+  static const Color _dark = AppTheme.dark;
 
   // Same buyer + same normalized query within this window logs only once
   // instead of once per submission — see _logSearchEvent. "Do not count 15
@@ -57,20 +62,27 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   // what switches to the results view AND is what gets logged. Staying
   // null means we're still in the browsing/suggestions state.
   String? _activeQuery;
-  String? _activeCategory;
 
   final ProductService _productService = ProductService();
 
   List<String> _trendingSearches = [];
   StreamSubscription? _trendingSub;
 
+  // This buyer's own searches as (term, when), newest first; what is shown
+  // is the latest 8 distinct terms since they last tapped "Clear".
+  List<(String, int)> _recentRaw = [];
+  int _recentClearedAt = 0;
+  static const int _maxRecent = 8;
+
+  void _onLikesChanged() {
+    if (mounted) setState(() {});
+  }
+
   List<String> _recentSearches = [];
   bool _recentSearchesLoaded = false;
   bool _recentSearchesError = false;
   StreamSubscription? _recentSub;
 
-  Map<String, int> _completedOrderCountByProduct = {};
-  StreamSubscription? _completedOrdersSub;
   Map<String, bool> _verifiedByFarmerUid = {};
   StreamSubscription? _usersSub;
 
@@ -85,35 +97,39 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     // buyer's logged searchEvents, most frequent query text first. A
     // single-field orderBy needs no composite index, unlike the per-buyer
     // query below.
+    //
+    // Read from searchTrends — per-term, per-day totals kept by the
+    // aggregateSearchTrend Cloud Function, with no buyer ids in them — not
+    // from other buyers' raw searchEvents. Ranked over the last 7 days (see
+    // topTrendingTerms); with too little activity the list is empty and
+    // the section simply isn't shown.
     _trendingSub = FirebaseFirestore.instance
-        .collection('searchEvents')
-        .orderBy('createdAt', descending: true)
-        .limit(200)
+        .collection('searchTrends')
+        .orderBy('updatedAt', descending: true)
+        .limit(150)
         .snapshots()
         .listen((snap) {
           if (!mounted) return;
-          final counts = <String, int>{};
-          for (final doc in snap.docs) {
-            // Normalize on read too, not just on write — legacy searchEvents
-            // docs (logged before this normalization existed) may still have
-            // mixed casing/spacing, and would otherwise fragment into separate
-            // "trending" entries for what's really the same search.
-            final query = _normalize((doc.data()['query'] ?? '').toString());
-            if (query.isEmpty) continue;
-            counts[query] = (counts[query] ?? 0) + 1;
-          }
-          final ranked = counts.entries.toList()
-            ..sort((a, b) => b.value.compareTo(a.value));
           setState(
-            () => _trendingSearches = ranked.take(8).map((e) => e.key).toList(),
+            () => _trendingSearches = topTrendingTerms(
+              snap.docs.map((d) => d.data()),
+              now: DateTime.now(),
+            ),
           );
-        });
+        }, onError: (_) {});
 
     // RECENT SEARCHES = this logged-in buyer's own recent searches. No
     // orderBy paired with the equality filter (avoids needing a composite
     // Firestore index) — sorted and deduplicated client-side instead.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
+      _loadRecentClearedAt(uid);
+
+      // Liked products (shared state — also draws the hearts on the cards).
+      LikedProducts.instance
+        ..start()
+        ..addListener(_onLikesChanged);
+
       _recentSub = FirebaseFirestore.instance
           .collection('searchEvents')
           .where('userId', isEqualTo: uid)
@@ -130,29 +146,29 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                     at?.millisecondsSinceEpoch ?? 0,
                   );
                 });
-              final seen = <String>{};
-              final recent = <String>[];
-              for (final doc in docs) {
-                final query = _normalize(
-                  (doc.data()['query'] ?? '').toString(),
-                );
-                if (query.isEmpty || seen.contains(query)) continue;
-                seen.add(query);
-                recent.add(query);
-                if (recent.length >= 8) break;
-              }
+              _recentRaw = [
+                for (final doc in docs)
+                  (
+                    _normalize((doc.data()['query'] ?? '').toString()),
+                    // Not yet stamped by the server = just now.
+                    (doc.data()['createdAt'] as Timestamp?)
+                            ?.millisecondsSinceEpoch ??
+                        DateTime.now().millisecondsSinceEpoch,
+                  ),
+              ];
               setState(() {
-                _recentSearches = recent;
+                _recentSearches = _visibleRecent();
                 _recentSearchesLoaded = true;
                 _recentSearchesError = false;
               });
             },
             onError: (_) {
-              if (mounted)
+              if (mounted) {
                 setState(() {
                   _recentSearchesLoaded = true;
                   _recentSearchesError = true;
                 });
+              }
             },
           );
     }
@@ -176,32 +192,53 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
             };
           });
         });
-
-    _completedOrdersSub = FirebaseFirestore.instance
-        .collection('orders')
-        .where('status', isEqualTo: 'completed')
-        .snapshots()
-        .listen((snap) {
-          if (!mounted) return;
-          final counts = <String, int>{};
-          for (final doc in snap.docs) {
-            final productId = (doc.data()['productId'] ?? '').toString();
-            if (productId.isEmpty) continue;
-            counts[productId] = (counts[productId] ?? 0) + 1;
-          }
-          setState(() => _completedOrderCountByProduct = counts);
-        });
   }
 
   @override
   void dispose() {
     _trendingSub?.cancel();
     _recentSub?.cancel();
+    LikedProducts.instance.removeListener(_onLikesChanged);
     _usersSub?.cancel();
-    _completedOrdersSub?.cancel();
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  List<String> _visibleRecent() {
+    final seen = <String>{};
+    final recent = <String>[];
+    for (final (term, at) in _recentRaw) {
+      if (term.isEmpty || at <= _recentClearedAt || !seen.add(term)) continue;
+      recent.add(term);
+      if (recent.length >= _maxRecent) break;
+    }
+    return recent;
+  }
+
+  // "Clear" hides this buyer's history from their own list. The logged
+  // searchEvents themselves are analytics (firestore.rules allows no
+  // delete), so what is remembered — on this device — is the moment they
+  // cleared it; only searches after that are shown again.
+  static String _clearedKey(String uid) => 'recent_searches_cleared_$uid';
+
+  Future<void> _loadRecentClearedAt(String uid) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _recentClearedAt = prefs.getInt(_clearedKey(uid)) ?? 0;
+    } catch (_) {}
+    if (mounted) setState(() => _recentSearches = _visibleRecent());
+  }
+
+  Future<void> _clearRecentSearches() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    _recentClearedAt = DateTime.now().millisecondsSinceEpoch;
+    setState(() => _recentSearches = _visibleRecent());
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_clearedKey(uid), _recentClearedAt);
+    } catch (_) {}
   }
 
   // lowercase, trim, collapse repeated internal whitespace.
@@ -247,19 +284,10 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     );
     setState(() {
       _activeQuery = trimmed;
-      _activeCategory = null;
       _typed = trimmed;
     });
     _focusNode.unfocus();
     _logSearchEvent(trimmed);
-  }
-
-  void _browseCategory(String category) {
-    setState(() {
-      _activeCategory = category;
-      _activeQuery = null;
-    });
-    _focusNode.unfocus();
   }
 
   void _clearSearch() {
@@ -267,7 +295,6 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     setState(() {
       _typed = '';
       _activeQuery = null;
-      _activeCategory = null;
     });
     FocusScope.of(context).requestFocus(_focusNode);
   }
@@ -278,36 +305,16 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   List<String> get _suggestedSearches {
     if (_typed.trim().isEmpty) return const [];
     final q = _typed.trim().toLowerCase();
-    return kSupportedCommodities
+    return CommodityRegistry.instance.all
+        .map((c) => c.name)
         .where((c) => c.toLowerCase().contains(q))
         .take(8)
         .toList();
   }
 
-  static IconData _categoryIcon(String category) {
-    switch (category) {
-      case 'Grains':
-        return Icons.grass;
-      case 'Root Crops':
-        return Icons.eco;
-      case 'Vegetables':
-        return Icons.local_florist;
-      case 'Spices':
-        return Icons.spa;
-      case 'Fruits':
-        return Icons.apple;
-      case 'Livestock':
-        return Icons.pets;
-      case 'Fisheries':
-        return Icons.set_meal;
-      default:
-        return Icons.category_outlined;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final showingResults = _activeQuery != null || _activeCategory != null;
+    final showingResults = _activeQuery != null;
     return Scaffold(
       backgroundColor: const Color(0xFFF7F9F6),
       body: SafeArea(
@@ -384,7 +391,6 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                   // live typing/suggestions instead of silently keeping a
                   // stale results view on screen.
                   _activeQuery = null;
-                  _activeCategory = null;
                 }),
                 onSubmitted: _commitSearch,
               ),
@@ -442,8 +448,11 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     );
   }
 
+  // Search bar (above), then: Trending Searches, Recent Searches,
+  // Recommended Products. Categories are not repeated here — Explore's
+  // category pills already cover that. "Suggested Searches" only appears
+  // while the buyer is typing (it is the field's autocomplete).
   Widget _buildBrowsingState() {
-    final categories = kCommodityMasterList.keys.toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       children: [
@@ -453,6 +462,7 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           _chipRow(_suggestedSearches, icon: Icons.search),
           const SizedBox(height: 22),
         ],
+        // Hidden entirely until there is real, recent search activity.
         if (_trendingSearches.isNotEmpty) ...[
           _sectionHeading('Trending Searches'),
           const SizedBox(height: 10),
@@ -460,7 +470,24 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           const SizedBox(height: 22),
         ],
         if (_recentSearches.isNotEmpty) ...[
-          _sectionHeading('Recent Searches'),
+          Row(
+            children: [
+              Expanded(child: _sectionHeading('Recent Searches')),
+              TextButton(
+                onPressed: _clearRecentSearches,
+                style: TextButton.styleFrom(
+                  foregroundColor: _dark,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Clear',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 10),
           _chipRow(_recentSearches, icon: Icons.history),
           const SizedBox(height: 22),
@@ -474,57 +501,8 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                 : 'No recent searches yet.',
             style: TextStyle(color: Colors.grey[600], fontSize: 13),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 22),
         ],
-        // Never "Popular Categories" — AgriTrade+'s category list is
-        // whatever the Commodity Master List currently defines, not a
-        // fixed/curated "popular" set.
-        _sectionHeading('Browse by Category'),
-        const SizedBox(height: 10),
-        GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 3,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 1.05,
-          children: [
-            for (final category in categories)
-              InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () => _browseCategory(category),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(_categoryIcon(category), color: _dark, size: 22),
-                      const SizedBox(height: 6),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: Text(
-                          category,
-                          textAlign: TextAlign.center,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black87,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 24),
         _sectionHeading('Recommended Products'),
         const SizedBox(height: 10),
         _buildRecommendedProducts(),
@@ -537,7 +515,12 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   ) {
     final scores = ProductVisibilityService.scoreProducts(
       products: {for (final d in docs) d.id: d.data()},
-      completedOrderCountByProductId: _completedOrderCountByProduct,
+      // Kept on each listing by Cloud Functions (a buyer cannot read
+      // other buyers' orders to count them here).
+      completedOrderCountByProductId: {
+        for (final d in docs)
+          d.id: ProductRecommendationService.completedOrders(d.data()),
+      },
       verifiedByFarmerId: _verifiedByFarmerUid,
     );
     final sorted = [...docs]
@@ -551,6 +534,67 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
         );
       });
     return sorted;
+  }
+
+  // Ranked by real marketplace performance — completed orders (50%),
+  // rating (30%) and review count (20%) — among listings that are active
+  // and in stock; see ProductRecommendationService. Where there is no
+  // sales or review history yet, the most viewed and newest real listings
+  // come first. Never random, never hardcoded.
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _recommended(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    final byId = {for (final doc in docs) doc.id: doc};
+    return [
+      for (final id in ProductRecommendationService.rank({
+        for (final doc in docs) doc.id: doc.data(),
+      }).take(8))
+        byId[id]!,
+    ];
+  }
+
+  // The same two-column cards as Explore, sized the same way (height from
+  // the column width and text size — see ExploreProductCard.extentFor).
+  Widget _productGrid(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const spacing = 12.0;
+        final cardWidth = (constraints.maxWidth - spacing) / 2;
+        return GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          itemCount: docs.length,
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            mainAxisExtent: ExploreProductCard.extentFor(
+              cardWidth,
+              MediaQuery.textScalerOf(context),
+            ),
+          ),
+          itemBuilder: (context, index) {
+            final doc = docs[index];
+            final data = doc.data();
+            return ExploreProductCard(
+              data: data,
+              saved: LikedProducts.instance.contains(doc.id),
+              onToggleSave: LikedProducts.instance.canLike
+                  ? () => toggleLikedProduct(context, doc.id)
+                  : null,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      ProductDetailScreen(productId: doc.id, data: data),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Widget _buildRecommendedProducts() {
@@ -586,19 +630,7 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
             ),
           );
         }
-        final top = _rankedByVisibility(docs).take(8).toList();
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: top.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 0.68,
-          ),
-          itemBuilder: (context, index) => _buildProductCard(top[index]),
-        );
+        return _productGrid(_recommended(docs));
       },
     );
   }
@@ -626,17 +658,6 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
             )
             .toList();
 
-        final category = _activeCategory;
-        if (category != null) {
-          docs = docs
-              .where(
-                (d) =>
-                    (d.data()['category'] ?? '').toString().toLowerCase() ==
-                    category.toLowerCase(),
-              )
-              .toList();
-        }
-
         final query = _activeQuery;
         if (query != null && query.isNotEmpty) {
           final q = query.toLowerCase();
@@ -661,8 +682,9 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                 : (profileSnapshot.data?.docs ?? const []).where((profile) {
                     final data = profile.data();
                     if (data['role'] != 'farmer' ||
-                        data['approvalStatus'] != 'approved')
+                        data['approvalStatus'] != 'approved') {
                       return false;
+                    }
                     final name = (data['name'] ?? data['fullName'] ?? '')
                         .toString()
                         .toLowerCase();
@@ -695,7 +717,7 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                       ),
                       const SizedBox(height: 6),
                       const Text(
-                        'Try a different search or browse another category.',
+                        'Try a different search term.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.black54, fontSize: 13.5),
                       ),
@@ -734,20 +756,7 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                         ),
                       ),
                     ),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: ranked.length,
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: 0.68,
-                        ),
-                    itemBuilder: (context, index) =>
-                        _buildProductCard(ranked[index]),
-                  ),
+                  _productGrid(ranked),
                 ],
               ],
             );
@@ -795,230 +804,6 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           ),
         ),
       ),
-    );
-  }
-
-  // Same card design as Explore's product grid (image, category, name,
-  // rating, price+unit, wholesale badge, stock left, farmer) — deliberately
-  // no Add to Cart, matching Explore and the rest of the app (there is no
-  // shopping cart in AgriTrade+; a product always leads to Product Detail).
-  Widget _buildProductCard(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data();
-    final name = data['name'] ?? 'Unnamed Product';
-    final category = data['category'] ?? 'General';
-    final farmer = data['farmerName'] ?? 'Local Farmer';
-    final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
-    final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
-    final wholesaleEnabled =
-        data['wholesaleEnabled'] == true ||
-        (data['wholesaleEnabled'] == null &&
-            wholesalePrice != null &&
-            wholesalePrice > 0);
-    final quantity = (data['quantity'] as num?) ?? 0;
-    final unit =
-        (data['unit'] as String?) ?? unitForProductName(name.toString());
-    final rating = (data['rating'] as num?)?.toDouble();
-    final reviewCount = data['reviewCount'];
-
-    return Card(
-      elevation: 1,
-      shadowColor: Colors.black.withValues(alpha: 0.2),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      color: Colors.white,
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => ProductDetailScreen(productId: doc.id, data: data),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              flex: 10,
-              child: SizedBox(
-                width: double.infinity,
-                child: _buildProductImage(data),
-              ),
-            ),
-            Expanded(
-              flex: 15,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      category.toString().toUpperCase(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[500],
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13.5,
-                        color: Colors.black87,
-                        height: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    if (rating != null)
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.star_rounded,
-                            size: 14,
-                            color: Colors.amber,
-                          ),
-                          const SizedBox(width: 2),
-                          Text(
-                            rating.toStringAsFixed(1),
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          if (reviewCount != null) ...[
-                            const SizedBox(width: 2),
-                            Text(
-                              '($reviewCount)',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.grey[500],
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    const Spacer(),
-                    // FittedBox: a long unit like "kg liveweight" wrapping
-                    // to a second line would overflow this fixed-aspect-
-                    // ratio card — scaling the string down to fit one line
-                    // keeps every character of the real unit intact.
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        formatPriceWithUnit(price, unit),
-                        style: const TextStyle(
-                          color: _dark,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
-                    if (wholesaleEnabled) ...[
-                      const SizedBox(height: 2),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 7,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          'Wholesale available',
-                          style: TextStyle(
-                            fontSize: 9.5,
-                            color: _dark,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 1),
-                    Text(
-                      "${formatStock(quantity, unit)} left",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.grey[600], fontSize: 11),
-                    ),
-                    const SizedBox(height: 6),
-                    Divider(height: 1, thickness: 0.5, color: Colors.grey[200]),
-                    const SizedBox(height: 5),
-                    Row(
-                      children: [
-                        const CircleAvatar(
-                          radius: 7,
-                          backgroundColor: Color(0xFFDCEDC8),
-                          child: Icon(Icons.person, size: 9, color: _dark),
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            farmer,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 11,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProductImage(Map<String, dynamic> data) {
-    final base64 = data['imageBase64']?.toString();
-    final imageUrl = (data['imageUrl']?.toString().isNotEmpty == true)
-        ? data['imageUrl']?.toString()
-        : (data['imageUrls'] is List && (data['imageUrls'] as List).isNotEmpty)
-        ? (data['imageUrls'] as List).first?.toString()
-        : null;
-
-    if (base64 != null && base64.isNotEmpty) {
-      return Base64Image(
-        base64Data: base64,
-        fit: BoxFit.cover,
-        fallback: Container(
-          color: const Color(0xFFDCEDC8),
-          child: const Icon(Icons.eco_rounded, size: 48, color: _dark),
-        ),
-      );
-    }
-    if (imageUrl != null && imageUrl.isNotEmpty) {
-      return Image.network(
-        imageUrl,
-        fit: BoxFit.cover,
-        loadingBuilder: (context, child, progress) => progress == null
-            ? child
-            : const Center(child: CircularProgressIndicator(color: _dark)),
-        errorBuilder: (context, error, stackTrace) => Container(
-          color: const Color(0xFFDCEDC8),
-          child: const Icon(Icons.broken_image, size: 48, color: _dark),
-        ),
-      );
-    }
-    return Container(
-      color: const Color(0xFFDCEDC8),
-      child: const Icon(Icons.eco_rounded, size: 48, color: _dark),
     );
   }
 }

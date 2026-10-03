@@ -8,7 +8,14 @@ import 'admin_dashboard_screen.dart' show AdminPalette;
 
 enum ReportFormat { pdf, excel, csv, png }
 
-enum DateRangePreset { last7Days, last30Days, thisMonth, lastMonth, thisYear, custom }
+enum DateRangePreset {
+  last7Days,
+  last30Days,
+  thisMonth,
+  lastMonth,
+  thisYear,
+  custom,
+}
 
 /// One selectable Analytics Dashboard section, in the order the dashboard
 /// itself renders them — [isChart] marks the 5 sections actually backed by
@@ -53,7 +60,9 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
   DateRangePreset _preset = DateRangePreset.last30Days;
   DateTimeRange? _customRange;
 
-  final _titleController = TextEditingController(text: 'AgriTrade+ Analytics Report');
+  final _titleController = TextEditingController(
+    text: 'AgriTrade+ Analytics Report',
+  );
   bool _landscape = false;
   bool _includeDataTables = true;
   final _notesController = TextEditingController();
@@ -81,8 +90,12 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
 
   Future<void> _loadCommodities() async {
     try {
-      final snap = await FirebaseFirestore.instance.collection('market_prices').get();
-      final names = snap.docs.map((d) => (d.data()['name'] ?? d.id).toString()).toList()..sort();
+      final snap = await FirebaseFirestore.instance
+          .collection('market_prices')
+          .get();
+      final names =
+          snap.docs.map((d) => (d.data()['name'] ?? d.id).toString()).toList()
+            ..sort();
       if (mounted) {
         setState(() {
           _availableCommodities = names;
@@ -109,21 +122,34 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
       if (!mounted) return;
       setState(() {
         if (formatName != null) {
-          _format = ReportFormat.values.firstWhere((f) => f.name == formatName, orElse: () => ReportFormat.pdf);
+          _format = ReportFormat.values.firstWhere(
+            (f) => f.name == formatName,
+            orElse: () => ReportFormat.pdf,
+          );
         }
         if (sectionNames != null && sectionNames.isNotEmpty) {
           _sections
             ..clear()
-            ..addAll(DashboardSection.values.where((s) => sectionNames.contains(s.name)));
+            ..addAll(
+              DashboardSection.values.where(
+                (s) => sectionNames.contains(s.name),
+              ),
+            );
         }
         if (presetName != null) {
-          _preset = DateRangePreset.values
-              .firstWhere((p) => p.name == presetName, orElse: () => DateRangePreset.last30Days);
-          if (_preset == DateRangePreset.custom) _preset = DateRangePreset.last30Days;
+          _preset = DateRangePreset.values.firstWhere(
+            (p) => p.name == presetName,
+            orElse: () => DateRangePreset.last30Days,
+          );
+          if (_preset == DateRangePreset.custom) {
+            _preset = DateRangePreset.last30Days;
+          }
         }
         if (orientationLandscape != null) _landscape = orientationLandscape;
         if (includeTables != null) _includeDataTables = includeTables;
-        if (title != null && title.trim().isNotEmpty) _titleController.text = title;
+        if (title != null && title.trim().isNotEmpty) {
+          _titleController.text = title;
+        }
         _loadingPrefs = false;
       });
     } catch (_) {
@@ -135,7 +161,10 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefsKeyFormat, _format.name);
-      await prefs.setStringList(_prefsKeySections, _sections.map((s) => s.name).toList());
+      await prefs.setStringList(
+        _prefsKeySections,
+        _sections.map((s) => s.name).toList(),
+      );
       await prefs.setString(_prefsKeyPreset, _preset.name);
       await prefs.setBool(_prefsKeyOrientation, _landscape);
       await prefs.setBool(_prefsKeyIncludeTables, _includeDataTables);
@@ -151,19 +180,35 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
     final today = DateTime(now.year, now.month, now.day);
     switch (_preset) {
       case DateRangePreset.last7Days:
-        return DateTimeRange(start: today.subtract(const Duration(days: 6)), end: today);
+        return DateTimeRange(
+          start: today.subtract(const Duration(days: 6)),
+          end: today,
+        );
       case DateRangePreset.last30Days:
-        return DateTimeRange(start: today.subtract(const Duration(days: 29)), end: today);
+        return DateTimeRange(
+          start: today.subtract(const Duration(days: 29)),
+          end: today,
+        );
       case DateRangePreset.thisMonth:
-        return DateTimeRange(start: DateTime(today.year, today.month, 1), end: today);
+        return DateTimeRange(
+          start: DateTime(today.year, today.month, 1),
+          end: today,
+        );
       case DateRangePreset.lastMonth:
         final firstOfThisMonth = DateTime(today.year, today.month, 1);
         final lastMonthEnd = firstOfThisMonth.subtract(const Duration(days: 1));
-        return DateTimeRange(start: DateTime(lastMonthEnd.year, lastMonthEnd.month, 1), end: lastMonthEnd);
+        return DateTimeRange(
+          start: DateTime(lastMonthEnd.year, lastMonthEnd.month, 1),
+          end: lastMonthEnd,
+        );
       case DateRangePreset.thisYear:
         return DateTimeRange(start: DateTime(today.year, 1, 1), end: today);
       case DateRangePreset.custom:
-        return _customRange ?? DateTimeRange(start: today.subtract(const Duration(days: 29)), end: today);
+        return _customRange ??
+            DateTimeRange(
+              start: today.subtract(const Duration(days: 29)),
+              end: today,
+            );
     }
   }
 
@@ -240,12 +285,18 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
   Widget build(BuildContext context) {
     final c = widget.palette;
     final canExport = _sections.isNotEmpty && !_exporting;
-    final showCommodityPicker = _sections.contains(DashboardSection.priceTrend) && _availableCommodities.isNotEmpty;
-    final showPngRangeNote = _format == ReportFormat.png || _sections.any((s) => s.isChart);
+    final showCommodityPicker =
+        _sections.contains(DashboardSection.priceTrend) &&
+        _availableCommodities.isNotEmpty;
+    final showPngRangeNote =
+        _format == ReportFormat.png || _sections.any((s) => s.isChart);
 
     return Dialog(
       backgroundColor: c.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: BorderSide(color: c.border)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: c.border),
+      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
         child: _loadingPrefs
@@ -259,8 +310,14 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
-                    child: Text('Export Report',
-                        style: TextStyle(color: c.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+                    child: Text(
+                      'Export Report',
+                      style: TextStyle(
+                        color: c.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   Flexible(
                     child: SingleChildScrollView(
@@ -281,8 +338,13 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                 onSelected: (_) => _onFormatChanged(f),
                                 selectedColor: c.greenBg,
                                 backgroundColor: c.surfaceAlt,
-                                labelStyle: TextStyle(color: selected ? c.green : c.textSecondary, fontSize: 13),
-                                side: BorderSide(color: selected ? c.green : c.border),
+                                labelStyle: TextStyle(
+                                  color: selected ? c.green : c.textSecondary,
+                                  fontSize: 13,
+                                ),
+                                side: BorderSide(
+                                  color: selected ? c.green : c.border,
+                                ),
                               );
                             }).toList(),
                           ),
@@ -298,14 +360,30 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                     onPressed: () => setState(() {
                                       _sections
                                         ..clear()
-                                        ..addAll(DashboardSection.values.where(_isSectionEnabled));
+                                        ..addAll(
+                                          DashboardSection.values.where(
+                                            _isSectionEnabled,
+                                          ),
+                                        );
                                     }),
-                                    child: Text('Select all', style: TextStyle(color: c.green, fontSize: 12.5)),
+                                    child: Text(
+                                      'Select all',
+                                      style: TextStyle(
+                                        color: c.green,
+                                        fontSize: 12.5,
+                                      ),
+                                    ),
                                   ),
                                   TextButton(
-                                    onPressed: () => setState(() => _sections.clear()),
-                                    child:
-                                        Text('Clear all', style: TextStyle(color: c.textSecondary, fontSize: 12.5)),
+                                    onPressed: () =>
+                                        setState(() => _sections.clear()),
+                                    child: Text(
+                                      'Clear all',
+                                      style: TextStyle(
+                                        color: c.textSecondary,
+                                        fontSize: 12.5,
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
@@ -316,7 +394,10 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               padding: const EdgeInsets.only(bottom: 8),
                               child: Text(
                                 'PNG only supports chart-based sections.',
-                                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                                style: TextStyle(
+                                  color: c.textMuted,
+                                  fontSize: 11.5,
+                                ),
                               ),
                             ),
                           ...DashboardSection.values.map((s) {
@@ -330,12 +411,12 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               onChanged: !enabled
                                   ? null
                                   : (v) => setState(() {
-                                        if (v == true) {
-                                          _sections.add(s);
-                                        } else {
-                                          _sections.remove(s);
-                                        }
-                                      }),
+                                      if (v == true) {
+                                        _sections.add(s);
+                                      } else {
+                                        _sections.remove(s);
+                                      }
+                                    }),
                               activeColor: c.green,
                               title: Text(
                                 s.label,
@@ -355,9 +436,14 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               spacing: 6,
                               runSpacing: 6,
                               children: _availableCommodities.map((name) {
-                                final selected = _selectedCommodities.contains(name);
+                                final selected = _selectedCommodities.contains(
+                                  name,
+                                );
                                 return FilterChip(
-                                  label: Text(name, style: const TextStyle(fontSize: 12.5)),
+                                  label: Text(
+                                    name,
+                                    style: const TextStyle(fontSize: 12.5),
+                                  ),
                                   selected: selected,
                                   onSelected: (v) => setState(() {
                                     if (v) {
@@ -368,8 +454,12 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                   }),
                                   selectedColor: c.greenBg,
                                   backgroundColor: c.surfaceAlt,
-                                  labelStyle: TextStyle(color: selected ? c.green : c.textSecondary),
-                                  side: BorderSide(color: selected ? c.green : c.border),
+                                  labelStyle: TextStyle(
+                                    color: selected ? c.green : c.textSecondary,
+                                  ),
+                                  side: BorderSide(
+                                    color: selected ? c.green : c.border,
+                                  ),
                                 );
                               }).toList(),
                             ),
@@ -382,23 +472,33 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              for (final p in DateRangePreset.values.where((p) => p != DateRangePreset.custom))
+                              for (final p in DateRangePreset.values.where(
+                                (p) => p != DateRangePreset.custom,
+                              ))
                                 _presetChip(c, p),
                               ActionChip(
                                 label: Text(
-                                  _preset == DateRangePreset.custom && _customRange != null
+                                  _preset == DateRangePreset.custom &&
+                                          _customRange != null
                                       ? '${DateFormat('MMM d').format(_customRange!.start)} – ${DateFormat('MMM d, y').format(_customRange!.end)}'
                                       : 'Custom…',
                                 ),
                                 onPressed: _pickCustomRange,
                                 backgroundColor:
-                                    _preset == DateRangePreset.custom ? c.greenBg : c.surfaceAlt,
+                                    _preset == DateRangePreset.custom
+                                    ? c.greenBg
+                                    : c.surfaceAlt,
                                 labelStyle: TextStyle(
-                                  color: _preset == DateRangePreset.custom ? c.green : c.textSecondary,
+                                  color: _preset == DateRangePreset.custom
+                                      ? c.green
+                                      : c.textSecondary,
                                   fontSize: 12.5,
                                 ),
                                 side: BorderSide(
-                                    color: _preset == DateRangePreset.custom ? c.green : c.border),
+                                  color: _preset == DateRangePreset.custom
+                                      ? c.green
+                                      : c.border,
+                                ),
                               ),
                             ],
                           ),
@@ -407,7 +507,10 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               padding: const EdgeInsets.only(top: 8),
                               child: Text(
                                 'PNG captures each chart exactly as currently shown on the dashboard — the date range above doesn\'t apply to it.',
-                                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                                style: TextStyle(
+                                  color: c.textMuted,
+                                  fontSize: 11.5,
+                                ),
                               ),
                             )
                           else if (showPngRangeNote)
@@ -415,7 +518,10 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               padding: const EdgeInsets.only(top: 8),
                               child: Text(
                                 'Note: chart images for chart-based sections reflect the dashboard\'s current live view; the data tables reflect the date range above.',
-                                style: TextStyle(color: c.textMuted, fontSize: 11.5),
+                                style: TextStyle(
+                                  color: c.textMuted,
+                                  fontSize: 11.5,
+                                ),
                               ),
                             ),
 
@@ -425,13 +531,17 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                             const SizedBox(height: 8),
                             TextField(
                               controller: _titleController,
-                              style: TextStyle(color: c.textPrimary, fontSize: 13.5),
+                              style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 13.5,
+                              ),
                               decoration: _fieldDecoration(c, 'Report title'),
                             ),
                             const SizedBox(height: 12),
                             RadioGroup<bool>(
                               groupValue: _landscape,
-                              onChanged: (v) => setState(() => _landscape = v ?? false),
+                              onChanged: (v) =>
+                                  setState(() => _landscape = v ?? false),
                               child: Row(
                                 children: [
                                   Expanded(
@@ -440,8 +550,13 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                       contentPadding: EdgeInsets.zero,
                                       value: false,
                                       activeColor: c.green,
-                                      title:
-                                          Text('Portrait', style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                                      title: Text(
+                                        'Portrait',
+                                        style: TextStyle(
+                                          color: c.textPrimary,
+                                          fontSize: 13,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                   Expanded(
@@ -450,8 +565,13 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                       contentPadding: EdgeInsets.zero,
                                       value: true,
                                       activeColor: c.green,
-                                      title: Text('Landscape',
-                                          style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                                      title: Text(
+                                        'Landscape',
+                                        style: TextStyle(
+                                          color: c.textPrimary,
+                                          fontSize: 13,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -461,27 +581,45 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               dense: true,
                               contentPadding: EdgeInsets.zero,
                               value: _includeDataTables,
-                              onChanged: (v) => setState(() => _includeDataTables = v),
+                              onChanged: (v) =>
+                                  setState(() => _includeDataTables = v),
                               activeThumbColor: c.green,
-                              title: Text('Include data tables under each chart',
-                                  style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                              title: Text(
+                                'Include data tables under each chart',
+                                style: TextStyle(
+                                  color: c.textPrimary,
+                                  fontSize: 13,
+                                ),
+                              ),
                             ),
                             const SizedBox(height: 8),
                             TextField(
                               controller: _notesController,
-                              style: TextStyle(color: c.textPrimary, fontSize: 13.5),
+                              style: TextStyle(
+                                color: c.textPrimary,
+                                fontSize: 13.5,
+                              ),
                               maxLines: 3,
-                              decoration: _fieldDecoration(c, 'Notes / remarks (optional, shown on page 1)'),
+                              decoration: _fieldDecoration(
+                                c,
+                                'Notes / remarks (optional, shown on page 1)',
+                              ),
                             ),
                           ],
 
                           if (_error != null) ...[
                             const SizedBox(height: 16),
-                            Text(_error!, style: TextStyle(color: c.red, fontSize: 12.5)),
+                            Text(
+                              _error!,
+                              style: TextStyle(color: c.red, fontSize: 12.5),
+                            ),
                           ],
                           if (_successMessage != null) ...[
                             const SizedBox(height: 16),
-                            Text(_successMessage!, style: TextStyle(color: c.green, fontSize: 12.5)),
+                            Text(
+                              _successMessage!,
+                              style: TextStyle(color: c.green, fontSize: 12.5),
+                            ),
                           ],
                           const SizedBox(height: 8),
                         ],
@@ -494,15 +632,22 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         TextButton(
-                          onPressed: _exporting ? null : () => Navigator.of(context).pop(),
-                          child: Text('Cancel', style: TextStyle(color: c.textSecondary)),
+                          onPressed: _exporting
+                              ? null
+                              : () => Navigator.of(context).pop(),
+                          child: Text(
+                            'Cancel',
+                            style: TextStyle(color: c.textSecondary),
+                          ),
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
                           onPressed: canExport ? _export : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: c.green,
-                            foregroundColor: c.isDark ? Colors.black : Colors.white,
+                            foregroundColor: c.isDark
+                                ? Colors.black
+                                : Colors.white,
                             disabledBackgroundColor: c.surfaceAlt,
                           ),
                           child: _exporting
@@ -510,7 +655,11 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                   height: 16,
                                   width: 16,
                                   child: CircularProgressIndicator(
-                                      strokeWidth: 2, color: c.isDark ? Colors.black : Colors.white),
+                                    strokeWidth: 2,
+                                    color: c.isDark
+                                        ? Colors.black
+                                        : Colors.white,
+                                  ),
                                 )
                               : const Text('Export'),
                         ),
@@ -536,8 +685,14 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
     );
   }
 
-  Widget _sectionLabel(AdminPalette c, String text) =>
-      Text(text, style: TextStyle(color: c.textPrimary, fontSize: 13.5, fontWeight: FontWeight.w700));
+  Widget _sectionLabel(AdminPalette c, String text) => Text(
+    text,
+    style: TextStyle(
+      color: c.textPrimary,
+      fontSize: 13.5,
+      fontWeight: FontWeight.w700,
+    ),
+  );
 
   InputDecoration _fieldDecoration(AdminPalette c, String label) {
     return InputDecoration(
@@ -546,24 +701,27 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
       labelStyle: TextStyle(color: c.textMuted, fontSize: 12.5),
       filled: true,
       fillColor: c.surfaceAlt,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: BorderSide.none,
+      ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     );
   }
 
   String _formatLabel(ReportFormat f) => switch (f) {
-        ReportFormat.pdf => 'PDF',
-        ReportFormat.excel => 'Excel (.xlsx)',
-        ReportFormat.csv => 'CSV',
-        ReportFormat.png => 'PNG',
-      };
+    ReportFormat.pdf => 'PDF',
+    ReportFormat.excel => 'Excel (.xlsx)',
+    ReportFormat.csv => 'CSV',
+    ReportFormat.png => 'PNG',
+  };
 
   String _presetLabel(DateRangePreset p) => switch (p) {
-        DateRangePreset.last7Days => 'Last 7 days',
-        DateRangePreset.last30Days => 'Last 30 days',
-        DateRangePreset.thisMonth => 'This month',
-        DateRangePreset.lastMonth => 'Last month',
-        DateRangePreset.thisYear => 'This year',
-        DateRangePreset.custom => 'Custom',
-      };
+    DateRangePreset.last7Days => 'Last 7 days',
+    DateRangePreset.last30Days => 'Last 30 days',
+    DateRangePreset.thisMonth => 'This month',
+    DateRangePreset.lastMonth => 'Last month',
+    DateRangePreset.thisYear => 'This year',
+    DateRangePreset.custom => 'Custom',
+  };
 }
