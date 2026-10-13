@@ -191,40 +191,183 @@ function passwordResetEmail({ name, link }) {
 function newDeviceEmail({ name, deviceName, platform, when }) {
   const greeting = greetingFor(name);
   return {
-    subject: "New sign-in to your AgriTrade+ account",
+    subject: "Security Alert: New Device Login — AgriTrade+",
     text: [
       greeting,
       "",
-      "We detected a successful sign-in to your AgriTrade+ account from a new device.",
+      "We detected a successful login to your AgriTrade+ account from a new device.",
       "",
-      "Sign-in details",
+      "Login details",
       `Device: ${deviceName}`,
       `Platform: ${platform}`,
       `Date and time: ${when} (Philippine time)`,
       "",
       "If this was you, no action is required.",
       "",
-      "If you do not recognize this sign-in, please change your AgriTrade+ password immediately and secure your account.",
+      "If you do not recognize this login, please change your AgriTrade+ password immediately and secure your account.",
       "",
       "AgriTrade+ Security",
     ].join("\n"),
     html: layout({
-      title: "New sign-in detected",
-      preheader: "Your AgriTrade+ account was signed in to from a new device.",
+      title: "New login detected",
+      preheader: "Your AgriTrade+ account was logged in to from a new device.",
       bodyHtml: [
         paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
-        paragraph("We detected a successful sign-in to your AgriTrade+ account from a new device."),
+        paragraph("We detected a successful login to your AgriTrade+ account from a new device."),
         detailsTable([
           ["Device", deviceName],
           ["Platform", platform],
           ["Date and time", `${when} (Philippine time)`],
         ]),
         paragraph("If this was you, no action is required."),
-        paragraph("If you do not recognize this sign-in, please change your AgriTrade+ password immediately and secure your account."),
+        paragraph("If you do not recognize this login, please change your AgriTrade+ password immediately and secure your account."),
         paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Security</strong>`),
       ].join("\n"),
     }),
   };
 }
 
-module.exports = { escapeHtml, verificationEmail, otpEmail, passwordResetEmail, newDeviceEmail };
+// Sent when the Agricultural Office approves a farmer's application. The
+// farmer is usually signed out by then (waiting, after "Back to login"),
+// so this is how they find out.
+function farmerApprovedEmail({ name }) {
+  const greeting = greetingFor(name);
+  const lines = [
+    "Your Farmer application has been approved.",
+    "You can now log in and start using AgriTrade+ as a Farmer.",
+  ];
+  return {
+    subject: "Your AgriTrade+ Farmer Application Has Been Approved",
+    text: [greeting, "", ...lines, "", "AgriTrade+"].join("\n"),
+    html: layout({
+      title: "Farmer Account Approved",
+      preheader: "Your Farmer application has been approved.",
+      bodyHtml: [
+        paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
+        ...lines.map((line) => paragraph(escapeHtml(line))),
+        paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+// Sent when a farmer's application is not approved, with the officer's
+// reason when one was given.
+function farmerRejectedEmail({ name, reason }) {
+  const greeting = greetingFor(name);
+  const why = (reason || "").toString().trim();
+  const closing = "Please log in to AgriTrade+ to see your application status, or contact the Agricultural Office of Laurel, Batangas for clarification.";
+  return {
+    subject: "Farmer Application Update — AgriTrade+",
+    text: [
+      greeting,
+      "",
+      "Your Farmer application was not approved.",
+      ...(why ? ["", `Reason: ${why}`] : []),
+      "",
+      closing,
+      "",
+      "AgriTrade+",
+    ].join("\n"),
+    html: layout({
+      title: "Farmer Application Update",
+      preheader: "Your Farmer application was not approved.",
+      bodyHtml: [
+        paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
+        paragraph("Your Farmer application was not approved."),
+        ...(why ? [detailsTable([["Reason", why]])] : []),
+        paragraph(escapeHtml(closing)),
+        paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+// A warning, suspension or deactivation of the account: the same notice
+// the app shows, sent by email as well so it is not missed with push off.
+function accountNoticeEmail({ name, title, message, reason }) {
+  const greeting = greetingFor(name);
+  const why = (reason || "").toString().trim();
+  const closing = "If you think this is a mistake, please contact the Agricultural Office of Laurel, Batangas.";
+  return {
+    subject: `${title} — AgriTrade+`,
+    text: [greeting, "", message, ...(why ? ["", `Reason: ${why}`] : []), "", closing, "", "AgriTrade+"].join("\n"),
+    html: layout({
+      title,
+      preheader: message,
+      bodyHtml: [
+        paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
+        paragraph(escapeHtml(message)),
+        ...(why ? [detailsTable([["Reason", why]])] : []),
+        paragraph(escapeHtml(closing)),
+        paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+// Sent on every sign-in to the Admin Portal. Browser and platform only:
+// no location is given, because none is reliably known.
+function adminSignInEmail({ browser, platform, when }) {
+  const known = (value) => (value && value !== "Unknown" ? value : "Not recognized");
+  const rows = [
+    ["Date and time", `${when} (Philippine time)`],
+    ["Browser", known(browser)],
+    ["Device/platform", known(platform)],
+  ];
+  return {
+    subject: "New login to your AgriTrade+ Admin account",
+    text: [
+      "Hello Admin,",
+      "",
+      "A new login to your AgriTrade+ Admin account was detected.",
+      "",
+      "Login details",
+      ...rows.map(([label, value]) => `${label}: ${value}`),
+      "",
+      "If this was you, no action is required.",
+      "",
+      "If you do not recognize this activity, please change your password immediately and contact the system administrator.",
+      "",
+      "AgriTrade+ Security",
+    ].join("\n"),
+    html: layout({
+      title: "New login detected",
+      preheader: "A new login to your AgriTrade+ Admin account was detected.",
+      bodyHtml: [
+        paragraph("<strong>Hello Admin,</strong>"),
+        paragraph("A new login to your AgriTrade+ Admin account was detected."),
+        detailsTable(rows),
+        paragraph("If this was you, no action is required."),
+        paragraph("If you do not recognize this activity, please change your password immediately and contact the system administrator."),
+        paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Security</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+// Sent instead of a reset link when "Forgot Password" is used for an
+// account that only signs in with Google (it has no password to reset).
+function googleSignInEmail({ name }) {
+  const greeting = greetingFor(name);
+  const request = "We received a request to reset the password for your AgriTrade+ account.";
+  const explain = "This account logs in with Google, so it has no AgriTrade+ password to reset. To log in, choose \"Continue with Google\" on the AgriTrade+ login screen.";
+  const ignore = "If you did not make this request, you can ignore this email. Nothing about your account has changed.";
+  return {
+    subject: "How to log in to your AgriTrade+ account",
+    text: [greeting, "", request, "", explain, "", ignore, "", "The AgriTrade+ Team"].join("\n"),
+    html: layout({
+      title: "Log in with Google",
+      preheader: "Your AgriTrade+ account logs in with Google.",
+      bodyHtml: [
+        paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
+        paragraph(escapeHtml(request)),
+        paragraph(escapeHtml(explain)),
+        paragraph(escapeHtml(ignore)),
+        paragraph(`<strong style="color:${BRAND_GREEN}">The AgriTrade+ Team</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+module.exports = { escapeHtml, verificationEmail, otpEmail, passwordResetEmail, googleSignInEmail, newDeviceEmail, adminSignInEmail, farmerApprovedEmail, farmerRejectedEmail, accountNoticeEmail };

@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -160,34 +161,21 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
       backgroundColor: Colors.white,
       resizeToAvoidBottomInset: true,
 
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        surfaceTintColor: Colors.white,
+      appBar: AgriAppBar(
+        onBack: () {
+          if (Navigator.of(context).canPop()) {
+            Navigator.pop(context);
+            return;
+          }
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const BuyerMarketplaceScreen(initialIndex: 1),
+            ),
+          );
+        },
 
-        leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_ios_new,
-            color: Colors.black87,
-            size: 20,
-          ),
-          onPressed: () {
-            if (Navigator.of(context).canPop()) {
-              Navigator.pop(context);
-              return;
-            }
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (_) => const BuyerMarketplaceScreen(initialIndex: 1),
-              ),
-            );
-          },
-        ),
-
-        titleSpacing: 0,
-
-        title: Row(
+        titleWidget: Row(
           children: [
             // Live from publicProfiles so a photo change shows up here too.
             StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
@@ -211,11 +199,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
                 _name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.black87,
-                ),
+                style: AgriAppBar.titleStyle(size: 16),
               ),
             ),
           ],
@@ -225,7 +209,7 @@ class _MessageOrderScreenState extends State<MessageOrderScreen> {
           IconButton(
             tooltip: 'Conversation info',
             onPressed: _openInfo,
-            icon: const Icon(Icons.info_outline_rounded, color: AppTheme.dark),
+            icon: const Icon(Icons.info_outline_rounded),
           ),
         ],
       ),

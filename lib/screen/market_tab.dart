@@ -8,12 +8,14 @@ import 'package:intl/intl.dart';
 import '../services/farmer_revenue_service.dart';
 import '../services/order_service.dart';
 import '../services/product_service.dart';
-import '../services/market_price_helpers.dart';
-import '../widgets/demand_forecast_views.dart';
+import '../widgets/market_average_card.dart';
 import '../widgets/market_demand_cards.dart';
+import '../widgets/market_tab_guide.dart';
+import '../widgets/page_header.dart';
 import '../widgets/retry_message.dart';
 import '../widgets/agri_refresh_indicator.dart';
 import '../theme/app_theme.dart';
+import '../widgets/notification_bell.dart';
 import 'add_product_screen.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
@@ -28,7 +30,14 @@ import 'add_product_screen.dart';
 class MarketTab extends StatefulWidget {
   final ValueChanged<int>? onNavigateToTab;
 
-  const MarketTab({super.key, this.onNavigateToTab});
+  /// The notification bell in this tab's header.
+  final VoidCallback? onNotificationsPressed;
+
+  const MarketTab({
+    super.key,
+    this.onNavigateToTab,
+    this.onNotificationsPressed,
+  });
 
   @override
   State<MarketTab> createState() => _MarketTabState();
@@ -36,11 +45,9 @@ class MarketTab extends StatefulWidget {
 
 class _MarketTabState extends State<MarketTab> {
   static const Color _dark = AppTheme.dark;
-  static const Color _accent = Color(0xFFDCEDC8);
 
   static const int _profileTabIndex = 3;
   static const int _ordersTabIndex = 2;
-  FarmerRevenueView _selectedRevenueView = FarmerRevenueView.weekly;
   DateTime? _selectedSalesMonth;
 
   // The month every dashboard analytics card shows: the one picked on
@@ -57,6 +64,11 @@ class _MarketTabState extends State<MarketTab> {
   @override
   void initState() {
     super.initState();
+    // A first-time farmer is told which cards are their own sales and
+    // which are the whole marketplace, once.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) showMarketTabGuideOnce(context);
+    });
   }
 
   Widget _salesPerformanceLineCard(int productCount) {
@@ -753,29 +765,6 @@ class _MarketTabState extends State<MarketTab> {
     ),
   );
 
-  Widget _dashboardLoadingCard(String title) => Container(
-    width: double.infinity,
-    padding: const EdgeInsets.all(18),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: const Color(0xFFE7EFE4)),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.04),
-          blurRadius: 10,
-          offset: const Offset(0, 3),
-        ),
-      ],
-    ),
-    child: Row(
-      children: [
-        Expanded(child: _SectionTitle(title)),
-        const AgriLogoLoader(),
-      ],
-    ),
-  );
-
   DateTime? _parseDateTime(dynamic value) {
     if (value is Timestamp) return value.toDate();
     if (value is DateTime) return value;
@@ -803,6 +792,32 @@ class _MarketTabState extends State<MarketTab> {
     return '₱$buffer';
   }
 
+  // Pull to refresh: asks the server for the latest of everything this tab
+  // shows. The cards are fed by live listeners, so they take the new data
+  // in place — nothing is cleared or swapped for a loading state meanwhile.
+  Future<void> _refresh() async {
+    final db = FirebaseFirestore.instance;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    const fromServer = GetOptions(source: Source.server);
+    try {
+      await Future.wait([
+        // Long enough for the pull to register as having done something.
+        Future<void>.delayed(const Duration(milliseconds: 600)),
+        db.collection('market_sales').get(fromServer),
+        db.collection('products').get(fromServer),
+        if (uid != null) ...[
+          db.collection('users').doc(uid).get(fromServer),
+          db
+              .collection('orders')
+              .where('sellerId', isEqualTo: uid)
+              .get(fromServer),
+        ],
+      ]).timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Offline or slow: the listeners keep showing what they have.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -823,22 +838,43 @@ class _MarketTabState extends State<MarketTab> {
             ? snapshot.data!.docs.length
             : _lastProductCount;
 
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
-          children: [
-            _welcomeHeader(productCount),
-            const SizedBox(height: 16),
-            _statRow(productCount),
-            const SizedBox(height: 16),
-            _salesPerformanceLineCard(productCount),
-            const SizedBox(height: 16),
-            // Same month as the Sales Performance card above.
-            MarketDemandCards(month: _analyticsMonth),
-            const SizedBox(height: 16),
-            // What is expected next month — kept apart from the historical
-            // cards above.
-            const DemandForecastCard(),
-          ],
+        return AgriRefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.only(bottom: 90),
+            children: [
+              // Same title row as Messages, Orders and Profile.
+              PageHeader(
+                title: 'Market',
+                trailing: widget.onNotificationsPressed == null
+                    ? null
+                    : NotificationBell(
+                        onPressed: widget.onNotificationsPressed!,
+                        color: AppTheme.dark,
+                      ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _welcomeHeader(productCount),
+                    const SizedBox(height: 16),
+                    _statRow(productCount),
+                    const SizedBox(height: 16),
+                    _salesPerformanceLineCard(productCount),
+                    const SizedBox(height: 16),
+                    // What supported products are selling for right now.
+                    const MarketAverageCard(),
+                    const SizedBox(height: 16),
+                    // Same month as the Sales Performance card above.
+                    MarketDemandCards(month: _analyticsMonth),
+                  ],
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -934,84 +970,6 @@ class _MarketTabState extends State<MarketTab> {
     );
   }
 
-  // Shown only while this farmer has zero listings — a friendly nudge with
-  // a direct path to their first product, instead of leaving the stat row
-  // ("0 products listed") as the only clue something's missing.
-  Widget _addFirstProductCard(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: _accent, width: 1.4),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: const BoxDecoration(
-                  color: _accent,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.add_a_photo_outlined,
-                  color: _dark,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Text(
-                  'List your first product',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            "You haven't posted anything yet — buyers can't find you until you do. It only takes a minute.",
-            style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AddProductScreen()),
-              ),
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add Your First Product'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _dark,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _statRow(int productCount) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: OrderService().farmerOrdersStream(),
@@ -1101,575 +1059,6 @@ class _MarketTabState extends State<MarketTab> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _salesPerformanceCard(bool hasProducts) {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: const Center(child: Text('Login to view sales performance.')),
-      );
-    }
-
-    // A farmer with zero listings has nothing to sell yet — show the
-    // friendly nudge without waiting on any Firestore round-trip.
-    if (!hasProducts) {
-      return _newFarmerSalesCard();
-    }
-
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .snapshots(),
-      builder: (context, userSnapshot) {
-        // Wait for the farmer's profile doc before deciding what to show —
-        // never fall through to a default state while this is still `waiting`.
-        if (userSnapshot.connectionState == ConnectionState.waiting &&
-            !userSnapshot.hasData) {
-          return _salesLoadingCard();
-        }
-        if (userSnapshot.hasError) {
-          return RetryMessage(
-            message:
-                'Could not load sales data. Check your connection and retry.',
-            onRetry: () => setState(() {}),
-          );
-        }
-
-        final now = DateTime.now();
-        final userData = userSnapshot.data?.data() ?? const <String, dynamic>{};
-        // Missing createdAt (e.g. an older account) defaults to "now" —
-        // restricts to the weekly view rather than crashing or guessing.
-        final registeredAt = _parseDateTime(userData['createdAt']) ?? now;
-
-        final canViewMonthly = FarmerRevenueService.canViewMonthly(
-          registeredAt: registeredAt,
-          now: now,
-        );
-        final effectiveView = canViewMonthly
-            ? _selectedRevenueView
-            : FarmerRevenueView.weekly;
-
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: OrderService().farmerOrdersStream(),
-          builder: (context, ordersSnapshot) {
-            if (ordersSnapshot.connectionState == ConnectionState.waiting &&
-                !ordersSnapshot.hasData) {
-              return _salesLoadingCard();
-            }
-            if (ordersSnapshot.hasError) {
-              return RetryMessage(
-                message:
-                    'Could not load sales data. Check your connection and retry.',
-                onRetry: () => setState(() {}),
-              );
-            }
-
-            final orders =
-                (ordersSnapshot.data?.docs ??
-                        const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
-                    .map(
-                      (doc) =>
-                          Map<String, dynamic>.from(doc.data())
-                            ..['id'] = doc.id,
-                    )
-                    .toList();
-
-            final bars = FarmerRevenueService.revenueBars(
-              orders: orders,
-              view: effectiveView,
-              now: now,
-            );
-            final maxValue = bars.isEmpty
-                ? 1.0
-                : bars
-                      .map((bar) => (bar['value'] as num).toDouble())
-                      .reduce((a, b) => a > b ? a : b);
-            final totalRevenue = FarmerRevenueService.totalRevenueForRange(
-              orders: orders,
-              view: effectiveView,
-              now: now,
-            );
-            final hasCompletedSales = totalRevenue > 0;
-
-            return Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(18),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const _SectionTitle('Sales Performance'),
-                      if (canViewMonthly)
-                        Container(
-                          padding: const EdgeInsets.all(2),
-                          decoration: BoxDecoration(
-                            color: _accent,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            children: [
-                              _viewToggleChip('Week', FarmerRevenueView.weekly),
-                              _viewToggleChip(
-                                'Month',
-                                FarmerRevenueView.monthly,
-                              ),
-                            ],
-                          ),
-                        )
-                      else
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: _accent,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Text(
-                            'Week',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: _dark,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    effectiveView == FarmerRevenueView.weekly
-                        ? 'Weekly Revenue'
-                        : 'Monthly Revenue',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                  ),
-                  Text(
-                    _formatCurrency(totalRevenue),
-                    style: GoogleFonts.montserrat(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      color: _dark,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    height: 108,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: List.generate(bars.length, (i) {
-                        final value = (bars[i]['value'] as num).toDouble();
-                        final height = maxValue <= 0
-                            ? 0.0
-                            : ((value / maxValue) * 80.0).clamp(8.0, 80.0);
-                        return Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Container(
-                              width: 18,
-                              height: height,
-                              decoration: BoxDecoration(
-                                color: value > 0 ? _dark : _accent,
-                                borderRadius: const BorderRadius.vertical(
-                                  top: Radius.circular(6),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              bars[i]['label'].toString(),
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey[500],
-                              ),
-                            ),
-                          ],
-                        );
-                      }),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    hasCompletedSales
-                        ? 'Revenue updates as completed orders come in.'
-                        : 'No completed sales in this period yet.',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontStyle: FontStyle.italic,
-                      color: Colors.grey[500],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _newFarmerSalesCard() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _SectionTitle('Sales Performance'),
-          SizedBox(height: 12),
-          Text(
-            "Let's get your farm moving!",
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: _dark,
-            ),
-          ),
-          SizedBox(height: 6),
-          Text(
-            'List your first product and start accepting orders — your sales performance will appear here once you do.',
-            style: TextStyle(fontSize: 12, color: Colors.black54, height: 1.4),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _viewToggleChip(String label, FarmerRevenueView view) {
-    final active = _selectedRevenueView == view;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedRevenueView = view),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: active ? _dark : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: active ? Colors.white : _dark,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _marketObjectivesCard() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance.collection('products').snapshots(),
-      builder: (context, productsSnapshot) {
-        if (productsSnapshot.connectionState == ConnectionState.waiting &&
-            !productsSnapshot.hasData) {
-          return _dashboardLoadingCard('Marketplace Listings');
-        }
-        final products =
-            (productsSnapshot.data?.docs ??
-                    const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
-                .map((doc) => Map<String, dynamic>.from(doc.data()))
-                .toList();
-        if (productsSnapshot.hasError) {
-          return RetryMessage(
-            message:
-                'Could not load marketplace listings. Check your connection and retry.',
-            onRetry: () => setState(() {}),
-          );
-        }
-
-        // market_sales mirrors just {productName, quantity, createdAt} for
-        // every completed order platform-wide, written by the
-        // recordMarketSale Cloud Function — querying `orders` directly here
-        // isn't possible, since Firestore rules only let a user read an
-        // order where they're the buyer or seller (see firestore.rules).
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('market_sales')
-              .snapshots(),
-          builder: (context, ordersSnapshot) {
-            if (ordersSnapshot.connectionState == ConnectionState.waiting &&
-                !ordersSnapshot.hasData) {
-              return _dashboardLoadingCard('Marketplace Sales');
-            }
-            if (ordersSnapshot.hasError) {
-              return RetryMessage(
-                message:
-                    'Could not load completed market sales. Check your connection and retry.',
-                onRetry: () => setState(() {}),
-              );
-            }
-            final orders =
-                (ordersSnapshot.data?.docs ??
-                        const <QueryDocumentSnapshot<Map<String, dynamic>>>[])
-                    .map((doc) => Map<String, dynamic>.from(doc.data()))
-                    .toList();
-
-            final insight = FarmerRevenueService.marketObjective(
-              products: products,
-              orders: orders,
-              now: DateTime.now(),
-            );
-
-            final avgPrice = (insight['marketAverage'] as num?)?.toDouble();
-            final avgCommodity = insight['marketAverageCommodity']?.toString();
-            final avgUnit = insight['marketAverageUnit']?.toString();
-            final seasonPick = insight['seasonalPick']?.toString();
-            final marketPick = insight['marketPick']?.toString();
-
-            return Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFE7EFE4)),
-                boxShadow: [
-                  BoxShadow(
-                    color: _dark.withValues(alpha: 0.07),
-                    blurRadius: 18,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 42,
-                        height: 42,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFEAF4E7),
-                          borderRadius: BorderRadius.circular(13),
-                        ),
-                        child: const Icon(
-                          Icons.insights_rounded,
-                          color: _dark,
-                          size: 23,
-                        ),
-                      ),
-                      const SizedBox(width: 11),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Simple Market Guide',
-                              style: TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            SizedBox(height: 2),
-                            Text(
-                              'A quick look at what buyers are choosing',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.black54,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    avgPrice != null && avgCommodity != null && avgUnit != null
-                        ? 'Other farmers list $avgCommodity for about ${formatPriceWithUnit(avgPrice, avgUnit)} on AgriTrade+. Use this as a guide and choose a price that works for your farm.'
-                        : 'There are not enough active listings to show a price guide yet.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[700],
-                      height: 1.4,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.shopping_basket_outlined,
-                        color: _dark,
-                        size: 18,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        'Products buyers bought',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 9),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _demandTile(
-                          icon: Icons.wb_sunny_outlined,
-                          title: 'This season',
-                          product: seasonPick,
-                          caption: 'Most bought this season across AgriTrade+',
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _demandTile(
-                          icon: Icons.local_fire_department_outlined,
-                          title: 'Last 30 days',
-                          product: marketPick,
-                          caption:
-                              'Most bought in the last 30 days across AgriTrade+',
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFFF1F8ED), Color(0xFFFAFCF8)],
-                      ),
-                      borderRadius: BorderRadius.circular(13),
-                      border: Border.all(color: const Color(0xFFDCEAD5)),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(
-                          Icons.lightbulb_outline_rounded,
-                          color: _dark,
-                          size: 19,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            marketPick != null
-                                ? 'If you grow $marketPick, consider listing it. Buyers bought it most in the last 30 days on AgriTrade+.'
-                                : seasonPick != null
-                                ? 'If you grow $seasonPick, consider listing it. Buyers bought it most this season on AgriTrade+.'
-                                : 'There is not enough completed-sale data yet. Check back as more buyers complete orders.',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: Colors.grey[800],
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _demandTile({
-    required IconData icon,
-    required String title,
-    required String? product,
-    required String caption,
-  }) {
-    return Container(
-      constraints: const BoxConstraints(minHeight: 104),
-      padding: const EdgeInsets.all(11),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAFBF9),
-        borderRadius: BorderRadius.circular(13),
-        border: Border.all(color: const Color(0xFFE8EDE5)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: _dark, size: 16),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black54,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            product ?? 'Collecting sales data',
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-              color: _dark,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            product == null ? 'More completed orders are needed.' : caption,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 9.5,
-              color: Colors.grey[600],
-              height: 1.25,
-            ),
-          ),
-        ],
       ),
     );
   }

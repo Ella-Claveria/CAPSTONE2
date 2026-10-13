@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../services/admin_perf.dart';
+import 'admin_filter_controls.dart';
 import '../services/audit_log_service.dart';
 import '../services/pdf_report_service.dart';
+import 'admin_sub_nav.dart';
 import 'admin_dashboard_screen.dart'
     show
         AdminThemeScope,
@@ -30,7 +35,6 @@ class _AuditEntry {
   final String details;
   final String browser;
   final String os;
-  final String ip;
   final String location;
   final DateTime? timestamp;
 
@@ -45,7 +49,6 @@ class _AuditEntry {
       browser = ((doc.data()['device'] as Map?)?['browser'] ?? 'Unknown')
           .toString(),
       os = ((doc.data()['device'] as Map?)?['os'] ?? 'Unknown').toString(),
-      ip = (doc.data()['ip'] ?? 'Unknown').toString(),
       location = (doc.data()['location'] ?? 'Unknown').toString(),
       timestamp = (doc.data()['timestamp'] as Timestamp?)?.toDate();
 
@@ -76,7 +79,7 @@ class AuditLogView extends StatefulWidget {
   State<AuditLogView> createState() => _AuditLogViewState();
 }
 
-class _AuditLogViewState extends State<AuditLogView> {
+class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
   final List<_AuditEntry> _entries = [];
   DocumentSnapshot<Map<String, dynamic>>? _cursor;
   bool _loading = false;
@@ -86,7 +89,62 @@ class _AuditLogViewState extends State<AuditLogView> {
   String? _actionFilter;
   String? _adminFilter; // admin uid
   DateTimeRange? _dateRange;
-  String _search = '';
+  // Typed in the header's search box.
+  String get _search => pageSearch;
+  bool _reloadQueued = false;
+
+  // The entries whose box is ticked.
+  final Set<String> _ticked = {};
+
+  void _setAction(String? action) {
+    setState(() {
+      _actionFilter = action;
+      _ticked.clear();
+    });
+    _fetchPage(reset: true);
+  }
+
+  // Live: a listener on just the newest entry. When a new one is written,
+  // the first page is loaded again, so the log stays current by itself. It
+  // is left alone while more pages are loaded — reloading then would throw
+  // away what the admin has scrolled to.
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _newestSubscription;
+  String? _newestId;
+
+  void _watchNewest() {
+    _newestSubscription = FirebaseFirestore.instance
+        .collection('audit_logs')
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .snapshots()
+        .listen((snapshot) {
+          if (snapshot.docs.isEmpty) return;
+          final id = snapshot.docs.first.id;
+          final first = _newestId == null;
+          final changed = _newestId != id;
+          _newestId = id;
+          if (first || !changed || !mounted) return;
+          if (_entries.length <= _pageSize) _fetchPage(reset: true);
+        }, onError: (Object _) {});
+  }
+
+  // The sidebar's Audit Log submenu (or anything else) chose a section:
+  // drop the single-action filter, which may not belong to it, and reload.
+  void _onSectionChanged() {
+    if (!mounted) return;
+    setState(() {
+      _actionFilter = null;
+      _ticked.clear();
+    });
+    _fetchPage(reset: true);
+  }
+
+  @override
+  void dispose() {
+    AdminSubNav.audit.removeListener(_onSectionChanged);
+    _newestSubscription?.cancel();
+    super.dispose();
+  }
 
   late final Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
   _adminsFuture = FirebaseFirestore.instance
@@ -98,6 +156,8 @@ class _AuditLogViewState extends State<AuditLogView> {
   @override
   void initState() {
     super.initState();
+    AdminSubNav.audit.addListener(_onSectionChanged);
+    _watchNewest();
     _fetchPage(reset: true);
   }
 
@@ -110,8 +170,14 @@ class _AuditLogViewState extends State<AuditLogView> {
     // and indexing every admin-x-action pairing doesn't scale. Action wins
     // when both are set; the admin filter is then applied client-side in
     // _fetchPage below (see needsClientAdminFilter there).
+    // An Audit Log section (see AdminSubNav) is a group of actions: the
+    // same action index, queried with whereIn. A single chosen action is
+    // always one of the section's own, so it simply narrows it.
+    final sectionActions = AdminSubNav.audit.value.actions;
     if (_actionFilter != null) {
       q = q.where('action', isEqualTo: _actionFilter);
+    } else if (sectionActions != null) {
+      q = q.where('action', whereIn: sectionActions);
     } else if (_adminFilter != null) {
       q = q.where('adminId', isEqualTo: _adminFilter);
     }
@@ -133,7 +199,11 @@ class _AuditLogViewState extends State<AuditLogView> {
   }
 
   Future<void> _fetchPage({bool reset = false}) async {
-    if (_loading) return;
+    if (_loading) {
+      // A filter changed mid-load: run again once this load is done.
+      if (reset) _reloadQueued = true;
+      return;
+    }
     if (!reset && !_hasMore) return;
 
     setState(() {
@@ -147,7 +217,8 @@ class _AuditLogViewState extends State<AuditLogView> {
     });
 
     final needsClientAdminFilter =
-        _actionFilter != null && _adminFilter != null;
+        (_actionFilter != null || AdminSubNav.audit.value.actions != null) &&
+        _adminFilter != null;
 
     try {
       var collected = 0;
@@ -160,7 +231,11 @@ class _AuditLogViewState extends State<AuditLogView> {
         underlyingFetches++;
         var query = _baseQuery().limit(_pageSize);
         if (_cursor != null) query = query.startAfterDocument(_cursor!);
-        final snap = await query.get();
+        final snap = await AdminPerf.time(
+          'audit log: page',
+          () => query.get(),
+          describe: (s) => '${s.docs.length} entries',
+        );
 
         if (snap.docs.isEmpty) {
           _hasMore = false;
@@ -181,7 +256,12 @@ class _AuditLogViewState extends State<AuditLogView> {
       if (_entries.isEmpty) _loadError = true;
     }
 
-    if (mounted) setState(() => _loading = false);
+    if (!mounted) return;
+    setState(() => _loading = false);
+    if (_reloadQueued) {
+      _reloadQueued = false;
+      _fetchPage(reset: true);
+    }
   }
 
   List<_AuditEntry> get _visibleEntries {
@@ -202,15 +282,16 @@ class _AuditLogViewState extends State<AuditLogView> {
       _actionFilter = null;
       _adminFilter = null;
       _dateRange = null;
-      _search = '';
     });
+    // Clears the header's search box too.
+    adminPageSearch.value = '';
     _fetchPage(reset: true);
   }
 
   Future<void> _pickDateRange() async {
     final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
+    final picked = await showAdminDateRangePicker(
+      context,
       firstDate: DateTime(now.year - 2),
       lastDate: now,
       initialDateRange: _dateRange,
@@ -229,7 +310,7 @@ class _AuditLogViewState extends State<AuditLogView> {
             action: e.actionLabel,
             details: e.details,
             device: e.device,
-            location: '${e.ip} • ${e.location}',
+            location: e.location,
           ),
         )
         .toList();
@@ -261,37 +342,40 @@ class _AuditLogViewState extends State<AuditLogView> {
     final entries = _visibleEntries;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(28.0),
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // The title is in the utility bar above. The filters, and Export
+          // Report level with them.
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Audit Log',
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 30,
-                      height: 1.15,
-                      letterSpacing: -0.6,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Every admin login and action on this portal — append-only, cannot be edited.',
-                    style: TextStyle(
-                      color: c.textSecondary,
-                      fontSize: 14,
-                      height: 1.5,
-                    ),
-                  ),
-                ],
+              Expanded(
+                child: _FilterBar(
+                  // Rebuilt per section, so its Action dropdown resets with it.
+                  key: ValueKey(AdminSubNav.audit.value),
+                  actions: AdminSubNav.audit.value.actions ?? AuditAction.all,
+                  search: _search,
+                  actionFilter: _actionFilter,
+                  onActionChanged: _setAction,
+                  adminFilter: _adminFilter,
+                  adminsFuture: _adminsFuture,
+                  onAdminChanged: (v) {
+                    setState(() => _adminFilter = v);
+                    _fetchPage(reset: true);
+                  },
+                  dateRange: _dateRange,
+                  onPickDateRange: _pickDateRange,
+                  onClear: _clearFilters,
+                ),
               ),
+              // How many rows are ticked, and Clear: up here, in view
+              // without scrolling to the table's end.
+              AdminSelectionNote(
+                count: _ticked.length,
+                onClear: () => setState(_ticked.clear),
+              ),
+              const SizedBox(width: 12),
               AdminQuickActionButton(
                 icon: Icons.picture_as_pdf_outlined,
                 label: 'Export Report',
@@ -299,36 +383,13 @@ class _AuditLogViewState extends State<AuditLogView> {
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          _FilterBar(
-            search: _search,
-            onSearchChanged: (v) => setState(() => _search = v),
-            actionFilter: _actionFilter,
-            onActionChanged: (v) {
-              setState(() => _actionFilter = v);
-              _fetchPage(reset: true);
-            },
-            adminFilter: _adminFilter,
-            adminsFuture: _adminsFuture,
-            onAdminChanged: (v) {
-              setState(() => _adminFilter = v);
-              _fetchPage(reset: true);
-            },
-            dateRange: _dateRange,
-            onPickDateRange: _pickDateRange,
-            onClear: _clearFilters,
-          ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: c.surface,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: c.border),
-            ),
+            padding: kAdminTablePadding,
+            decoration: adminTableCard(c),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (_loadError)
                   const AdminStreamError()
@@ -351,19 +412,17 @@ class _AuditLogViewState extends State<AuditLogView> {
                         : 'Admin logins and actions will appear here as they happen.',
                   )
                 else
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
-                      dataRowColor: WidgetStateProperty.all(Colors.transparent),
-                      columnSpacing: 32,
-                      horizontalMargin: 12,
-                      headingTextStyle: TextStyle(
-                        color: c.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                  AdminTableFit(
+                    table: DataTable(
+                      headingRowColor: WidgetStateProperty.all(
+                        adminTableHeaderColor(c),
                       ),
+                      dataRowColor: adminTableRowColor(c),
+                      columnSpacing: kAdminTableColumnSpacing,
+                      horizontalMargin: kAdminTableMargin,
+                      headingTextStyle: adminTableHeaderStyle(c),
                       dataTextStyle: TextStyle(
+                        fontFamily: kAdminFontFamily,
                         color: c.textPrimary,
                         fontSize: 13,
                       ),
@@ -373,11 +432,19 @@ class _AuditLogViewState extends State<AuditLogView> {
                         DataColumn(label: Text('Action')),
                         DataColumn(label: Text('Details')),
                         DataColumn(label: Text('Device/Browser')),
-                        DataColumn(label: Text('Location/IP')),
+                        DataColumn(label: Text('Location')),
                       ],
                       rows: entries.map((e) {
                         final (color, bg) = _badgeColors(c, e.action);
                         return DataRow(
+                          selected: _ticked.contains(e.id),
+                          onSelectChanged: (on) => setState(() {
+                            if (on ?? false) {
+                              _ticked.add(e.id);
+                            } else {
+                              _ticked.remove(e.id);
+                            }
+                          }),
                           cells: [
                             DataCell(Text(e.whenLabel)),
                             DataCell(
@@ -410,7 +477,7 @@ class _AuditLogViewState extends State<AuditLogView> {
                               ),
                             ),
                             DataCell(Text(e.device)),
-                            DataCell(Text('${e.ip} • ${e.location}')),
+                            DataCell(Text(e.location)),
                           ],
                         );
                       }).toList(),
@@ -440,9 +507,18 @@ class _AuditLogViewState extends State<AuditLogView> {
   }
 }
 
+/// "LOGIN_SUCCESS" as "Login Success".
+String auditActionLabel(String action) => action
+    .split('_')
+    .map((w) => w.isEmpty ? w : '${w[0]}${w.substring(1).toLowerCase()}')
+    .join(' ');
+
 class _FilterBar extends StatelessWidget {
   final String search;
-  final ValueChanged<String> onSearchChanged;
+
+  /// The actions offered by the Action dropdown.
+  final List<String> actions;
+
   final String? actionFilter;
   final ValueChanged<String?> onActionChanged;
   final String? adminFilter;
@@ -453,8 +529,9 @@ class _FilterBar extends StatelessWidget {
   final VoidCallback onClear;
 
   const _FilterBar({
+    super.key,
+    required this.actions,
     required this.search,
-    required this.onSearchChanged,
     required this.actionFilter,
     required this.onActionChanged,
     required this.adminFilter,
@@ -474,148 +551,90 @@ class _FilterBar extends StatelessWidget {
         dateRange != null ||
         search.isNotEmpty;
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: c.border),
-      ),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 12,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          SizedBox(
-            width: 240,
-            child: TextField(
-              onChanged: onSearchChanged,
-              style: TextStyle(color: c.textPrimary, fontSize: 13.5),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Search loaded entries…',
-                hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
-                prefixIcon: Icon(Icons.search, color: c.textMuted, size: 18),
-                filled: true,
-                fillColor: c.surfaceAlt,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
-              ),
-            ),
-          ),
-          SizedBox(
-            width: 190,
-            child: DropdownButtonFormField<String>(
-              initialValue: actionFilter,
-              isExpanded: true,
-              decoration: _dropdownDecoration(c, 'Action'),
-              style: TextStyle(color: c.textPrimary, fontSize: 13),
-              dropdownColor: c.surface,
-              items: [
-                const DropdownMenuItem(value: null, child: Text('All actions')),
-                ...AuditAction.all.map(
-                  (a) => DropdownMenuItem(
-                    value: a,
-                    child: Text(
-                      a
-                          .split('_')
-                          .map(
-                            (w) => w.isEmpty
-                                ? w
-                                : '${w[0]}${w.substring(1).toLowerCase()}',
-                          )
-                          .join(' '),
-                      overflow: TextOverflow.ellipsis,
+    return SizedBox(
+      child: FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+        future: adminsFuture,
+        builder: (context, snap) {
+          final admins = snap.data ?? const [];
+          return Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              AdminPillDropdown<String?>(
+                value: actionFilter,
+                width: 210,
+                icon: Icons.bolt_outlined,
+                items: [
+                  const DropdownMenuItem(
+                    value: null,
+                    child: Text('All actions'),
+                  ),
+                  for (final a in actions)
+                    DropdownMenuItem(
+                      value: a,
+                      child: Text(auditActionLabel(a)),
                     ),
+                ],
+                onChanged: onActionChanged,
+              ),
+              // Only when there is more than one admin to choose between.
+              if (admins.length > 1)
+                AdminPillDropdown<String?>(
+                  value: admins.any((d) => d.id == adminFilter)
+                      ? adminFilter
+                      : null,
+                  width: 210,
+                  icon: Icons.person_outline,
+                  items: [
+                    const DropdownMenuItem(
+                      value: null,
+                      child: Text('All admins'),
+                    ),
+                    for (final d in admins)
+                      DropdownMenuItem(
+                        value: d.id,
+                        child: Text(
+                          (d.data()['name'] ??
+                                  d.data()['fullName'] ??
+                                  d.data()['email'] ??
+                                  d.id)
+                              .toString(),
+                        ),
+                      ),
+                  ],
+                  onChanged: onAdminChanged,
+                ),
+              OutlinedButton.icon(
+                onPressed: onPickDateRange,
+                icon: Icon(
+                  Icons.date_range_outlined,
+                  size: 16,
+                  color: c.textPrimary,
+                ),
+                label: Text(
+                  dateRange == null
+                      ? 'Date range'
+                      : '${DateFormat('MMM d').format(dateRange!.start)} – ${DateFormat('MMM d').format(dateRange!.end)}',
+                  style: TextStyle(color: c.textPrimary, fontSize: 13),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: c.border),
+                ),
+              ),
+              if (hasFilters)
+                TextButton.icon(
+                  onPressed: onClear,
+                  icon: Icon(Icons.close, size: 16, color: c.textSecondary),
+                  label: Text(
+                    'Clear filters',
+                    style: TextStyle(color: c.textSecondary, fontSize: 13),
                   ),
                 ),
-              ],
-              onChanged: onActionChanged,
-            ),
-          ),
-          SizedBox(
-            width: 190,
-            child:
-                FutureBuilder<
-                  List<QueryDocumentSnapshot<Map<String, dynamic>>>
-                >(
-                  future: adminsFuture,
-                  builder: (context, snap) {
-                    final admins = snap.data ?? const [];
-                    return DropdownButtonFormField<String>(
-                      initialValue: adminFilter,
-                      isExpanded: true,
-                      decoration: _dropdownDecoration(c, 'Admin'),
-                      style: TextStyle(color: c.textPrimary, fontSize: 13),
-                      dropdownColor: c.surface,
-                      items: [
-                        const DropdownMenuItem(
-                          value: null,
-                          child: Text('All admins'),
-                        ),
-                        ...admins.map((d) {
-                          final data = d.data();
-                          final label =
-                              (data['name'] ??
-                                      data['fullName'] ??
-                                      data['email'] ??
-                                      d.id)
-                                  .toString();
-                          return DropdownMenuItem(
-                            value: d.id,
-                            child: Text(label, overflow: TextOverflow.ellipsis),
-                          );
-                        }),
-                      ],
-                      onChanged: onAdminChanged,
-                    );
-                  },
-                ),
-          ),
-          OutlinedButton.icon(
-            onPressed: onPickDateRange,
-            icon: Icon(
-              Icons.date_range_outlined,
-              size: 16,
-              color: c.textPrimary,
-            ),
-            label: Text(
-              dateRange == null
-                  ? 'Date range'
-                  : '${DateFormat('MMM d').format(dateRange!.start)} – ${DateFormat('MMM d').format(dateRange!.end)}',
-              style: TextStyle(color: c.textPrimary, fontSize: 13),
-            ),
-            style: OutlinedButton.styleFrom(side: BorderSide(color: c.border)),
-          ),
-          if (hasFilters)
-            TextButton.icon(
-              onPressed: onClear,
-              icon: Icon(Icons.close, size: 16, color: c.textSecondary),
-              label: Text(
-                'Clear filters',
-                style: TextStyle(color: c.textSecondary, fontSize: 13),
-              ),
-            ),
-        ],
+            ],
+          );
+        },
       ),
-    );
-  }
-
-  InputDecoration _dropdownDecoration(AdminPalette c, String label) {
-    return InputDecoration(
-      isDense: true,
-      labelText: label,
-      labelStyle: TextStyle(color: c.textMuted, fontSize: 12),
-      filled: true,
-      fillColor: c.surfaceAlt,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     );
   }
 }

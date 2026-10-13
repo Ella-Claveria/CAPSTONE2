@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'dart:async';
 import 'dart:typed_data';
@@ -17,6 +18,7 @@ import 'chat_attachments.dart';
 import 'chat_product_context.dart';
 import 'conversation_info_screen.dart';
 import 'conversation_tools_screens.dart';
+import '../services/chat_date_label.dart';
 
 /// A single conversation thread — real-time, Messenger-style.
 class ChatScreen extends StatefulWidget {
@@ -298,6 +300,49 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  // The list is newest-first, so the message before docs[i] in time is
+  // docs[i + 1]. The first message of each day gets that day's heading
+  // above it, centered — "Today", "Yesterday", or the day and date.
+  Widget _withDayHeading(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    int i,
+    Widget message,
+  ) {
+    DateTime? sentAt(int index) =>
+        (docs[index].data()['createdAt'] as Timestamp?)?.toDate();
+    final isOldest = i == docs.length - 1;
+    // A message still being sent has no time yet; neither it nor the one
+    // after it should be given a heading on that account.
+    final previous = isOldest ? null : sentAt(i + 1) ?? sentAt(i);
+    if (!startsNewChatDay(sentAt(i), previous)) return message;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade200,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                chatDayLabel(sentAt(i)),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.grey[700],
+                ),
+              ),
+            ),
+          ),
+        ),
+        message,
+      ],
+    );
+  }
+
   Widget _typingIndicator() {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: _typingStream,
@@ -567,12 +612,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        iconTheme: const IconThemeData(color: _dark),
-        titleSpacing: 0,
-        title: Row(
+      appBar: AgriAppBar(
+        actions: [
+          IconButton(
+            tooltip: 'Conversation info',
+            onPressed: _openInfo,
+            icon: const Icon(Icons.info_outline_rounded),
+          ),
+        ],
+        titleWidget: Row(
           children: [
             // Live from publicProfiles so a photo change shows up here too;
             // the URL passed in is only the placeholder until it loads.
@@ -596,17 +644,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 _name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: Colors.black87,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: AgriAppBar.titleStyle(size: 16),
               ),
-            ),
-            IconButton(
-              tooltip: 'Conversation info',
-              onPressed: _openInfo,
-              icon: const Icon(Icons.info_outline_rounded, color: _dark),
             ),
           ],
         ),
@@ -686,30 +725,55 @@ class _ChatScreenState extends State<ChatScreen> {
                             physics: const AlwaysScrollableScrollPhysics(),
                             padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                             itemCount: docs.length,
-                            itemBuilder: (context, i) => _jumpTargets.wrap(
-                              docs[i].id,
-                              Builder(
-                                builder: (context) {
-                                  final data = docs[i].data();
-                                  final isMe = data['senderId'] == _myUid;
-                                  final text = data['text']?.toString() ?? '';
-                                  final imageUrl = data['imageUrl']?.toString();
-                                  final ts = data['createdAt'] as Timestamp?;
-                                  if (data['type'] == 'pricingOptions') {
-                                    return _replyGesture(
-                                      messageId: docs[i].id,
-                                      data: data,
-                                      isMe: isMe,
-                                      child: _withDeliveryStatus(
+                            itemBuilder: (context, i) => _withDayHeading(
+                              docs,
+                              i,
+                              _jumpTargets.wrap(
+                                docs[i].id,
+                                Builder(
+                                  builder: (context) {
+                                    final data = docs[i].data();
+                                    final isMe = data['senderId'] == _myUid;
+                                    final text = data['text']?.toString() ?? '';
+                                    final imageUrl = data['imageUrl']
+                                        ?.toString();
+                                    final ts = data['createdAt'] as Timestamp?;
+                                    if (data['type'] == 'pricingOptions') {
+                                      return _replyGesture(
+                                        messageId: docs[i].id,
+                                        data: data,
+                                        isMe: isMe,
+                                        child: _withDeliveryStatus(
+                                          _reactableSpecialMessage(
+                                            docs[i].id,
+                                            OrderOptionsMessageCard(
+                                              data: data,
+                                              sellerId: widget.otherUserId,
+                                              sellerName: widget.otherUserName,
+                                              fallbackProductId: _productId,
+                                              fallbackProductName: _productName,
+                                              onDraftMessage: _setDraft,
+                                            ),
+                                            Map<String, dynamic>.from(
+                                              data['likes'] ?? {},
+                                            ),
+                                          ),
+                                          isMe: isMe,
+                                          isLastOutgoing:
+                                              i == latestOutgoingIndex,
+                                          isPending:
+                                              docs[i].metadata.hasPendingWrites,
+                                          time: ts?.toDate(),
+                                        ),
+                                      );
+                                    }
+                                    if (data['type'] == 'receipt') {
+                                      return _withDeliveryStatus(
                                         _reactableSpecialMessage(
                                           docs[i].id,
-                                          OrderOptionsMessageCard(
+                                          ReceiptMessageCard(
                                             data: data,
-                                            sellerId: widget.otherUserId,
-                                            sellerName: widget.otherUserName,
-                                            fallbackProductId: _productId,
-                                            fallbackProductName: _productName,
-                                            onDraftMessage: _setDraft,
+                                            isMe: isMe,
                                           ),
                                           Map<String, dynamic>.from(
                                             data['likes'] ?? {},
@@ -721,73 +785,56 @@ class _ChatScreenState extends State<ChatScreen> {
                                         isPending:
                                             docs[i].metadata.hasPendingWrites,
                                         time: ts?.toDate(),
-                                      ),
-                                    );
-                                  }
-                                  if (data['type'] == 'receipt') {
-                                    return _withDeliveryStatus(
-                                      _reactableSpecialMessage(
-                                        docs[i].id,
-                                        ReceiptMessageCard(
-                                          data: data,
+                                      );
+                                    }
+                                    if (data['type'] == 'location') {
+                                      return _replyGesture(
+                                        messageId: docs[i].id,
+                                        data: data,
+                                        isMe: isMe,
+                                        child: _withDeliveryStatus(
+                                          _reactableSpecialMessage(
+                                            docs[i].id,
+                                            _locationMessage(data),
+                                            Map<String, dynamic>.from(
+                                              data['likes'] ?? {},
+                                            ),
+                                          ),
                                           isMe: isMe,
+                                          isLastOutgoing:
+                                              i == latestOutgoingIndex,
+                                          isPending:
+                                              docs[i].metadata.hasPendingWrites,
+                                          time: ts?.toDate(),
                                         ),
-                                        Map<String, dynamic>.from(
-                                          data['likes'] ?? {},
-                                        ),
-                                      ),
-                                      isMe: isMe,
+                                      );
+                                    }
+                                    return _messageBubble(
+                                      docs[i].id,
+                                      text,
+                                      isMe,
+                                      ts?.toDate(),
+                                      imageUrl: imageUrl,
                                       isLastOutgoing: i == latestOutgoingIndex,
                                       isPending:
                                           docs[i].metadata.hasPendingWrites,
-                                      time: ts?.toDate(),
-                                    );
-                                  }
-                                  if (data['type'] == 'location') {
-                                    return _replyGesture(
-                                      messageId: docs[i].id,
-                                      data: data,
-                                      isMe: isMe,
-                                      child: _withDeliveryStatus(
-                                        _reactableSpecialMessage(
-                                          docs[i].id,
-                                          _locationMessage(data),
-                                          Map<String, dynamic>.from(
-                                            data['likes'] ?? {},
-                                          ),
-                                        ),
-                                        isMe: isMe,
-                                        isLastOutgoing:
-                                            i == latestOutgoingIndex,
-                                        isPending:
-                                            docs[i].metadata.hasPendingWrites,
-                                        time: ts?.toDate(),
+                                      likes: Map<String, dynamic>.from(
+                                        data['likes'] ?? {},
                                       ),
+                                      replyTo: data['replyTo'] is Map
+                                          ? Map<String, dynamic>.from(
+                                              data['replyTo'] as Map,
+                                            )
+                                          : null,
+                                      onReply: isMe
+                                          ? null
+                                          : () => _setReplyTarget(
+                                              data,
+                                              docs[i].id,
+                                            ),
                                     );
-                                  }
-                                  return _messageBubble(
-                                    docs[i].id,
-                                    text,
-                                    isMe,
-                                    ts?.toDate(),
-                                    imageUrl: imageUrl,
-                                    isLastOutgoing: i == latestOutgoingIndex,
-                                    isPending:
-                                        docs[i].metadata.hasPendingWrites,
-                                    likes: Map<String, dynamic>.from(
-                                      data['likes'] ?? {},
-                                    ),
-                                    replyTo: data['replyTo'] is Map
-                                        ? Map<String, dynamic>.from(
-                                            data['replyTo'] as Map,
-                                          )
-                                        : null,
-                                    onReply: isMe
-                                        ? null
-                                        : () =>
-                                              _setReplyTarget(data, docs[i].id),
-                                  );
-                                },
+                                  },
+                                ),
                               ),
                             ),
                           ),

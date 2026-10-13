@@ -1,11 +1,14 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../services/market_price_helpers.dart';
+import '../services/order_contact_service.dart';
 import '../services/order_format.dart';
 import '../theme/app_theme.dart';
 import '../widgets/order_card.dart';
+import '../widgets/order_contact_section.dart';
 import '../widgets/profile_avatar.dart';
 import 'order_actions.dart';
 
@@ -70,14 +73,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F5),
-      appBar: AppBar(
-        title: const Text('Order Details'),
-        backgroundColor: Colors.white,
-        foregroundColor: AppTheme.dark,
-        elevation: 0,
-        scrolledUnderElevation: 0.5,
-        titleTextStyle: AppTheme.heading(17).copyWith(color: AppTheme.dark),
-      ),
+      appBar: const AgriAppBar(title: 'Order Details'),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: _orderStream,
         builder: (context, snapshot) {
@@ -124,6 +120,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                       _delaySection(order),
                     _productSummary(order),
                     _otherParty(order),
+                    if (_showsContact(order)) _contact(order),
                     _fulfillment(order),
                     _payment(order),
                     if (order.isCompleted) _receipt(order),
@@ -445,6 +442,22 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       ),
     );
   }
+
+  // Phone contact is for an order that is going ahead: a short note while
+  // it is pending, the other side's number once the farmer has confirmed
+  // it, and nothing at all once it is completed, rejected or cancelled.
+  bool _showsContact(OrderInfo order) =>
+      order.status == 'pending' || OrderContactService.isShared(order.status);
+
+  Widget _contact(OrderInfo order) => _section(
+    title: 'Contact Number',
+    child: OrderContactSection(
+      orderId: order.id,
+      status: order.status,
+      viewerIsFarmer: _role == OrderRole.farmer,
+      legacyBuyerContact: order.data['buyerContact']?.toString(),
+    ),
+  );
 
   Widget _fulfillment(OrderInfo order) {
     final feeParty = _role == OrderRole.farmer ? 'buyer' : 'seller';

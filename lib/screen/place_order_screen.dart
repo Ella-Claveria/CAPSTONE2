@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -72,6 +73,11 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   bool _showErrors = false;
   final _nameController = TextEditingController();
   final _contactController = TextEditingController();
+  // The buyer has to say the number shown is right and reachable before
+  // ordering. Unticked again whenever the number is changed, so the tick
+  // always refers to the number that is actually sent.
+  bool _contactConfirmed = false;
+  String _confirmedContact = '';
   final _addressController = TextEditingController();
   late final TextEditingController _quantityController;
   final _orderService = OrderService();
@@ -106,6 +112,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     // So their error lines clear as soon as the field is filled in.
     _nameController.addListener(_onQuantityChanged);
     _contactController.addListener(_onQuantityChanged);
+    _contactController.addListener(_onContactEdited);
     _loadProduct();
     _prefillLocation();
   }
@@ -367,9 +374,18 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     return num.tryParse(match.group(1) ?? '') ?? 0;
   }
 
+  void _onContactEdited() {
+    if (_contactConfirmed && _contactController.text != _confirmedContact) {
+      setState(() => _contactConfirmed = false);
+    }
+  }
+
   Future<void> _submit() async {
     if (_submitting) return;
-    if (_nameError != null || !_contactValid || _quantityError != null) {
+    if (_nameError != null ||
+        !_contactValid ||
+        !_contactConfirmed ||
+        _quantityError != null) {
       setState(() => _showErrors = true);
       return;
     }
@@ -636,17 +652,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _pageBackground,
-      appBar: AppBar(
-        backgroundColor: _dark,
-        surfaceTintColor: _dark,
-        foregroundColor: Colors.white,
-        iconTheme: const IconThemeData(color: Colors.white),
-        elevation: 0,
-        title: Text(
-          'Place Order',
-          style: AppTheme.heading(18).copyWith(color: Colors.white),
-        ),
-      ),
+      appBar: const AgriAppBar(title: 'Place Order'),
       body: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         child: Column(
@@ -667,9 +673,28 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                 textInputAction: TextInputAction.next,
               ),
             ),
+            // Has its own label, error line and bottom spacing.
+            BuyerLocationField(
+              label: 'Address',
+              value: _buyerLocation,
+              errorText: _locationTouched && _buyerLocation == null
+                  ? 'Please set your location.'
+                  : null,
+              onPicked: _onLocationPicked,
+            ),
+            const SizedBox(height: 6),
+
+            // Starts from the number on the buyer's profile (_prefill…);
+            // what is typed here goes on this order only and never back
+            // to the profile.
+            _sectionTitle('Contact Information'),
+            const SizedBox(height: 12),
             _field(
               label: 'Contact Number',
               errorText: _contactError,
+              caption:
+                  'Used for this order only. Changing it here does not '
+                  'change the number on your profile.',
               child: GlowField(
                 controller: _contactController,
                 hint: kPhMobileHint,
@@ -681,15 +706,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                 textInputAction: TextInputAction.next,
               ),
             ),
-            // Has its own label, error line and bottom spacing.
-            BuyerLocationField(
-              label: 'Address',
-              value: _buyerLocation,
-              errorText: _locationTouched && _buyerLocation == null
-                  ? 'Please set your location.'
-                  : null,
-              onPicked: _onLocationPicked,
-            ),
+            _contactConfirmation(),
             const SizedBox(height: 6),
 
             _sectionTitle('Order'),
@@ -774,6 +791,65 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   }
 
   Widget _sectionTitle(String text) => Text(text, style: AppTheme.heading(16));
+
+  // "This number is correct and reachable" — required before ordering.
+  Widget _contactConfirmation() {
+    final showError = _showErrors && _contactValid && !_contactConfirmed;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _setContactConfirmed(!_contactConfirmed),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Checkbox(
+              value: _contactConfirmed,
+              onChanged: (v) => _setContactConfirmed(v ?? false),
+              activeColor: AppTheme.dark,
+              visualDensity: VisualDensity.compact,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'I confirm this contact number is correct and that I '
+                      'can be reached on it.',
+                      style: AppTheme.body(
+                        color: Colors.black87,
+                        size: 12.5,
+                      ).copyWith(height: 1.4),
+                    ),
+                    if (showError)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Please confirm your contact number to continue.',
+                          style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _setContactConfirmed(bool value) {
+    setState(() {
+      _contactConfirmed = value;
+      _confirmedContact = _contactController.text;
+    });
+  }
 
   // Label above, pill field, error line below — exactly how the
   // Registration form lays out each of its fields (see RegisterScreen).

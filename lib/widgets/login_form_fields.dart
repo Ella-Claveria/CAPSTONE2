@@ -4,14 +4,17 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import '../services/auth_routing_service.dart';
+import '../services/admin_session_service.dart';
 import '../services/audit_log_service.dart';
+import '../services/registration_guard.dart';
+import 'admin_session_dialogs.dart';
 import '../theme/app_theme.dart';
 import '../screen/auth_route_handler.dart';
 import '../screen/forgot_password_screen.dart';
 import '../screen/google_complete_profile_screen.dart';
 import '../screen/page_transitions.dart';
-import '../screen/register_screen.dart';
 import 'glow_field.dart';
+import 'login_lockout_dialog.dart';
 import 'role_mismatch_dialog.dart';
 import '../l10n/app_localizations.dart';
 
@@ -24,21 +27,28 @@ import '../l10n/app_localizations.dart';
 /// Remembering credentials is left entirely to the OS's own password
 /// manager (Google Password Manager / iCloud Keychain), via the
 /// [AutofillGroup] + autofillHints below — the app itself never stores an
-/// email or password on this device.
+/// password on this device. The admin email alone is remembered.
 ///
-/// The one exception is the admin door (role == 'admin'): that's a web
-/// login on a single shared office machine, and Chrome's native
-/// save-password popup is unreliable inside a Flutter SPA (the page never
-/// truly navigates), so the admin email/password are additionally saved
-/// straight to this device's local storage after a successful login and
-/// pre-filled on the next visit — see [_loadSavedAdminCredentials]/
-/// [_saveAdminCredentials].
+/// Legacy locally saved admin passwords are removed when the form opens.
 class LoginFormFields extends StatefulWidget {
   // Null means "role-agnostic" login: whoever this account belongs to
   // (farmer or buyer), log them in and route them to the right home screen.
   final String? role;
 
-  const LoginFormFields({super.key, this.role});
+  /// Opens the password-reset form with the email typed so far. Left
+  /// null, Forgot Password opens as its own screen (mobile); the Admin
+  /// sign-in page passes this to swap its form in place instead.
+  final ValueChanged<String>? onForgotPassword;
+
+  const LoginFormFields({super.key, this.role, this.onForgotPassword});
+
+  /// Removes passwords persisted by older versions of the admin form.
+  static Future<void> clearSavedAdminPassword() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_LoginFormFieldsState._adminPasswordKey);
+    } catch (_) {}
+  }
 
   @override
   State<LoginFormFields> createState() => _LoginFormFieldsState();
@@ -51,56 +61,90 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
   bool _loading = false;
   bool _googleLoading = false;
   bool _obscurePassword = true;
-  // Set when AuthService.logIn reports this email has no account at all
-  // (see AuthService.logIn's 'EMAIL_NOT_REGISTERED' sentinel) — shown as
-  // its own prompt with a "Create One" action instead of the generic
-  // wrong-password message, since those are genuinely different problems.
-  bool _emailNotRegistered = false;
+  // The "attempts remaining" warning from the last failed attempt, shown
+  // under the Password field until the next attempt or edit.
+  String? _loginError;
 
   bool get _isAdmin => widget.role == 'admin';
 
   static const _adminEmailKey = 'admin_saved_email';
   static const _adminPasswordKey = 'admin_saved_password';
+  static const _noAdminAccessMessage =
+      'This account does not have administrator access.';
 
   @override
   void initState() {
     super.initState();
-    if (_isAdmin) _loadSavedAdminCredentials();
-    _emailController.addListener(_onEmailEdited);
+    if (_isAdmin) _loadSavedAdminEmail();
+    _emailController.addListener(_clearLoginError);
+    _passwordController.addListener(_clearLoginError);
   }
 
-  // Retyping the email after an "Email not registered" result clears that
-  // prompt — otherwise it'd keep showing against a different address.
-  void _onEmailEdited() {
-    if (_emailNotRegistered) setState(() => _emailNotRegistered = false);
+  // Editing either field means the message is about something no longer
+  // typed in. This only hides the text: the failed-attempt count is kept
+  // by the server and is not affected.
+  void _clearLoginError() {
+    if (_loginError != null) setState(() => _loginError = null);
   }
+
+  // The message under the Password field. Takes no room when there is
+  // nothing to say.
+  Widget _loginErrorText() {
+    final message = _loginError;
+    if (message == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 8, 6, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(
+              Icons.warning_amber_rounded,
+              size: 15,
+              color: _errorColor,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              message,
+              style: AppTheme.body(
+                color: _errorColor,
+                size: 12.5,
+              ).copyWith(height: 1.35, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static const _errorColor = Color(0xFFC62828);
 
   @override
   void dispose() {
-    _emailController.removeListener(_onEmailEdited);
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadSavedAdminCredentials() async {
+  Future<void> _loadSavedAdminEmail() async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_adminPasswordKey);
       final email = prefs.getString(_adminEmailKey);
-      final password = prefs.getString(_adminPasswordKey);
       if (!mounted) return;
       if (email != null) _emailController.text = email;
-      if (password != null) _passwordController.text = password;
     } catch (_) {
       // Non-fatal — fields just stay empty, same as a first-ever visit.
     }
   }
 
-  Future<void> _saveAdminCredentials(String email, String password) async {
+  Future<void> _saveAdminEmail(String email) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_adminEmailKey, email);
-      await prefs.setString(_adminPasswordKey, password);
     } catch (_) {
       // Non-fatal — login already succeeded either way.
     }
@@ -115,7 +159,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     }
     setState(() {
       _loading = true;
-      _emailNotRegistered = false;
+      _loginError = null;
     });
     final error = await _authService.logIn(
       email: email,
@@ -134,18 +178,28 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
       return;
     }
 
-    if (error == 'EMAIL_NOT_REGISTERED') {
+    // Password login is paused for this email (5 wrong passwords in a row),
+    // or Firebase Authentication is rate-limiting — see AuthService.logIn.
+    final locked =
+        error != null && error.startsWith(AuthService.loginLockedPrefix);
+    if (locked || error == AuthService.loginRateLimitedSentinel) {
       if (_isAdmin) {
         AuditLogService.logPreAuth(
           AuditAction.loginFailed,
           email: email,
-          details: error,
+          details: 'Too many login attempts.',
         );
       }
-      setState(() {
-        _loading = false;
-        _emailNotRegistered = true;
-      });
+      setState(() => _loading = false);
+      await showLoginLockoutDialog(
+        context,
+        waitSeconds: locked
+            ? int.tryParse(
+                error.substring(AuthService.loginLockedPrefix.length),
+              )
+            : null,
+        onForgotPassword: _openForgotPassword,
+      );
       return;
     }
 
@@ -160,8 +214,18 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
           details: error,
         );
       }
-      setState(() => _loading = false);
-      _showMessage(error);
+      // Only the "N attempts remaining" warning (3rd and 4th wrong
+      // password) goes under the Password field. Every other error,
+      // including a plain "Incorrect email or password.", is the usual
+      // pop-up at the bottom — never both at once.
+      final attemptsWarning =
+          error.startsWith(AuthService.wrongCredentialsMessage) &&
+          error != AuthService.wrongCredentialsMessage;
+      setState(() {
+        _loading = false;
+        if (attemptsWarning) _loginError = error;
+      });
+      if (!attemptsWarning) _showMessage(error);
       return;
     }
 
@@ -180,11 +244,21 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
     if (_isAdmin) {
       if (result.decision == AuthRouteDecision.adminDashboard) {
+        // One active Admin session at a time: asks first when the account
+        // is in use on another device, then makes this one the session.
+        if (!await _claimAdminSession(uid!)) {
+          if (mounted) setState(() => _loading = false);
+          return;
+        }
+        if (!mounted) return;
         AuditLogService.log(
           AuditAction.loginSuccess,
-          'Signed in to the Admin Portal.',
+          'Logged in to the Admin Portal.',
         );
-        _saveAdminCredentials(email, password);
+        _saveAdminEmail(email);
+        // First sign-in after a confirmed Change Email — bring the
+        // Firestore copy of the email in line (a no-op otherwise).
+        _authService.syncProfileEmail();
       } else {
         // Valid credentials, but this account isn't an admin (or something
         // else blocked routing) — still a failed attempt to reach the
@@ -211,6 +285,8 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     // screen (register → verify → [approval] → home), so this can't
     // accidentally suppress a genuinely new user's first-time tour.
     if (result.isSignedIn && (role == 'farmer' || role == 'buyer')) {
+      // What "Create one" on this phone is checked against.
+      RegistrationGuard.remember(email);
       try {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setBool('walkthrough_seen_$role', true);
@@ -223,6 +299,35 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     // role-selection/login from the stack, so the back button on Home has
     // nothing left to pop to.
     await applyAuthRouteResult(context, result);
+  }
+
+  // The Admin Portal allows one active session per Admin account (see
+  // AdminSessionService). If the account is in use on another device the
+  // Admin is asked first; Cancel signs this device back out and stays on
+  // the login page. False when the sign-in was cancelled.
+  //
+  // The account is never locked by this, and a session record that cannot
+  // be read does not keep the Admin out.
+  Future<bool> _claimAdminSession(String uid) async {
+    Map<String, dynamic>? record;
+    try {
+      record = await AdminSessionService.readRecord(uid);
+    } catch (_) {
+      record = null;
+    }
+    final localId = await AdminSessionService.localId(uid);
+    if (!mounted) return false;
+    if (adminSessionActiveElsewhere(record, localId, now: DateTime.now())) {
+      final proceed = await showAdminSessionConflictDialog(context);
+      if (!proceed) {
+        await _authService.signOut(
+          reason: 'admin login cancelled: account active on another device',
+        );
+        return false;
+      }
+    }
+    await AdminSessionService.start(uid);
+    return true;
   }
 
   Future<void> _continueWithGoogle() async {
@@ -238,11 +343,30 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
       case GoogleSignInOutcome.error:
         setState(() => _googleLoading = false);
         _showMessage(
-          result.message ?? 'Google sign-in failed. Please try again.',
+          result.message ?? 'Google login failed. Please try again.',
         );
         return;
 
       case GoogleSignInOutcome.needsProfile:
+        // The admin door has no sign-up: a Google account with no
+        // users/{uid} doc can't be an admin, so it's blocked (and signed
+        // back out) the same way a farmer/buyer account is.
+        if (_isAdmin) {
+          AuditLogService.logPreAuth(
+            AuditAction.loginFailed,
+            email: result.email ?? '',
+            details: 'Google login: $_noAdminAccessMessage',
+          );
+          setState(() => _googleLoading = false);
+          await applyAuthRouteResult(
+            context,
+            const AuthRouteResult(
+              decision: AuthRouteDecision.blockedNonAdminOnWeb,
+              message: _noAdminAccessMessage,
+            ),
+          );
+          return;
+        }
         setState(() => _googleLoading = false);
         Navigator.push(
           context,
@@ -269,14 +393,44 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
             routeResult.role != null &&
             routeResult.role != widget.role) {
           setState(() => _googleLoading = false);
-          await _authService.signOut();
+          await _authService.signOut(
+            reason:
+                'Google login role mismatch: account is '
+                '${routeResult.role}, door is ${widget.role}',
+          );
           if (!mounted) return;
           showRoleMismatchDialog(context, routeResult.role!);
           return;
         }
 
+        // Google authentication succeeding isn't enough for the admin
+        // door — routeResult (users/{uid}.role) still decides, and only
+        // role == 'admin' reaches the dashboard. Audited like the
+        // password path.
+        if (_isAdmin) {
+          if (routeResult.decision == AuthRouteDecision.adminDashboard) {
+            if (!await _claimAdminSession(result.uid!)) {
+              if (mounted) setState(() => _googleLoading = false);
+              return;
+            }
+            if (!mounted) return;
+            AuditLogService.log(
+              AuditAction.loginSuccess,
+              'Logged in to the Admin Portal with Google.',
+            );
+          } else {
+            AuditLogService.logPreAuth(
+              AuditAction.loginFailed,
+              email: _authService.currentEmail ?? '',
+              details:
+                  'Google login: ${routeResult.message ?? _noAdminAccessMessage}',
+            );
+          }
+        }
+
         final role = routeResult.role;
         if (routeResult.isSignedIn && (role == 'farmer' || role == 'buyer')) {
+          RegistrationGuard.remember(_authService.currentEmail ?? '');
           try {
             final prefs = await SharedPreferences.getInstance();
             await prefs.setBool('walkthrough_seen_$role', true);
@@ -296,72 +450,144 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  // Shown instead of the generic wrong-password message when AuthService
-  // .logIn reports this email has no account at all. The admin door has
-  // no sign-up flow (see the class doc comment), so it just states the
-  // fact without a Create One action.
-  Widget _emailNotRegisteredPrompt() {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.amber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.amber.shade300),
+  void _openForgotPassword() {
+    final inPlace = widget.onForgotPassword;
+    if (inPlace != null) {
+      inPlace(_emailController.text.trim());
+      return;
+    }
+    Navigator.push(
+      context,
+      slideRoute(
+        ForgotPasswordScreen(
+          initialEmail: _emailController.text.trim(),
+          isAdmin: _isAdmin,
+        ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+
+  // ---- Admin Portal (web) form ----
+  // Same controllers and the same _login flow as the mobile form below,
+  // and the same pill-shaped controls (the fields are the shared
+  // GlowField) — only the copy and sizing differ, for a desktop panel.
+  // Email and password only: the Admin door has no Google sign-in.
+  static const _adminMuted = Color(0xFF6B7468);
+  // One height for both fields and the button, so the controls line up as
+  // a single column of identical pills.
+  static const _adminHeight = 58.0;
+
+  Widget _adminLabel(String text) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 13,
+      fontWeight: FontWeight.w600,
+      color: Color(0xFF2B332A),
+    ),
+  );
+
+  Widget _buildAdminForm() {
+    const spinner = SizedBox(
+      height: 20,
+      width: 20,
+      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+    );
+    const buttonShape = StadiumBorder();
+
+    return AutofillGroup(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.info_outline, color: Colors.amber.shade800, size: 20),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Email not registered',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13.5,
-                    color: Colors.amber.shade900,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  "There's no account with this email yet.",
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: Colors.amber.shade900,
-                  ),
-                ),
-                if (!_isAdmin) ...[
-                  const SizedBox(height: 6),
-                  TextButton(
-                    onPressed: () => Navigator.push(
-                      context,
-                      slideRoute(
-                        RegisterScreen(
-                          initialRole: widget.role ?? 'buyer',
-                          initialEmail: _emailController.text.trim(),
-                        ),
-                      ),
-                    ),
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppTheme.dark,
-                      padding: EdgeInsets.zero,
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    child: const Text(
-                      'Create One',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
+          _adminLabel('Email Address'),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: _adminHeight,
+            child: GlowField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              hint: 'admin@example.com',
+              icon: Icons.email_outlined,
+              textInputAction: TextInputAction.next,
+              onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+              autofillHints: const [
+                AutofillHints.email,
+                AutofillHints.username,
               ],
             ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _adminLabel('Password'),
+              TextButton(
+                onPressed: _openForgotPassword,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppTheme.mid,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text(
+                  'Forgot Password?',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: _adminHeight,
+            child: GlowField(
+              controller: _passwordController,
+              obscureText: _obscurePassword,
+              hint: 'Enter your password',
+              icon: Icons.lock_outline,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _loading ? null : _login(),
+              autofillHints: const [AutofillHints.password],
+              suffix: IconButton(
+                tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                icon: Icon(
+                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                  color: Colors.grey[600],
+                ),
+                onPressed: () =>
+                    setState(() => _obscurePassword = !_obscurePassword),
+              ),
+            ),
+          ),
+          _loginErrorText(),
+          const SizedBox(height: 24),
+          SizedBox(
+            height: _adminHeight,
+            child: ElevatedButton(
+              onPressed: (_loading || _googleLoading) ? null : _login,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.dark,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: AppTheme.dark.withValues(alpha: 0.6),
+                elevation: 0,
+                padding: EdgeInsets.zero,
+                shape: buttonShape,
+              ),
+              child: _loading
+                  ? spinner
+                  : Text('Login', style: AppTheme.buttonText()),
+            ),
+          ),
+          const SizedBox(height: 28),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.shield_outlined, size: 15, color: _adminMuted),
+              const SizedBox(width: 6),
+              Text(
+                'Authorized administrators only',
+                style: TextStyle(fontSize: 12, color: _adminMuted),
+              ),
+            ],
           ),
         ],
       ),
@@ -370,6 +596,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isAdmin) return _buildAdminForm();
     return AutofillGroup(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -398,15 +625,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               GestureDetector(
-                onTap: () => Navigator.push(
-                  context,
-                  slideRoute(
-                    ForgotPasswordScreen(
-                      initialEmail: _emailController.text.trim(),
-                      isAdmin: _isAdmin,
-                    ),
-                  ),
-                ),
+                onTap: _openForgotPassword,
                 child: Text(
                   AppLocalizations.of(context)!.forgotPassword,
                   style: const TextStyle(
@@ -436,10 +655,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
                   setState(() => _obscurePassword = !_obscurePassword),
             ),
           ),
-          if (_emailNotRegistered) ...[
-            const SizedBox(height: 14),
-            _emailNotRegisteredPrompt(),
-          ],
+          _loginErrorText(),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -455,27 +671,14 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
                         color: Colors.white,
                       ),
                     )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          AppLocalizations.of(context)!.loginButton,
-                          style: AppTheme.buttonText(),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(
-                          Icons.arrow_forward,
-                          size: 20,
-                          color: Colors.white,
-                        ),
-                      ],
+                  : Text(
+                      AppLocalizations.of(context)!.loginButton,
+                      style: AppTheme.buttonText(),
                     ),
             ),
           ),
-          // Admin accounts are created manually via the Firebase Console
-          // (see the header comment on _login's expectedRole), so there's no
-          // "sign up" concept for that door — same reasoning excludes Google
-          // sign-in there too.
+          // The admin door never reaches here — it has its own layout, see
+          // _buildAdminForm.
           if (!_isAdmin) ...[
             const SizedBox(height: 18),
             Row(

@@ -1,6 +1,9 @@
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
+import 'agri_dialog.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// One stop of a coach-mark tour: a widget to spotlight (via [targetKey])
@@ -94,8 +97,8 @@ class _CoachMarkOverlay {
               ),
             ),
             Positioned(
-              left: 24,
-              right: 24,
+              left: 32,
+              right: 32,
               top: calloutBelow ? (center.dy + radius + 16) : null,
               bottom: calloutBelow
                   ? null
@@ -149,6 +152,10 @@ class _SpotlightPainter extends CustomPainter {
       oldDelegate.center != center || oldDelegate.radius != radius;
 }
 
+/// The tip itself, in the app's one popup design (see agri_dialog.dart):
+/// the frosted card, Montserrat, a dark green title and the popup buttons —
+/// kept compact and to the right rather than full-width, since a tip is
+/// lighter than a dialog.
 class _CoachMarkCard extends StatelessWidget {
   final CoachMarkStep step;
   final int stepNumber;
@@ -164,17 +171,12 @@ class _CoachMarkCard extends StatelessWidget {
     required this.onSkip,
   });
 
-  static const Color _dark = AppTheme.dark;
-
   @override
   Widget build(BuildContext context) {
     final isLast = stepNumber == totalSteps;
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      elevation: 8,
+    return AgriFrostedCard(
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -184,56 +186,66 @@ class _CoachMarkCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     step.title,
-                    style: const TextStyle(
+                    style: GoogleFonts.montserrat(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                      color: AppTheme.dark,
                     ),
                   ),
                 ),
                 if (totalSteps > 1)
                   Text(
                     '$stepNumber/$totalSteps',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    style: GoogleFonts.montserrat(
+                      fontSize: 12,
+                      color: Colors.grey[600],
+                    ),
                   ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               step.message,
-              style: TextStyle(
-                fontSize: 13.5,
-                color: Colors.grey[700],
-                height: 1.4,
+              style: GoogleFonts.montserrat(
+                fontSize: 13,
+                color: Colors.black87,
+                height: 1.45,
               ),
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
+            // A single tip has nothing to skip: just the one button.
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                TextButton(
-                  onPressed: onSkip,
-                  child: const Text(
-                    'Skip',
-                    style: TextStyle(color: Colors.black45),
-                  ),
-                ),
-                ElevatedButton(
+                if (totalSteps > 1) ...[
+                  _action(label: 'Skip', onPressed: onSkip),
+                  const SizedBox(width: 10),
+                ],
+                _action(
+                  label: isLast
+                      ? (AppLocalizations.of(context)?.coachGotIt ?? 'Got it')
+                      : 'Next',
                   onPressed: onNext,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _dark,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                  ),
-                  child: Text(isLast ? 'Got it' : 'Next'),
+                  primary: true,
                 ),
               ],
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _action({
+    required String label,
+    required VoidCallback onPressed,
+    bool primary = false,
+  }) {
+    return AgriDialogButton(
+      label: label,
+      onPressed: onPressed,
+      compact: true,
+      kind: primary ? AgriButtonKind.primary : AgriButtonKind.secondary,
     );
   }
 }

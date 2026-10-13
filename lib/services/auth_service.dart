@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -31,6 +31,8 @@ class PendingRegistrationProfile {
   // Farmer-only.
   final String? barangay;
   final String? certificateUrl;
+  // As typed on the form, for the admin to check (see rsba_number.dart).
+  final String? rsbaNumber;
 
   const PendingRegistrationProfile({
     required this.role,
@@ -39,6 +41,7 @@ class PendingRegistrationProfile {
     this.supportedProductsAcknowledged = false,
     this.barangay,
     this.certificateUrl,
+    this.rsbaNumber,
   });
 
   Map<String, dynamic> toJson() => {
@@ -48,6 +51,7 @@ class PendingRegistrationProfile {
     'supportedProductsAcknowledged': supportedProductsAcknowledged,
     'barangay': barangay,
     'certificateUrl': certificateUrl,
+    'rsbaNumber': rsbaNumber,
   };
 
   static PendingRegistrationProfile fromJson(Map<String, dynamic> json) =>
@@ -59,6 +63,7 @@ class PendingRegistrationProfile {
             json['supportedProductsAcknowledged'] as bool? ?? false,
         barangay: json['barangay'] as String?,
         certificateUrl: json['certificateUrl'] as String?,
+        rsbaNumber: json['rsbaNumber'] as String?,
       );
 }
 
@@ -151,11 +156,11 @@ class AuthService {
 
   Future<String?> refreshVerifiedEmailToken() async {
     final user = _auth.currentUser;
-    if (user == null) return 'Please sign in again.';
+    if (user == null) return 'Please log in again.';
     try {
       await user.reload();
       final refreshed = _auth.currentUser;
-      if (refreshed == null) return 'Please sign in again.';
+      if (refreshed == null) return 'Please log in again.';
       final isAdminAccount =
           refreshed.email?.trim().toLowerCase() ==
           adminEmailWithoutVerification;
@@ -169,7 +174,7 @@ class AuthService {
       return null;
     } on FirebaseAuthException catch (e) {
       if (e.code == 'user-not-found' || e.code == 'user-disabled') {
-        return 'Please sign in again.';
+        return 'Please log in again.';
       }
       return e.code == 'network-request-failed'
           ? 'Check your internet connection and try again.'
@@ -181,6 +186,7 @@ class AuthService {
 
   // The signed-in user's UID, or null if nobody's logged in.
   String? get currentUid => _auth.currentUser?.uid;
+  String? get currentEmail => _auth.currentUser?.email;
 
   // Creates ONLY the Firebase Auth account — no users/{uid} Firestore
   // document yet. That document (role, name, barangay, certificate, etc.)
@@ -225,11 +231,15 @@ class AuthService {
     bool supportedProductsAcknowledged = false,
     String? barangay,
     String? certificateUrl,
+    // Stored for the admin reviewing the farmer; it approves nothing on
+    // its own (see rsba_number.dart).
+    String? rsbaNumber,
     // True when this follows a correct email code. firestore.rules only
     // accepts the field if the server recorded that check as passed.
     bool emailOtpVerified = false,
   }) async {
     final isFarmer = role == 'farmer';
+    final rsba = isFarmer ? (rsbaNumber ?? '').trim() : '';
     try {
       await _auth.currentUser?.updateDisplayName(fullName.trim());
       await _users.doc(uid).set({
@@ -260,14 +270,18 @@ class AuthService {
         if (isFarmer) 'municipality': 'Laurel',
         if (isFarmer) 'province': 'Batangas',
         if (isFarmer && certificateUrl != null) 'hasVerificationDoc': true,
+        if (rsba.isNotEmpty) 'rsbaNumber': rsba,
       }, SetOptions(merge: true));
 
-      if (isFarmer && certificateUrl != null) {
+      // What the farmer submitted for the admin to review: a certificate
+      // image (older registrations, Google sign-up) or an RSBA number.
+      if (isFarmer && (certificateUrl != null || rsba.isNotEmpty)) {
         await FirebaseFirestore.instance
             .collection('verificationDocs')
             .doc(uid)
             .set({
-              'document': certificateUrl,
+              'document': ?certificateUrl,
+              if (rsba.isNotEmpty) 'rsbaNumber': rsba,
               'submittedAt': FieldValue.serverTimestamp(),
               'status': 'pending',
               'fullName': fullName.trim(),
@@ -456,17 +470,30 @@ class AuthService {
   // barangay + certificate) rather than route them into the app.
   Future<GoogleSignInResult> signInWithGoogle() async {
     try {
-      await _ensureGoogleSignInReady();
-      final account = await _googleSignIn.authenticate();
-      final idToken = account.authentication.idToken;
-      if (idToken == null) {
-        return const GoogleSignInResult.error(
-          'Could not sign in with Google. Please try again.',
+      GoogleSignInAccount? account;
+      final UserCredential userCred;
+      if (kIsWeb) {
+        // The web build (Admin Portal) can't use google_sign_in's
+        // authenticate() — it isn't supported in the browser — so Firebase
+        // Auth runs the Google popup itself. The role check still happens
+        // in the caller, exactly as for the mobile path.
+        userCred = await _auth.signInWithPopup(
+          GoogleAuthProvider()
+            ..setCustomParameters({'prompt': 'select_account'}),
         );
-      }
+      } else {
+        await _ensureGoogleSignInReady();
+        account = await _googleSignIn.authenticate();
+        final idToken = account.authentication.idToken;
+        if (idToken == null) {
+          return const GoogleSignInResult.error(
+            'Could not log in with Google. Please try again.',
+          );
+        }
 
-      final credential = GoogleAuthProvider.credential(idToken: idToken);
-      final userCred = await _auth.signInWithCredential(credential);
+        final credential = GoogleAuthProvider.credential(idToken: idToken);
+        userCred = await _auth.signInWithCredential(credential);
+      }
       final uid = userCred.user?.uid;
       if (uid == null) {
         return const GoogleSignInResult.error(
@@ -495,18 +522,29 @@ class AuthService {
       }
       return GoogleSignInResult.needsProfile(
         uid: uid,
-        email: userCred.user?.email ?? account.email,
-        displayName: userCred.user?.displayName ?? account.displayName,
-        photoUrl: userCred.user?.photoURL ?? account.photoUrl,
+        email: userCred.user?.email ?? account?.email,
+        displayName: userCred.user?.displayName ?? account?.displayName,
+        photoUrl: userCred.user?.photoURL ?? account?.photoUrl,
       );
     } on GoogleSignInException catch (e) {
       if (e.code == GoogleSignInExceptionCode.canceled) {
         return const GoogleSignInResult.cancelled();
       }
       return const GoogleSignInResult.error(
-        'Google sign-in failed. Please try again.',
+        'Google login failed. Please try again.',
       );
     } on FirebaseAuthException catch (e) {
+      // Web popup closed or superseded by another one — not an error.
+      if (e.code == 'popup-closed-by-user' ||
+          e.code == 'cancelled-popup-request' ||
+          e.code == 'web-context-cancelled') {
+        return const GoogleSignInResult.cancelled();
+      }
+      if (e.code == 'popup-blocked') {
+        return const GoogleSignInResult.error(
+          'Your browser blocked the Google login window. Allow pop-ups for this site and try again.',
+        );
+      }
       return GoogleSignInResult.error(_messageFromCode(e.code));
     } catch (e) {
       return const GoogleSignInResult.error(
@@ -514,6 +552,14 @@ class AuthService {
       );
     }
   }
+
+  // Whether the signed-in account has a password at all — a Google-only
+  // account has none to change (see the change-password dialog).
+  bool get hasPasswordProvider =>
+      _auth.currentUser?.providerData.any(
+        (p) => p.providerId == EmailAuthProvider.PROVIDER_ID,
+      ) ??
+      false;
 
   // Creates the users/{uid} doc for a Google account signing in for the
   // very first time — the same shape signUp() writes, minus the
@@ -571,11 +617,23 @@ class AuthService {
     required String password,
     String? expectedRole,
   }) async {
+    // Paused after too many wrong passwords? The server decides — see the
+    // failed-login cooldown below.
+    final gate = await _loginThrottle('checkLoginAllowed', {
+      'email': email.trim(),
+    });
+    if (gate?['locked'] == true) return _lockedSentinel(gate!);
+
     try {
       final cred = await _auth.signInWithEmailAndPassword(
         email: email.trim(),
         password: password,
       );
+      // The password was right, so the run of failures is over. Skipped
+      // when the server already said there were none to clear.
+      if (gate == null || gate['attemptsRemaining'] != loginMaxFailedAttempts) {
+        await _loginThrottle('clearLoginFailures');
+      }
       if (expectedRole != null) {
         final doc = await _users.doc(cred.user!.uid).get();
         final role = doc.data()?['role'];
@@ -593,16 +651,89 @@ class AuthService {
       }
       return null;
     } on FirebaseAuthException catch (e) {
-      // A distinct sentinel (same pattern as ROLE_MISMATCH: above) so the
-      // caller can show "Email not registered" + a Create One prompt,
-      // instead of the generic wrong-password message — deliberately
-      // different from 'wrong-password'/'invalid-credential', which stay
-      // generic since those genuinely can't tell the caller whether the
-      // email exists.
-      if (e.code == 'user-not-found') return 'EMAIL_NOT_REGISTERED';
+      // Firebase Authentication's own abuse protection. It does not say
+      // how long it lasts, so the caller shows the dialog with no timer.
+      if (e.code == 'too-many-requests') return loginRateLimitedSentinel;
+
+      // An unknown email, a wrong password and a Google-only account all
+      // get the same answer and are counted the same way, so nothing here
+      // tells the caller whether the email is registered.
+      const wrongCredentials = {
+        'user-not-found',
+        'wrong-password',
+        'invalid-credential',
+      };
+      if (wrongCredentials.contains(e.code)) {
+        final outcome = await _loginThrottle('reportLoginFailure', {
+          'email': email.trim(),
+        });
+        if (outcome?['locked'] == true) return _lockedSentinel(outcome!);
+        final remaining = (outcome?['attemptsRemaining'] as num?)?.toInt();
+        // After the 3rd and 4th wrong password: warn how many tries are
+        // left. The first two, and any failure the server could not count,
+        // get the plain message below with no number.
+        if (remaining != null && remaining > 0 && remaining <= 2) {
+          return '$wrongCredentialsMessage You have $remaining '
+              '${remaining == 1 ? 'attempt' : 'attempts'} left.';
+        }
+      }
       return _messageFromCode(e.code);
     } catch (e) {
       return 'Something went wrong. Please try again.';
+    }
+  }
+
+  // ----------------------------------------------------------
+  // FAILED-LOGIN COOLDOWN — 5 wrong passwords in a row pause password
+  // login for that email for 5 minutes.
+  //
+  // The count and the pause are kept by Cloud Functions
+  // (functions/login_throttle.js), keyed by the email, so restarting the
+  // app, clearing its storage or switching devices does not reset them.
+  // Nothing is stored on this device, the Firebase account itself is
+  // never disabled, and Forgot Password keeps working during the pause.
+  // ----------------------------------------------------------
+
+  /// The wrong-email-or-password result from logIn. On its own for the
+  /// first two failures; followed by the attempts remaining once only two
+  /// or one are left, which the login form shows under the Password field
+  /// instead of as a pop-up.
+  static const String wrongCredentialsMessage = 'Incorrect email or password.';
+
+  /// Wrong passwords in a row before the pause (mirrors the server).
+  static const int loginMaxFailedAttempts = 5;
+
+  /// logIn result while the pause is running, followed by the seconds
+  /// left: `LOGIN_LOCKED:240`.
+  static const String loginLockedPrefix = 'LOGIN_LOCKED:';
+
+  /// logIn result when Firebase Authentication itself is rate-limiting.
+  static const String loginRateLimitedSentinel = 'LOGIN_RATE_LIMITED';
+
+  static String _lockedSentinel(Map<dynamic, dynamic> data) {
+    final seconds = (data['retryAfterSeconds'] as num?)?.toInt() ?? 300;
+    return '$loginLockedPrefix$seconds';
+  }
+
+  // Calls one of the cooldown functions. Null means the server could not
+  // be asked (offline, slow, not deployed): login then simply goes ahead
+  // with Firebase Authentication's own protection, rather than every
+  // login failing because this extra check is unavailable.
+  Future<Map<dynamic, dynamic>?> _loginThrottle(
+    String function, [
+    Map<String, dynamic>? data,
+  ]) async {
+    try {
+      final response = await _accountEmails
+          .httpsCallable(
+            function,
+            options: HttpsCallableOptions(timeout: const Duration(seconds: 6)),
+          )
+          .call<dynamic>(data);
+      return response.data is Map ? response.data as Map : null;
+    } catch (e) {
+      debugPrint('[Auth] $function unavailable: $e');
+      return null;
     }
   }
 
@@ -632,7 +763,7 @@ class AuthService {
   // ----------------------------------------------------------
   Future<EmailOtpRequestResult> requestEmailOtp({required bool resend}) async {
     if (_auth.currentUser == null) {
-      return const EmailOtpRequestResult(error: 'Please sign in again.');
+      return const EmailOtpRequestResult(error: 'Please log in again.');
     }
     try {
       final response = await _accountEmails
@@ -662,7 +793,7 @@ class AuthService {
           'resource-exhausted' =>
             e.message ?? 'Please wait before requesting another code.',
           'unauthenticated' =>
-            'Your session has expired. Please sign in again.',
+            'Your session has expired. Please log in again.',
           // No function of that name in that region.
           'not-found' =>
             'Email verification is not available yet. Please try again later.',
@@ -696,7 +827,7 @@ class AuthService {
   // to show the user.
   // ----------------------------------------------------------
   Future<String?> verifyEmailOtp(String code) async {
-    if (_auth.currentUser == null) return 'Please sign in again.';
+    if (_auth.currentUser == null) return 'Please log in again.';
     try {
       await _accountEmails.httpsCallable('verifyEmailOtp').call<dynamic>({
         'code': code,
@@ -708,7 +839,7 @@ class AuthService {
         'invalid-argument' ||
         'failed-precondition' ||
         'resource-exhausted' => e.message ?? 'Incorrect verification code.',
-        'unauthenticated' => 'Please sign in again.',
+        'unauthenticated' => 'Please log in again.',
         _ => 'Could not verify the code. Please try again.',
       };
     } catch (_) {
@@ -747,11 +878,34 @@ class AuthService {
   // ----------------------------------------------------------
   // 4. SIGN OUT — skip if you already have one.
   // ----------------------------------------------------------
-  Future<void> signOut() async {
+  //
+  // [reason] is only for the debug log below — every caller that signs a
+  // user out without them asking should say why, so an unexpected logout
+  // can be traced to its trigger from the console.
+  //
+  // [keepPushToken] leaves this phone on the account's push list. Only for
+  // a farmer who goes back to login while their application is still
+  // under review: the decision is the one thing they are waiting for, and
+  // it must be able to reach this phone. The token still belongs to one
+  // account at a time (enforceExclusiveFcmToken in functions/index.js), so
+  // it leaves this account the moment anyone else signs in here.
+  Future<void> signOut({
+    String reason = 'not specified',
+    bool keepPushToken = false,
+  }) async {
+    final leaving = _auth.currentUser;
+    debugPrint(
+      '[Auth] signOut() called — reason: $reason '
+      '(uid: ${leaving?.uid}, email: ${leaving?.email})',
+    );
     // Must run before FirebaseAuth.signOut() — it needs to know which
     // account's fcmTokens to clean up this device's token from (see
     // PushNotificationService.unregisterToken's doc comment).
-    await PushNotificationService().unregisterToken();
+    if (keepPushToken) {
+      debugPrint('[FCM] token KEPT on the account (application under review)');
+    } else {
+      await PushNotificationService().unregisterToken();
+    }
     // Same reason: the "active now" dot must go off while this device can
     // still write the account's presence doc.
     await PresenceService.instance.goOffline();
@@ -770,8 +924,8 @@ class AuthService {
   // FORGOT PASSWORD — sends a reset link to the given email.
   // Works the same for farmer, buyer, and admin accounts since
   // they're all just Firebase Auth users underneath. Only an email
-  // that's actually registered gets a link — see the 'user-not-found'
-  // branch below.
+  // that's actually registered gets a link, but the caller is told the
+  // same thing either way.
   // ----------------------------------------------------------
   Future<String?> sendPasswordResetEmail(String email) async {
     try {
@@ -796,12 +950,9 @@ class AuthService {
       await _auth.sendPasswordResetEmail(email: email.trim());
       return null;
     } on FirebaseAuthException catch (e) {
-      // Distinct from _messageFromCode's generic mapping — "incorrect
-      // email or password" doesn't make sense here, there's no password
-      // being checked, just whether an account exists to reset at all.
-      if (e.code == 'user-not-found') {
-        return "This email isn't registered. Please check the address or create an account.";
-      }
+      // Reported as sent, exactly like a registered address, so this
+      // screen cannot be used to find out which emails have accounts.
+      if (e.code == 'user-not-found') return null;
       return _messageFromCode(e.code);
     } catch (e) {
       return 'Could not send the reset email. Please try again.';
@@ -844,6 +995,78 @@ class AuthService {
     }
   }
 
+  // ----------------------------------------------------------
+  // CHANGE EMAIL — for an already-logged-in password account.
+  // Re-authenticates with the current password, then has Firebase
+  // email a confirmation link to the NEW address; the sign-in email
+  // only actually changes once that link is opened (so a typo can't
+  // lock the account out, and the new address ends up verified).
+  // Firebase signs the account out everywhere at that point — the
+  // users/{uid} copy of the email is brought in line on the next
+  // sign-in, see syncProfileEmail.
+  // ----------------------------------------------------------
+  Future<String?> requestEmailChange({
+    required String currentPassword,
+    required String newEmail,
+  }) async {
+    try {
+      final user = _auth.currentUser;
+      final email = user?.email;
+      if (user == null || email == null) {
+        return 'You are not logged in.';
+      }
+      final target = newEmail.trim();
+      if (target.toLowerCase() == email.trim().toLowerCase()) {
+        return 'That is already your current email.';
+      }
+
+      await user.reauthenticateWithCredential(
+        EmailAuthProvider.credential(email: email, password: currentPassword),
+      );
+      await user.verifyBeforeUpdateEmail(target);
+      return null;
+    } on FirebaseAuthException catch (e) {
+      switch (e.code) {
+        case 'wrong-password':
+        case 'invalid-credential':
+        case 'user-mismatch':
+          return 'Current password is incorrect.';
+        case 'email-already-in-use':
+          return 'That email is already used by another account.';
+        case 'invalid-email':
+        case 'invalid-new-email':
+          return 'Please enter a valid email address.';
+        case 'too-many-requests':
+          return 'Too many attempts. Please wait a bit and try again.';
+        case 'network-request-failed':
+          return 'No internet connection. Please check your connection and try again.';
+        default:
+          return 'Could not start the email change. Please try again.';
+      }
+    } catch (e) {
+      return 'Could not start the email change. Please try again.';
+    }
+  }
+
+  // Copies the Firebase Auth email onto users/{uid}.email when the two
+  // have drifted apart — i.e. the first sign-in after a confirmed
+  // requestEmailChange. Best-effort: a failure here must never block a
+  // login, and the next sign-in simply tries again.
+  Future<void> syncProfileEmail() async {
+    try {
+      final user = _auth.currentUser;
+      final email = user?.email?.trim();
+      if (user == null || email == null || email.isEmpty) return;
+      final ref = _users.doc(user.uid);
+      final stored = (await ref.get()).data()?['email']?.toString().trim();
+      // No email on the doc at all means it isn't stored there.
+      if (stored == null || stored.toLowerCase() == email.toLowerCase()) {
+        return;
+      }
+      await ref.update({'email': email});
+    } catch (_) {}
+  }
+
   // ============================================================
   // ONE MORE CHANGE — inside your existing signUp() method
   // ------------------------------------------------------------
@@ -862,7 +1085,7 @@ class AuthService {
   // ============================================================
 
   Future<void> logOut() async {
-    await signOut();
+    await signOut(reason: 'user tapped Log Out');
   }
 
   String _messageFromCode(String code) {
@@ -876,7 +1099,7 @@ class AuthService {
       case 'user-not-found':
       case 'wrong-password':
       case 'invalid-credential':
-        return 'Incorrect email or password.';
+        return wrongCredentialsMessage;
       case 'requires-recent-login':
         return 'Please log out and back in, then try again.';
       case 'too-many-requests':

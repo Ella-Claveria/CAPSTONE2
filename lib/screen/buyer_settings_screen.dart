@@ -21,7 +21,7 @@ class BuyerSettingsScreen extends StatelessWidget {
 
   void _showLanguagePicker(BuildContext context) {
     final t = AppLocalizations.of(context)!;
-    final currentCode = LocaleController.instance.locale?.languageCode ?? 'en';
+    final currentCode = LocaleController.instance.languageCode;
     showAgriSheet<void>(
       context: context,
       title: t.selectLanguage,
@@ -126,13 +126,12 @@ class BuyerSettingsScreen extends StatelessWidget {
           // ---- App preferences ----
           tile(
             icon: Icons.language,
-            title: 'Language',
+            title: AppLocalizations.of(context)!.language,
             subtitle: ListenableBuilder(
               listenable: LocaleController.instance,
               builder: (context, _) {
-                final code =
-                    LocaleController.instance.locale?.languageCode ?? 'en';
-                return Text(code == 'tl' ? 'Tagalog' : 'English');
+                final code = LocaleController.instance.languageCode;
+                return Text(code == 'tl' ? 'Filipino' : 'English');
               },
             ),
             onTap: () => _showLanguagePicker(context),

@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -63,12 +64,7 @@ class _FarmerStorefrontScreenState extends State<FarmerStorefrontScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        foregroundColor: _green,
-        elevation: 0,
-      ),
+      appBar: const AgriAppBar(),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: _profile,
         builder: (context, profileSnap) {

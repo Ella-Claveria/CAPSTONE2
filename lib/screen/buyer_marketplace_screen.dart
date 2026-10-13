@@ -1,5 +1,6 @@
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../services/auth_service.dart';
 import '../services/product_share_service.dart';
 import '../services/notification_permission_prompt.dart';
@@ -7,7 +8,6 @@ import '../services/push_notification_service.dart';
 import 'role_selection_screen.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/coach_mark.dart';
-import '../widgets/agri_header.dart';
 import '../widgets/unread_messages_dot.dart';
 import 'buyer_explore_screen.dart';
 import 'chat_list_screen.dart';
@@ -118,7 +118,13 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      const BuyerExploreScreen(),
+      BuyerExploreScreen(
+        bellKey: _notificationsKey,
+        onNotificationsPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+        ),
+      ),
       const ChatListScreen(),
       BuyerOrdersScreen(
         onBrowseMarketplace: () => setState(() => _navIndex = 0),
@@ -138,16 +144,14 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
       },
       child: Scaffold(
         backgroundColor: _bg,
-        appBar: AgriHeader(
-          bellKey: _notificationsKey,
-          onLogoTap: () => setState(() => _navIndex = 0),
-          onNotificationsPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+        // No app bar: every tab starts with its own header row — logo and
+        // title, see PageHeader.
+        // Keeps the status bar icons dark on the light background.
+        body: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle.dark,
+          child: SafeArea(
+            child: IndexedStack(index: _navIndex, children: pages),
           ),
-        ),
-        body: SafeArea(
-          child: IndexedStack(index: _navIndex, children: pages),
         ),
         bottomNavigationBar: _buildBottomNavBar(),
       ),

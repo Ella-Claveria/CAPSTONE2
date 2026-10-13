@@ -159,19 +159,40 @@ class _OrdersViewState extends State<OrdersView> {
       children: [
         PageHeader(
           title: 'Orders',
-          // Farmers only: stock of their own listings. Same size and green
-          // as the Messages/Profile menu icons.
-          trailing: _isFarmer
-              ? IconButton(
-                  tooltip: 'Inventory',
-                  icon: const Icon(
-                    Icons.warehouse_outlined,
-                    size: 24,
-                    color: AppTheme.dark,
-                  ),
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const InventoryScreen()),
+          // Farmers only: stock of their own listings. A compact solid
+          // dark green button on the title's own row, ending on the
+          // page's 16px edge.
+          titleTrailing: _isFarmer
+              ? Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: FilledButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const InventoryScreen(),
+                      ),
+                    ),
+                    icon: const Icon(Icons.inventory_2_outlined, size: 16),
+                    label: const Text('Inventory'),
+                    // Solid dark green, white icon and label; no border,
+                    // shadow or gradient.
+                    style: FilledButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      backgroundColor: const Color(0xFF003B1F),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      minimumSize: Size.zero,
+                      fixedSize: const Size.fromHeight(36),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.standard,
+                      textStyle: GoogleFonts.montserrat(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 )
               : null,

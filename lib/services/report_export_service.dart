@@ -50,7 +50,17 @@ class ReportExportService {
     required bool landscape,
     required bool includeDataTables,
     required String notes,
+    // Told what the export is doing at each step, to show the Admin.
+    void Function(String step)? onProgress,
   }) async {
+    // Says what is happening and lets the screen draw it before the next
+    // (possibly long, uninterrupted) step starts.
+    Future<void> step(String message) async {
+      onProgress?.call(message);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+    }
+
+    await step('Loading the latest data…');
     final firestore = FirebaseFirestore.instance;
     final results = await Future.wait([
       firestore.collection('users').get(),
@@ -73,7 +83,8 @@ class ReportExportService {
 
     final missing = <String>[];
     final reportSections = <ReportSection>[];
-    final chartImages = <String, Uint8List>{};
+    final chartImages = <String, ({Uint8List rgba, int width, int height})>{};
+    await step('Preparing the report…');
 
     // Dashboard order, exactly as the live page renders it.
     for (final section in DashboardSection.values) {
@@ -96,10 +107,15 @@ class ReportExportService {
       reportSections.add(built);
       if (built.rows.isEmpty) missing.add(built.title);
 
-      if (format == ReportFormat.pdf && section.isChart) {
+      // A chart with nothing in it for this period is left out: a picture
+      // of an empty card adds nothing, and each picture costs time.
+      if (format == ReportFormat.pdf &&
+          section.isChart &&
+          built.rows.isNotEmpty) {
         final key = _keyFor(section);
         if (key != null) {
-          final image = await ChartCaptureBoundary.captureFrom(key);
+          await step('Capturing ${built.title}…');
+          final image = await ChartCaptureBoundary.captureRawFrom(key);
           if (image != null) chartImages[built.title] = image;
         }
       }
@@ -116,6 +132,11 @@ class ReportExportService {
     late final String extension;
     late final String mimeType;
 
+    await step(
+      format == ReportFormat.pdf
+          ? 'Building the PDF…'
+          : 'Building the file…',
+    );
     switch (format) {
       case ReportFormat.pdf:
         bytes = await PdfReportService.buildFullDashboardReport(
@@ -127,7 +148,7 @@ class ReportExportService {
           landscape: landscape,
           includeDataTables: includeDataTables,
           sections: reportSections,
-          chartImages: chartImages,
+          rawChartImages: chartImages,
         );
         extension = 'pdf';
         mimeType = 'application/pdf';
@@ -145,6 +166,7 @@ class ReportExportService {
     }
 
     final filename = 'AgriTrade_Analytics_$baseName.$extension';
+    await step('Saving the file…');
     if (format == ReportFormat.pdf) {
       await PdfReportService.share(bytes, filename);
     } else {
@@ -375,7 +397,7 @@ class ReportExportService {
     final rows = DashboardAnalyticsService.recentVerifications(verifDocs, usersByUid, range: range, limit: null);
     return ReportSection(
       title: 'Recent Verification Requests',
-      headers: const ['Farmer ID', 'Full Name', 'Barangay', 'Date Submitted', 'Status'],
+      headers: const ['RSBA No.', 'Full Name', 'Barangay', 'Date Submitted', 'Status'],
       rows: rows.map((v) => [v.farmerId, v.fullName, v.barangay, v.dateSubmitted, v.status]).toList(),
     );
   }

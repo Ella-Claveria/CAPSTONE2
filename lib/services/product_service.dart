@@ -7,7 +7,25 @@ class ProductService {
   static const String archiveBlockedByOrdersMessage =
       'This product has pending orders. Resolve them before archiving it.';
 
+  /// Shown wherever a farmer tries to change an archived product.
+  static const String archivedReadOnlyMessage =
+      'Restore this product before making changes.';
+
   final _products = FirebaseFirestore.instance.collection('products');
+
+  // Archived products are read-only: returns [archivedReadOnlyMessage] if
+  // [id] is archived, or null if it can be changed. A failed read is left
+  // for the write that follows to report.
+  Future<String?> _archivedError(String id) async {
+    try {
+      final snap = await _products.doc(id).get();
+      return snap.data()?['isArchived'] == true
+          ? archivedReadOnlyMessage
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<String?> addProduct({
     required String name,
@@ -137,6 +155,8 @@ class ProductService {
     if (imageUrls.isEmpty) return 'Please add a product photo.';
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
+    final archivedError = await _archivedError(id);
+    if (archivedError != null) return archivedError;
 
     try {
       await _products.doc(id).update({
@@ -248,6 +268,8 @@ class ProductService {
     if (quantity < 0) return 'Quantity cannot be negative.';
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
+    final archivedError = await _archivedError(id);
+    if (archivedError != null) return archivedError;
 
     try {
       await _products.doc(id).update({

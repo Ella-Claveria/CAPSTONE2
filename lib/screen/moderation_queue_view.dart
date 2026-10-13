@@ -3,15 +3,24 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+import '../data/report_reasons.dart';
+import 'admin_sub_nav.dart';
+import '../services/admin_perf.dart';
+import '../services/rsba_number.dart';
+import 'admin_filter_controls.dart';
 import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/dashboard_data_service.dart';
 import '../services/market_price_helpers.dart';
+import '../services/moderation_model.dart';
+import 'admin_account_dialog.dart';
+import 'admin_notifications.dart'
+    show AdminNotificationTarget, adminOpenPageRequest;
+import 'admin_user_accounts_view.dart' show maskEmail;
 import 'admin_dashboard_screen.dart'
     show
         AdminPalette,
         AdminThemeScope,
-        AdminStatCard,
         AdminStatusBadge,
         AdminEmptyState,
         AdminLoadingSpinner,
@@ -27,7 +36,6 @@ import 'admin_dashboard_screen.dart'
 /// account-level actions, `accountStatus` on the reported farmer's
 /// users/{uid} doc. Report volume and confirmed-violation count are kept
 /// strictly separate (see _FarmerViolationHistory).
-enum _ModTab { pending, underReview, resolved, violations, priceFlags }
 
 String? _firstNonEmpty(List<dynamic> candidates) {
   for (final c in candidates) {
@@ -44,9 +52,9 @@ String _capitalize(String s) => s.isEmpty
     : '${s[0].toUpperCase()}${s.substring(1).replaceAll('_', ' ')}';
 
 /// Maps a moderation decision (report['moderationAction'] values) to its
-/// Audit Log action — every real decision except 'dismissed', which isn't
-/// an action taken against anyone.
-String? _auditActionFor(String moderationAction) {
+/// Audit Log action. Suspending or banning a farmer keeps its own action;
+/// the same decision on a buyer is logged as an account action.
+String? _auditActionFor(String moderationAction, {required bool farmer}) {
   switch (moderationAction) {
     case 'warning':
       return AuditAction.warnSeller;
@@ -55,12 +63,33 @@ String? _auditActionFor(String moderationAction) {
     case 'removed':
       return AuditAction.removeListing;
     case 'suspended':
-      return AuditAction.suspendFarmer;
+      return farmer ? AuditAction.suspendFarmer : AuditAction.suspendAccount;
     case 'banned':
-      return AuditAction.banFarmer;
+      return farmer ? AuditAction.banFarmer : AuditAction.banAccount;
+    case 'review_removed':
+      return AuditAction.removeReview;
+    case 'dismissed':
+      return AuditAction.dismissReport;
+    case 'no_violation':
+      return AuditAction.resolveReport;
+    case 'violation_recorded':
+      return AuditAction.confirmViolation;
     default:
       return null;
   }
+}
+
+/// Opens a report for review — from the queue, and from a user's
+/// moderation history (a violation's source report).
+Future<void> showAdminReportDialog(
+  BuildContext context, {
+  required AdminPalette palette,
+  required String reportId,
+}) {
+  return showDialog<void>(
+    context: context,
+    builder: (_) => _ReportDetailDialog(reportId: reportId, palette: palette),
+  );
 }
 
 String _formatDate(Timestamp? t) =>
@@ -132,6 +161,9 @@ class _ReportRow {
   final String id;
   final Map<String, dynamic> data;
   final String farmerId;
+
+  /// The farmer's Farmer ID as the portal shows it: their RSBA number.
+  final String farmerRsba;
   final String farmerName;
   final String farmerBarangay;
   final String farmerApprovalStatus;
@@ -141,6 +173,7 @@ class _ReportRow {
     required this.id,
     required this.data,
     required this.farmerId,
+    required this.farmerRsba,
     required this.farmerName,
     required this.farmerBarangay,
     required this.farmerApprovalStatus,
@@ -215,15 +248,57 @@ Color _reportStatusBg(AdminPalette c, _ReportRow r) {
 // ============================================================
 
 class ModerationQueueView extends StatefulWidget {
-  const ModerationQueueView({super.key});
+  /// The Violations page — accounts with a confirmed violation, and price
+  /// flags — instead of the queue of reports. It reads the same reports,
+  /// so it is the same view with other tabs.
+  final bool violations;
+
+  const ModerationQueueView({super.key, this.violations = false});
 
   @override
   State<ModerationQueueView> createState() => _ModerationQueueViewState();
 }
 
-class _ModerationQueueViewState extends State<ModerationQueueView> {
-  _ModTab _tab = _ModTab.pending;
-  String _search = '';
+class _ModerationQueueViewState extends State<ModerationQueueView>
+    with AdminPageSearch {
+  // The open tab lives in AdminSubNav, shared with the sidebar's submenu.
+  ModerationSection get _tab => AdminSubNav.moderation.value;
+  ViolationSection get _violationsTab => AdminSubNav.violations.value;
+
+  // This page's own tabs.
+  Listenable get _tabs =>
+      widget.violations ? AdminSubNav.violations : AdminSubNav.moderation;
+
+  void _onTabChanged() {
+    if (mounted) setState(_ticked.clear);
+  }
+
+  // The rows whose box is ticked in the open tab: report ids, or farmer
+  // ids in Violations.
+  final Set<String> _ticked = {};
+
+  void _tick(String id, bool? ticked) => setState(() {
+    if (ticked ?? false) {
+      _ticked.add(id);
+    } else {
+      _ticked.remove(id);
+    }
+  });
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs.addListener(_onTabChanged);
+  }
+
+  @override
+  void dispose() {
+    _tabs.removeListener(_onTabChanged);
+    super.dispose();
+  }
+
+  // Typed in the header's search box.
+  String get _search => pageSearch;
   String _targetTypeFilter = 'All';
   String _reasonFilter = 'All';
 
@@ -232,25 +307,11 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
     final c = AdminThemeScope.of(context).palette;
 
     return Padding(
-      padding: const EdgeInsets.all(28.0),
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Moderation Queue',
-            style: TextStyle(
-              fontSize: 30,
-              height: 1.15,
-              letterSpacing: -0.6,
-              fontWeight: FontWeight.w800,
-              color: c.textPrimary,
-            ),
-          ),
-          Text(
-            'Review reports against farmer listings, accounts, and buyer reviews before taking action.',
-            style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5),
-          ),
-          const SizedBox(height: 20),
+          // The title is in the utility bar above.
 
           // Two live streams — every report, every user — combined and
           // aggregated client-side, same real-time pattern used across the
@@ -281,9 +342,10 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
 
                     final allRows = reportsSnap.data!.docs.map((doc) {
                       final data = doc.data();
-                      final farmerId =
-                          (data['farmerId'] ?? data['reportedUserId'] ?? '')
-                              .toString();
+                      // The reported account, by its uid (see
+                      // reportedUserIdOf): the same user as in User
+                      // Accounts, whether a farmer or a buyer.
+                      final farmerId = reportedUserIdOf(data);
                       final farmerUser = usersByUid[farmerId];
                       final farmerName =
                           _firstNonEmpty([
@@ -292,7 +354,7 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                             data['reportedUserName'],
                             data['sellerName'],
                           ]) ??
-                          'Unknown Farmer';
+                          'Unknown user';
                       final farmerBarangay =
                           _firstNonEmpty([farmerUser?['barangay']]) ?? '—';
                       final farmerApprovalStatus =
@@ -303,6 +365,10 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                         id: doc.id,
                         data: data,
                         farmerId: farmerId,
+                        // Only a farmer has an RSBA number.
+                        farmerRsba: farmerUser?['role'] == 'farmer'
+                            ? (farmerIdOf(farmerUser) ?? kNoFarmerId)
+                            : '—',
                         farmerName: farmerName,
                         farmerBarangay: farmerBarangay,
                         farmerApprovalStatus: farmerApprovalStatus,
@@ -330,29 +396,20 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
 
                     List<_ReportRow> bucketRows;
                     switch (_tab) {
-                      case _ModTab.pending:
+                      case ModerationSection.pending:
                         bucketRows = allRows
                             .where((r) => r.bucketStatus == 'pending')
                             .toList();
                         break;
-                      case _ModTab.underReview:
+                      case ModerationSection.underReview:
                         bucketRows = allRows
                             .where((r) => r.bucketStatus == 'under_review')
                             .toList();
                         break;
-                      case _ModTab.resolved:
+                      case ModerationSection.resolved:
                         bucketRows = allRows
                             .where((r) => r.bucketStatus == 'resolved')
                             .toList();
-                        break;
-                      case _ModTab.violations:
-                        bucketRows = allRows
-                            .where((r) => r.violationConfirmed)
-                            .toList();
-                        break;
-                      case _ModTab.priceFlags:
-                        // Not report-driven — see _PriceFlagsSection.
-                        bucketRows = [];
                         break;
                     }
 
@@ -379,125 +436,125 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
                               ),
                         );
 
+                    // How many rows are ticked, and Clear: level with the
+                    // tabs, in view without scrolling to the table's end.
+                    final selectionNote = AdminSelectionNote(
+                      count: _ticked.length,
+                      onClear: () => setState(_ticked.clear),
+                    );
+
+                    // The Violations page: no report filters, its own tabs.
+                    if (widget.violations) {
+                      return SingleChildScrollView(
+                        child: AdminTabbedTable<ViolationSection>(
+                          selected: _violationsTab,
+                          onSelected: (t) => AdminSubNav.violations.value = t,
+                          trailing: selectionNote,
+                          tabs: [
+                            (
+                              value: ViolationSection.violations,
+                              label: 'Violations',
+                              count: violationsCount,
+                              icon: Icons.gavel_rounded,
+                            ),
+                            (
+                              value: ViolationSection.priceFlags,
+                              label: 'Price Flags',
+                              // Counted by its own stream, inside the tab.
+                              count: null,
+                              icon: Icons.sell_outlined,
+                            ),
+                          ],
+                          child: Container(
+                            width: double.infinity,
+                            decoration: adminTableCard(c, tabbed: true),
+                            padding: kAdminTablePadding,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                if (_violationsTab ==
+                                    ViolationSection.priceFlags)
+                                  const _PriceFlagsSection()
+                                else
+                                  _buildViolationsSection(c, allRows),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+
                     return SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          LayoutBuilder(
-                            builder: (context, constraints) {
-                              // A Wrap (not a fixed-childAspectRatio
-                              // GridView) so each card sizes to its own
-                              // content height — it can't overflow at any
-                              // width — while the column count still reflows
-                              // continuously with the available space (see
-                              // the same fix on the Dashboard Overview's KPI
-                              // row).
-                              const spacing = 16.0;
-                              final width = constraints.maxWidth;
-                              final columns = width >= 900
-                                  ? 4
-                                  : (width >= 560 ? 2 : 1);
-                              final cardWidth =
-                                  (width - spacing * (columns - 1)) / columns;
-                              final cards = [
-                                AdminStatCard(
-                                  label: 'Pending Reports',
-                                  value: '$pendingCount',
-                                  delta: 'Awaiting Admin review',
-                                  icon: Icons.hourglass_empty_rounded,
-                                  iconColor: (c) => c.amber,
-                                  iconBg: (c) => c.amberBg,
-                                  isEmpty: pendingCount == 0,
-                                ),
-                                AdminStatCard(
-                                  label: 'Under Review',
-                                  value: '$underReviewCount',
-                                  delta: 'Currently being investigated',
-                                  icon: Icons.search_rounded,
-                                  iconColor: (c) => c.blue,
-                                  iconBg: (c) => c.blueBg,
-                                  isEmpty: underReviewCount == 0,
-                                ),
-                                AdminStatCard(
-                                  label: 'Confirmed Violations',
-                                  value: '$violationsCount',
-                                  delta: 'Admin-confirmed only',
-                                  icon: Icons.gavel_rounded,
-                                  iconColor: (c) => c.red,
-                                  iconBg: (c) => c.redBg,
-                                  isEmpty: violationsCount == 0,
-                                ),
-                                AdminStatCard(
-                                  label: 'Resolved Reports',
-                                  value: '$resolvedCount',
-                                  delta: 'Including dismissed reports',
-                                  icon: Icons.task_alt_rounded,
-                                  iconColor: (c) => c.green,
-                                  iconBg: (c) => c.greenBg,
-                                  isEmpty: resolvedCount == 0,
-                                ),
-                              ];
-                              return Wrap(
-                                spacing: spacing,
-                                runSpacing: spacing,
-                                children: [
-                                  for (final card in cards)
-                                    SizedBox(width: cardWidth, child: card),
-                                ],
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 20),
-
-                          _ModTabBar(
+                          _ReportFilterBar(
                             c: c,
-                            tab: _tab,
-                            onChanged: (t) => setState(() => _tab = t),
-                            pendingCount: pendingCount,
-                            underReviewCount: underReviewCount,
-                            resolvedCount: resolvedCount,
-                            violationsCount: violationsCount,
+                            targetTypeFilter: _targetTypeFilter,
+                            onTargetTypeChanged: (v) =>
+                                setState(() => _targetTypeFilter = v),
+                            reasonOptions: reasonOptions,
+                            reasonFilter: _reasonFilter,
+                            onReasonChanged: (v) =>
+                                setState(() => _reasonFilter = v),
                           ),
                           const SizedBox(height: 16),
-
-                          if (_tab != _ModTab.violations &&
-                              _tab != _ModTab.priceFlags) ...[
-                            _ReportFilterBar(
-                              c: c,
-                              search: _search,
-                              onSearchChanged: (v) =>
-                                  setState(() => _search = v),
-                              targetTypeFilter: _targetTypeFilter,
-                              onTargetTypeChanged: (v) =>
-                                  setState(() => _targetTypeFilter = v),
-                              reasonOptions: reasonOptions,
-                              reasonFilter: _reasonFilter,
-                              onReasonChanged: (v) =>
-                                  setState(() => _reasonFilter = v),
+                          AdminTabbedTable<ModerationSection>(
+                            selected: _tab,
+                            onSelected: (t) => AdminSubNav.moderation.value = t,
+                            trailing: selectionNote,
+                            tabs: [
+                              (
+                                value: ModerationSection.pending,
+                                label: 'Pending',
+                                count: pendingCount,
+                                icon: Icons.inbox_outlined,
+                              ),
+                              (
+                                value: ModerationSection.underReview,
+                                label: 'Under Review',
+                                count: underReviewCount,
+                                icon: Icons.manage_search_rounded,
+                              ),
+                              (
+                                value: ModerationSection.resolved,
+                                label: 'Resolved',
+                                count: resolvedCount,
+                                icon: Icons.task_alt_rounded,
+                              ),
+                            ],
+                            child: Container(
+                              width: double.infinity,
+                              decoration: adminTableCard(c, tabbed: true),
+                              padding: kAdminTablePadding,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  if (bucketRows.isEmpty)
+                                    AdminEmptyState(
+                                      icon: Icons.fact_check_outlined,
+                                      title: _emptyTitleFor(_tab),
+                                      subtitle: _emptySubtitleFor(_tab),
+                                    )
+                                  else if (rows.isEmpty)
+                                    AdminEmptyState(
+                                      icon: Icons.search_off,
+                                      title:
+                                          'No matches for the current search/filters.',
+                                      subtitle:
+                                          'Try clearing the search or filters above.',
+                                    )
+                                  else
+                                    _ReportTable(
+                                      c: c,
+                                      rows: rows,
+                                      ticked: _ticked,
+                                      onTicked: _tick,
+                                    ),
+                                ],
+                              ),
                             ),
-                            const SizedBox(height: 16),
-                          ],
-
-                          if (_tab == _ModTab.priceFlags)
-                            const _PriceFlagsSection()
-                          else if (_tab == _ModTab.violations)
-                            _buildViolationsSection(c, allRows)
-                          else if (bucketRows.isEmpty)
-                            AdminEmptyState(
-                              icon: Icons.fact_check_outlined,
-                              title: _emptyTitleFor(_tab),
-                              subtitle: _emptySubtitleFor(_tab),
-                            )
-                          else if (rows.isEmpty)
-                            AdminEmptyState(
-                              icon: Icons.search_off,
-                              title:
-                                  'No matches for the current search/filters.',
-                              subtitle:
-                                  'Try clearing the search or filters above.',
-                            )
-                          else
-                            _ReportTable(c: c, rows: rows),
+                          ),
                         ],
                       ),
                     );
@@ -511,33 +568,25 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
     );
   }
 
-  String _emptyTitleFor(_ModTab tab) {
+  String _emptyTitleFor(ModerationSection tab) {
     switch (tab) {
-      case _ModTab.pending:
+      case ModerationSection.pending:
         return 'No pending reports.';
-      case _ModTab.underReview:
+      case ModerationSection.underReview:
         return 'No reports under review.';
-      case _ModTab.resolved:
+      case ModerationSection.resolved:
         return 'No resolved reports yet.';
-      case _ModTab.violations:
-        return 'No confirmed violations.';
-      case _ModTab.priceFlags:
-        return 'No price flags.';
     }
   }
 
-  String _emptySubtitleFor(_ModTab tab) {
+  String _emptySubtitleFor(ModerationSection tab) {
     switch (tab) {
-      case _ModTab.pending:
+      case ModerationSection.pending:
         return 'New reports from Buyers/users will appear here.';
-      case _ModTab.underReview:
+      case ModerationSection.underReview:
         return 'Reports an Admin has started investigating will appear here.';
-      case _ModTab.resolved:
+      case ModerationSection.resolved:
         return 'Dismissed and completed reports will appear here.';
-      case _ModTab.violations:
-        return 'Farmers/listings with an Admin-confirmed violation will appear here.';
-      case _ModTab.priceFlags:
-        return 'Listings priced far above the AI suggested range will appear here.';
     }
   }
 
@@ -569,6 +618,7 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
           final latest = reports.first;
           return _ViolationSummary(
             farmerId: e.key,
+            farmerRsba: latest.farmerRsba,
             farmerName: latest.farmerName,
             accountStatus: latest.farmerAccountStatus,
             confirmedCount: reports.length,
@@ -581,69 +631,11 @@ class _ModerationQueueViewState extends State<ModerationQueueView> {
           ),
         );
 
-    return _ViolationsTable(c: c, rows: summaries);
-  }
-}
-
-// ============================================================
-// TAB BAR
-// ============================================================
-
-class _ModTabBar extends StatelessWidget {
-  final AdminPalette c;
-  final _ModTab tab;
-  final ValueChanged<_ModTab> onChanged;
-  final int pendingCount;
-  final int underReviewCount;
-  final int resolvedCount;
-  final int violationsCount;
-
-  const _ModTabBar({
-    required this.c,
-    required this.tab,
-    required this.onChanged,
-    required this.pendingCount,
-    required this.underReviewCount,
-    required this.resolvedCount,
-    required this.violationsCount,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    Widget tabButton(_ModTab t, String label, [int? count]) {
-      final selected = t == tab;
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: Material(
-          color: selected ? c.greenBg : c.surfaceAlt,
-          borderRadius: BorderRadius.circular(10),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: () => onChanged(t),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              child: Text(
-                count == null ? label : '$label ($count)',
-                style: TextStyle(
-                  color: selected ? c.green : c.textSecondary,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return Wrap(
-      children: [
-        tabButton(_ModTab.pending, 'Pending', pendingCount),
-        tabButton(_ModTab.underReview, 'Under Review', underReviewCount),
-        tabButton(_ModTab.resolved, 'Resolved', resolvedCount),
-        tabButton(_ModTab.violations, 'Violations', violationsCount),
-        tabButton(_ModTab.priceFlags, 'Price Flags'),
-      ],
+    return _ViolationsTable(
+      c: c,
+      rows: summaries,
+      ticked: _ticked,
+      onTicked: _tick,
     );
   }
 }
@@ -654,8 +646,6 @@ class _ModTabBar extends StatelessWidget {
 
 class _ReportFilterBar extends StatelessWidget {
   final AdminPalette c;
-  final String search;
-  final ValueChanged<String> onSearchChanged;
   final String targetTypeFilter;
   final ValueChanged<String> onTargetTypeChanged;
   final List<String> reasonOptions;
@@ -664,8 +654,6 @@ class _ReportFilterBar extends StatelessWidget {
 
   const _ReportFilterBar({
     required this.c,
-    required this.search,
-    required this.onSearchChanged,
     required this.targetTypeFilter,
     required this.onTargetTypeChanged,
     required this.reasonOptions,
@@ -673,80 +661,67 @@ class _ReportFilterBar extends StatelessWidget {
     required this.onReasonChanged,
   });
 
-  InputDecoration _fieldDecoration(String hint, IconData icon) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
-      prefixIcon: Icon(icon, size: 18, color: c.textSecondary),
-      filled: true,
-      fillColor: c.surfaceAlt,
-      isDense: true,
-      contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final fieldStyle = TextStyle(color: c.textPrimary, fontSize: 13);
-    final validReason = reasonOptions.contains(reasonFilter)
-        ? reasonFilter
-        : 'All';
+    // The reasons differ by who files the report (see report_reasons.dart),
+    // so each kind of reporter has a dropdown of its own; a third appears
+    // for any other reason actually on record (review reports, older chat
+    // reports). One reason is filtered by at a time: choosing in one
+    // dropdown puts the others back on their "all" line.
+    final otherReasons = [
+      for (final r in reasonOptions)
+        if (r != 'All' &&
+            !kBuyerReportReasons.contains(r) &&
+            !kFarmerReportReasons.contains(r))
+          r,
+    ];
+    Widget reasonDropdown(String all, IconData icon, List<String> reasons) =>
+        AdminPillDropdown<String>(
+          value: reasons.contains(reasonFilter) ? reasonFilter : 'All',
+          width: 280,
+          icon: icon,
+          items: [
+            DropdownMenuItem(value: 'All', child: Text(all)),
+            for (final reason in reasons)
+              DropdownMenuItem(value: reason, child: Text(reason)),
+          ],
+          onChanged: onReasonChanged,
+        );
 
     return Wrap(
       spacing: 12,
       runSpacing: 12,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        SizedBox(
-          width: 300,
-          child: TextField(
-            style: fieldStyle,
-            decoration: _fieldDecoration(
-              'Search farmer, listing, report ID, reporter…',
-              Icons.search,
-            ),
-            onChanged: onSearchChanged,
-          ),
+        AdminPillDropdown<String>(
+          value: targetTypeFilter,
+          width: 190,
+          icon: Icons.category_outlined,
+          items: const [
+            DropdownMenuItem(value: 'All', child: Text('All target types')),
+            DropdownMenuItem(value: 'Listing', child: Text('Listing')),
+            DropdownMenuItem(value: 'Farmer', child: Text('Farmer')),
+            DropdownMenuItem(value: 'Buyer', child: Text('Buyer')),
+            DropdownMenuItem(value: 'Review', child: Text('Review')),
+          ],
+          onChanged: onTargetTypeChanged,
         ),
-        SizedBox(
-          width: 160,
-          child: DropdownButtonFormField<String>(
-            initialValue: targetTypeFilter,
-            style: fieldStyle,
-            dropdownColor: c.surface,
-            decoration: _fieldDecoration(
-              'Target Type',
-              Icons.category_outlined,
-            ),
-            items: const [
-              DropdownMenuItem(value: 'All', child: Text('All')),
-              DropdownMenuItem(value: 'Listing', child: Text('Listing')),
-              DropdownMenuItem(value: 'Farmer', child: Text('Farmer')),
-              DropdownMenuItem(value: 'Review', child: Text('Review')),
-            ],
-            onChanged: (v) => v != null ? onTargetTypeChanged(v) : null,
-          ),
+        reasonDropdown(
+          'Buyer reporting a farmer',
+          Icons.shopping_basket_outlined,
+          kBuyerReportReasons,
         ),
-        SizedBox(
-          width: 220,
-          child: DropdownButtonFormField<String>(
-            initialValue: validReason,
-            style: fieldStyle,
-            dropdownColor: c.surface,
-            decoration: _fieldDecoration(
-              'Reason',
-              Icons.report_gmailerrorred_outlined,
-            ),
-            items: reasonOptions
-                .map((r) => DropdownMenuItem(value: r, child: Text(r)))
-                .toList(),
-            onChanged: (v) => v != null ? onReasonChanged(v) : null,
-          ),
+        reasonDropdown(
+          'Farmer reporting a buyer',
+          Icons.agriculture_outlined,
+          kFarmerReportReasons,
         ),
+        if (otherReasons.isNotEmpty)
+          reasonDropdown(
+            'Other reasons',
+            Icons.report_gmailerrorred_outlined,
+            otherReasons,
+          ),
       ],
     );
   }
@@ -759,35 +734,36 @@ class _ReportFilterBar extends StatelessWidget {
 class _ReportTable extends StatelessWidget {
   final AdminPalette c;
   final List<_ReportRow> rows;
-  const _ReportTable({required this.c, required this.rows});
+  final Set<String> ticked;
+  final void Function(String id, bool? ticked) onTicked;
+  const _ReportTable({
+    required this.c,
+    required this.rows,
+    required this.ticked,
+    required this.onTicked,
+  });
 
+  // Sits in the tabbed card the Moderation Queue builds around it.
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: c.border),
-      ),
-      padding: const EdgeInsets.all(8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
-          dataRowColor: WidgetStateProperty.all(Colors.transparent),
-          columnSpacing: 28,
-          horizontalMargin: 12,
-          headingTextStyle: TextStyle(
-            color: c.textSecondary,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+    return SizedBox(
+      child: AdminTableFit(
+        table: DataTable(
+          headingRowColor: WidgetStateProperty.all(adminTableHeaderColor(c)),
+          dataRowColor: adminTableRowColor(c),
+          columnSpacing: kAdminTableColumnSpacing,
+          horizontalMargin: kAdminTableMargin,
+          headingTextStyle: adminTableHeaderStyle(c),
+          dataTextStyle: TextStyle(
+            fontFamily: kAdminFontFamily,
+            color: c.textPrimary,
+            fontSize: 13,
           ),
-          dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
           columns: const [
             DataColumn(label: Text('Report ID')),
             DataColumn(label: Text('Reported Target')),
             DataColumn(label: Text('Target Type')),
-            DataColumn(label: Text('Reported Farmer')),
+            DataColumn(label: Text('Reported User')),
             DataColumn(label: Text('Reason')),
             DataColumn(label: Text('Reported By')),
             DataColumn(label: Text('Date Reported')),
@@ -796,6 +772,8 @@ class _ReportTable extends StatelessWidget {
           ],
           rows: rows.map((r) {
             return DataRow(
+              selected: ticked.contains(r.id),
+              onSelectChanged: (on) => onTicked(r.id, on),
               cells: [
                 DataCell(Text(_shortId(r.id))),
                 DataCell(Text(r.targetLabel)),
@@ -822,9 +800,10 @@ class _ReportTable extends StatelessWidget {
                       'View Report',
                       style: TextStyle(color: c.green, fontSize: 12.5),
                     ),
-                    onPressed: () => showDialog<void>(
-                      context: context,
-                      builder: (_) => _ReportDetailDialog(reportId: r.id),
+                    onPressed: () => showAdminReportDialog(
+                      context,
+                      palette: c,
+                      reportId: r.id,
                     ),
                   ),
                 ),
@@ -858,6 +837,9 @@ class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
       .collection('products')
       .where('priceFlag.type', isEqualTo: 'high_price')
       .snapshots();
+
+  // One key per flagged price: the listing and the row's place in it.
+  final Set<String> _ticked = {};
 
   String _peso(dynamic value) =>
       value is num ? '₱${value.toStringAsFixed(2)}' : '—';
@@ -896,8 +878,17 @@ class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
           final flaggedAt = flag['flaggedAt'];
           for (final raw in (flag['items'] as List? ?? const [])) {
             final item = Map<String, dynamic>.from(raw as Map);
+            final key = '${doc.id}#${rows.length}';
             rows.add(
               DataRow(
+                selected: _ticked.contains(key),
+                onSelectChanged: (on) => setState(() {
+                  if (on ?? false) {
+                    _ticked.add(key);
+                  } else {
+                    _ticked.remove(key);
+                  }
+                }),
                 cells: [
                   DataCell(
                     Text(
@@ -950,41 +941,44 @@ class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
           }
         }
 
-        return Container(
-          decoration: BoxDecoration(
-            color: c.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: c.border),
-          ),
-          padding: const EdgeInsets.all(8),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
-              dataRowColor: WidgetStateProperty.all(Colors.transparent),
-              columnSpacing: 28,
-              horizontalMargin: 12,
-              headingTextStyle: TextStyle(
-                color: c.textSecondary,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-              dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
-              columns: const [
-                DataColumn(label: Text('Product')),
-                DataColumn(label: Text('Farmer')),
-                DataColumn(label: Text('Price Type')),
-                DataColumn(label: Text('Entered Price')),
-                DataColumn(label: Text('Suggested Range')),
-                DataColumn(label: Text('Above Range')),
-                DataColumn(label: Text('Data Availability')),
-                DataColumn(label: Text('Reason')),
-                DataColumn(label: Text('Status')),
-                DataColumn(label: Text('Flagged')),
-              ],
-              rows: rows,
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            // Above the table, so it is in view without scrolling.
+            AdminSelectionNote(
+              count: _ticked.length,
+              onClear: () => setState(_ticked.clear),
             ),
-          ),
+            AdminTableFit(
+              table: DataTable(
+                headingRowColor: WidgetStateProperty.all(
+                  adminTableHeaderColor(c),
+                ),
+                dataRowColor: adminTableRowColor(c),
+                columnSpacing: kAdminTableColumnSpacing,
+                horizontalMargin: kAdminTableMargin,
+                headingTextStyle: adminTableHeaderStyle(c),
+                dataTextStyle: TextStyle(
+                  fontFamily: kAdminFontFamily,
+                  color: c.textPrimary,
+                  fontSize: 13,
+                ),
+                columns: const [
+                  DataColumn(label: Text('Product')),
+                  DataColumn(label: Text('Farmer')),
+                  DataColumn(label: Text('Price Type')),
+                  DataColumn(label: Text('Entered Price')),
+                  DataColumn(label: Text('Suggested Range')),
+                  DataColumn(label: Text('Above Range')),
+                  DataColumn(label: Text('Data Availability')),
+                  DataColumn(label: Text('Reason')),
+                  DataColumn(label: Text('Status')),
+                  DataColumn(label: Text('Flagged')),
+                ],
+                rows: rows,
+              ),
+            ),
+          ],
         );
       },
     );
@@ -997,6 +991,7 @@ class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
 
 class _ViolationSummary {
   final String farmerId;
+  final String farmerRsba;
   final String farmerName;
   final String accountStatus;
   final int confirmedCount;
@@ -1004,6 +999,7 @@ class _ViolationSummary {
   final String? lastAction;
   const _ViolationSummary({
     required this.farmerId,
+    required this.farmerRsba,
     required this.farmerName,
     required this.accountStatus,
     required this.confirmedCount,
@@ -1015,33 +1011,33 @@ class _ViolationSummary {
 class _ViolationsTable extends StatelessWidget {
   final AdminPalette c;
   final List<_ViolationSummary> rows;
-  const _ViolationsTable({required this.c, required this.rows});
+  final Set<String> ticked;
+  final void Function(String id, bool? ticked) onTicked;
+  const _ViolationsTable({
+    required this.c,
+    required this.rows,
+    required this.ticked,
+    required this.onTicked,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: c.border),
-      ),
-      padding: const EdgeInsets.all(8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
-          dataRowColor: WidgetStateProperty.all(Colors.transparent),
-          columnSpacing: 28,
-          horizontalMargin: 12,
-          headingTextStyle: TextStyle(
-            color: c.textSecondary,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+    return SizedBox(
+      child: AdminTableFit(
+        table: DataTable(
+          headingRowColor: WidgetStateProperty.all(adminTableHeaderColor(c)),
+          dataRowColor: adminTableRowColor(c),
+          columnSpacing: kAdminTableColumnSpacing,
+          horizontalMargin: kAdminTableMargin,
+          headingTextStyle: adminTableHeaderStyle(c),
+          dataTextStyle: TextStyle(
+            fontFamily: kAdminFontFamily,
+            color: c.textPrimary,
+            fontSize: 13,
           ),
-          dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
           columns: const [
-            DataColumn(label: Text('Farmer ID')),
-            DataColumn(label: Text('Farmer Name')),
+            DataColumn(label: Text('RSBA No.')),
+            DataColumn(label: Text('Name')),
             DataColumn(label: Text('Confirmed Violations'), numeric: true),
             DataColumn(label: Text('Last Violation')),
             DataColumn(label: Text('Current Account Status')),
@@ -1050,8 +1046,10 @@ class _ViolationsTable extends StatelessWidget {
           ],
           rows: rows.map((r) {
             return DataRow(
+              selected: ticked.contains(r.farmerId),
+              onSelectChanged: (on) => onTicked(r.farmerId, on),
               cells: [
-                DataCell(Text(_shortId(r.farmerId))),
+                DataCell(Text(r.farmerRsba)),
                 DataCell(Text(r.farmerName)),
                 DataCell(Text('${r.confirmedCount}')),
                 DataCell(Text(_formatDate(r.lastViolation))),
@@ -1066,12 +1064,13 @@ class _ViolationsTable extends StatelessWidget {
                       'View History',
                       style: TextStyle(color: c.green, fontSize: 12.5),
                     ),
-                    onPressed: () => showDialog<void>(
-                      context: context,
-                      builder: (_) => _FarmerViolationHistoryDialog(
-                        farmerId: r.farmerId,
-                        farmerName: r.farmerName,
-                      ),
+                    // This account's reports and violations; each opens
+                    // its source report.
+                    onPressed: () => showAdminModerationHistory(
+                      context,
+                      palette: c,
+                      uid: r.farmerId,
+                      name: r.farmerName,
                     ),
                   ),
                 ),
@@ -1118,18 +1117,25 @@ Future<_FarmerViolationHistory> _loadFarmerViolationHistory(
     );
   }
 
-  final byFarmerId = await FirebaseFirestore.instance
-      .collection('reports')
-      .where('farmerId', isEqualTo: farmerId)
-      .get();
-  final byReportedUserId = await FirebaseFirestore.instance
-      .collection('reports')
-      .where('reportedUserId', isEqualTo: farmerId)
-      .get();
+  // The two reads don't depend on each other: side by side, not in turn.
+  final reports = FirebaseFirestore.instance.collection('reports');
+  final results = await AdminPerf.time(
+    'moderation: farmer violation history',
+    () => Future.wait([
+      reports.where('farmerId', isEqualTo: farmerId).get(),
+      reports.where('reportedUserId', isEqualTo: farmerId).get(),
+    ]),
+    describe: (r) => '${r[0].docs.length} + ${r[1].docs.length} reports',
+  );
+  final byFarmerId = results[0];
+  final byReportedUserId = results[1];
 
   final seen = <String>{};
   final docs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
   for (final d in [...byFarmerId.docs, ...byReportedUserId.docs]) {
+    // A review report names the farmer who filed it as farmerId: that one
+    // is not about them.
+    if (reportedUserIdOf(d.data()) != farmerId) continue;
     if (seen.add(d.id)) docs.add(d);
   }
 
@@ -1160,6 +1166,7 @@ Future<_FarmerViolationHistory> _loadFarmerViolationHistory(
             id: d.id,
             data: d.data(),
             farmerId: farmerId,
+            farmerRsba: kNoFarmerId,
             farmerName: '',
             farmerBarangay: '—',
             farmerApprovalStatus: '—',
@@ -1171,137 +1178,78 @@ Future<_FarmerViolationHistory> _loadFarmerViolationHistory(
   );
 }
 
-class _FarmerViolationHistoryDialog extends StatelessWidget {
-  final String farmerId;
-  final String farmerName;
-  const _FarmerViolationHistoryDialog({
-    required this.farmerId,
-    required this.farmerName,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<_FarmerViolationHistory>(
-      future: _loadFarmerViolationHistory(farmerId),
-      builder: (context, snap) {
-        if (snap.connectionState != ConnectionState.done) {
-          return const AlertDialog(
-            content: SizedBox(
-              height: 120,
-              child: Center(child: CircularProgressIndicator()),
-            ),
-          );
-        }
-        if (snap.hasError || !snap.hasData) {
-          return AlertDialog(
-            title: const Text('Something went wrong'),
-            content: const Text(
-              'Could not load violation history. Please try again.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
-              ),
-            ],
-          );
-        }
-        final h = snap.data!;
-        return AlertDialog(
-          title: Text('$farmerName — Violation History'),
-          content: SizedBox(
-            width: 480,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _detailRow(
-                    'Confirmed Violations',
-                    '${h.confirmedViolations}',
-                  ),
-                  _detailRow('Warnings Issued', '${h.warnings}'),
-                  _detailRow('Suspensions', '${h.suspensions}'),
-                  const SizedBox(height: 10),
-                  _sectionLabel('Related Reports'),
-                  if (h.relatedReports.isEmpty)
-                    Text(
-                      'No related reports.',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 12.5),
-                    )
-                  else
-                    ...h.relatedReports.map((r) {
-                      final action = r.moderationAction != null
-                          ? _capitalize(r.moderationAction!)
-                          : 'No decision yet';
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Text(
-                          '${_shortId(r.id)}  •  ${r.reason}  •  ${_reportStatusLabel(r)}  •  $action  •  ${_formatDate(r.createdAt)}',
-                          style: const TextStyle(fontSize: 12.5),
-                        ),
-                      );
-                    }),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Close'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
 // ============================================================
 // REPORT DETAIL DIALOG — the review + decision workflow
 // ============================================================
 
 class _ReportDetailDialog extends StatefulWidget {
   final String reportId;
-  const _ReportDetailDialog({required this.reportId});
+
+  /// The portal's colours: a popup is outside AdminThemeScope.
+  final AdminPalette palette;
+  const _ReportDetailDialog({required this.reportId, required this.palette});
 
   @override
   State<_ReportDetailDialog> createState() => _ReportDetailDialogState();
 }
 
-class _ReportDetailDialogState extends State<_ReportDetailDialog> {
-  bool _claimAttempted = false;
+class _ReportDetailDialogState extends State<_ReportDetailDialog>
+    with AdminReadOnce {
   bool _busy = false;
 
-  /// "Admin opens report -> Under Review" (workflow spec): the first time
-  /// this dialog sees a still-pending report, it claims it once. Guarded by
-  /// _claimAttempted so a rebuild (e.g. the report doc's own stream ticking)
-  /// never re-fires the write.
-  void _claimIfPending(Map<String, dynamic> report) {
-    if (_claimAttempted) return;
-    _claimAttempted = true;
-    if ((report['status'] ?? 'pending') != 'pending') return;
+  // The reported account's own user record, read once per popup.
+  Future<DocumentSnapshot<Map<String, dynamic>>> _reportedUser(String uid) =>
+      readOnce(
+        'user/$uid',
+        () => FirebaseFirestore.instance.collection('users').doc(uid).get(),
+      );
+
+  /// Pending → Under Review, when the Admin chooses Start Review. A report
+  /// is not moved on just by being opened.
+  Future<void> _startReview(Map<String, dynamic> report) async {
+    if (_busy) return;
+    if (!await _ensureOnline(context)) return;
+    setState(() => _busy = true);
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
     final reportRef = FirebaseFirestore.instance
         .collection('reports')
         .doc(widget.reportId);
-    reportRef
-        .update({
+    final historyRef = reportRef.collection('history').doc();
+    try {
+      await FirebaseFirestore.instance.runTransaction<void>((
+        transaction,
+      ) async {
+        final latest = await transaction.get(reportRef);
+        if (!latest.exists ||
+            (latest.data()?['status'] ?? 'pending') != 'pending') {
+          return;
+        }
+        transaction.update(reportRef, {
           'status': 'under_review',
           'reviewedBy': adminUid,
           'reviewedAt': FieldValue.serverTimestamp(),
-        })
-        .then((_) {
-          reportRef.collection('history').add({
-            'action': 'under_review',
-            'adminId': adminUid,
-            'reason': null,
-            'notes': null,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
-        })
-        .catchError((_) {});
+        });
+        transaction.set(historyRef, {
+          'action': 'under_review',
+          'adminId': adminUid,
+          'reason': null,
+          'notes': null,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      });
+      AuditLogService.log(
+        AuditAction.startReportReview,
+        'Started review of report ${_shortId(widget.reportId)} about '
+        '${_firstNonEmpty([report['reportedUserName']]) ?? 'a user'}.',
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not start the review: $error')),
+        );
+      }
+    }
+    if (mounted) setState(() => _busy = false);
   }
 
   Future<void> _runAction({
@@ -1311,111 +1259,159 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     required String reason,
     required String notes,
     String? severity,
+    // Set when a violation is confirmed: what the Admin chose to do.
+    ViolationAction? violation,
+    String? reportedRole,
   }) async {
     if (_busy) return;
     if (!await _ensureOnline(context)) return;
     setState(() => _busy = true);
     try {
       final adminUid = FirebaseAuth.instance.currentUser?.uid;
-      final farmerId = (report['farmerId'] ?? report['reportedUserId'] ?? '')
-          .toString();
+      // The reported account, by uid: the one a suspension or ban applies
+      // to, and the one the violation is recorded against.
+      final farmerId = reportedUserIdOf(report);
       final productId = report['productId']?.toString();
       final reviewId = report['reviewId']?.toString();
 
-      final batch = FirebaseFirestore.instance.batch();
       final reportRef = FirebaseFirestore.instance
           .collection('reports')
           .doc(widget.reportId);
-      batch.update(reportRef, {
-        'status': 'resolved',
-        'moderationAction': action,
-        'violationConfirmed': violationConfirmed,
-        'violationSeverity': ?severity,
-        'adminNotes': notes,
-        'reviewedBy': adminUid,
-        'reviewedAt': FieldValue.serverTimestamp(),
+      final historyRef = reportRef.collection('history').doc();
+      await FirebaseFirestore.instance.runTransaction<void>((batch) async {
+        final latest = await batch.get(reportRef);
+        if (!latest.exists ||
+            ![
+              'pending',
+              'under_review',
+            ].contains(latest.data()?['status'] ?? 'pending')) {
+          throw StateError(
+            'This report has already been resolved or removed. Close it and refresh before taking another action.',
+          );
+        }
+        batch.update(reportRef, {
+          'status': 'resolved',
+          'moderationAction': action,
+          'violationConfirmed': violationConfirmed,
+          'violationSeverity': ?severity,
+          'adminNotes': notes,
+          'reviewedBy': adminUid,
+          'reviewedAt': FieldValue.serverTimestamp(),
+        });
+
+        // Both outcomes block marketplace visibility. Preserve the distinct
+        // decision for the listings table and explicit admin restoration.
+        if ((action == 'hidden' || action == 'removed') &&
+            productId != null &&
+            productId.isNotEmpty) {
+          batch.update(
+            FirebaseFirestore.instance.collection('products').doc(productId),
+            {
+              'isSuspended': true,
+              'moderationStatus': action,
+              'moderationReason': reason,
+              'moderatedBy': adminUid,
+              'moderatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        }
+        if (action == 'review_removed' &&
+            reviewId != null &&
+            reviewId.isNotEmpty) {
+          batch.update(
+            FirebaseFirestore.instance
+                .collection('productReviews')
+                .doc(reviewId),
+            {
+              'moderationStatus': 'removed',
+              'moderatedBy': adminUid,
+              'moderatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        }
+        if (action == 'suspended' && farmerId.isNotEmpty) {
+          batch.update(
+            FirebaseFirestore.instance.collection('users').doc(farmerId),
+            {
+              'accountStatus': 'suspended',
+              'suspensionReason': reason,
+              'moderationUpdatedBy': adminUid,
+              'moderationUpdatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        }
+        if (action == 'banned' && farmerId.isNotEmpty) {
+          batch.update(
+            FirebaseFirestore.instance.collection('users').doc(farmerId),
+            {
+              'accountStatus': 'banned',
+              'banReason': reason,
+              'moderationUpdatedBy': adminUid,
+              'moderationUpdatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        }
+
+        // A confirmed violation gets a record of its own, tied to the
+        // reported account by uid and to this report — its id is the
+        // report's, so a report can never yield two.
+        if (violation != null && farmerId.isNotEmpty) {
+          batch.set(
+            FirebaseFirestore.instance
+                .collection('violations')
+                .doc(widget.reportId),
+            violationRecord(
+              reportId: widget.reportId,
+              report: report,
+              reportedUserRole: reportedRole,
+              action: violation,
+              reason: reason,
+              confirmedBy: adminUid,
+              confirmedAt: FieldValue.serverTimestamp(),
+            ),
+          );
+        }
+
+        // Save the decision and its append-only history atomically.
+        batch.set(historyRef, {
+          'action': action,
+          'adminId': adminUid,
+          'reason': reason,
+          'notes': notes,
+          'severity': ?severity,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
       });
 
-      // Hide/Remove both map to the existing isSuspended gate — already
-      // respected by every buyer-facing query (marketplace listing, order
-      // placement) — no new visibility field needed.
-      if ((action == 'hidden' || action == 'removed') &&
-          productId != null &&
-          productId.isNotEmpty) {
-        batch.update(
-          FirebaseFirestore.instance.collection('products').doc(productId),
-          {'isSuspended': true},
-        );
-      }
-      if (action == 'review_removed' &&
-          reviewId != null &&
-          reviewId.isNotEmpty) {
-        batch.update(
-          FirebaseFirestore.instance.collection('productReviews').doc(reviewId),
-          {
-            'moderationStatus': 'removed',
-            'moderatedBy': adminUid,
-            'moderatedAt': FieldValue.serverTimestamp(),
-          },
-        );
-      }
-      if (action == 'suspended' && farmerId.isNotEmpty) {
-        batch.update(
-          FirebaseFirestore.instance.collection('users').doc(farmerId),
-          {
-            'accountStatus': 'suspended',
-            'suspensionReason': reason,
-            'moderationUpdatedBy': adminUid,
-            'moderationUpdatedAt': FieldValue.serverTimestamp(),
-          },
-        );
-      }
-      if (action == 'banned' && farmerId.isNotEmpty) {
-        batch.update(
-          FirebaseFirestore.instance.collection('users').doc(farmerId),
-          {
-            'accountStatus': 'banned',
-            'banReason': reason,
-            'moderationUpdatedBy': adminUid,
-            'moderationUpdatedAt': FieldValue.serverTimestamp(),
-          },
-        );
-      }
-
-      await batch.commit();
-      // Append-only audit trail — never overwrites a previous entry.
-      await reportRef.collection('history').add({
-        'action': action,
-        'adminId': adminUid,
-        'reason': reason,
-        'notes': notes,
-        'severity': ?severity,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-
-      final auditAction = _auditActionFor(action);
+      final auditAction = _auditActionFor(
+        action,
+        farmer: reportedRole == 'farmer',
+      );
       if (auditAction != null) {
         final who =
             _firstNonEmpty([
               report['reportedUserName'],
               report['sellerName'],
             ]) ??
-            (farmerId.isEmpty ? 'Unknown seller' : 'farmer $farmerId');
+            (farmerId.isEmpty ? 'Unknown user' : 'user $farmerId');
         final productName = report['productName']?.toString();
         final target = productName != null && productName.isNotEmpty
             ? '"$productName" ($who)'
             : who;
         AuditLogService.log(
           auditAction,
-          '${_capitalize(action)}: $target.${reason.isNotEmpty ? ' Reason: $reason' : ''}',
+          '${violation != null ? 'Violation confirmed — ' : ''}'
+          '${adminDecisionLabel(action)}: $target '
+          '(report ${_shortId(widget.reportId)}).'
+          '${reason.isNotEmpty ? ' Reason: $reason' : ''}',
         );
       }
 
       if (!mounted) return;
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Report updated: ${_capitalize(action)}.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('${adminDecisionLabel(action)}.')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -1425,28 +1421,49 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     }
   }
 
-  Future<void> _reactivateFarmer(String farmerId) async {
+  Future<void> _reactivateFarmer(String farmerId, {String? role}) async {
     if (_busy) return;
     if (!await _ensureOnline(context)) return;
     setState(() => _busy = true);
     try {
       final adminUid = FirebaseAuth.instance.currentUser?.uid;
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(farmerId)
-          .update({
-            'accountStatus': 'active',
-            'suspensionReason': FieldValue.delete(),
-            'suspendedUntil': FieldValue.delete(),
-            'banReason': FieldValue.delete(),
-            'moderationUpdatedBy': adminUid,
-            'moderationUpdatedAt': FieldValue.serverTimestamp(),
-          });
+      final batch = FirebaseFirestore.instance.batch();
+      batch.update(
+        FirebaseFirestore.instance.collection('users').doc(farmerId),
+        {
+          'accountStatus': 'active',
+          'suspensionReason': FieldValue.delete(),
+          'suspendedUntil': FieldValue.delete(),
+          'banReason': FieldValue.delete(),
+          'moderationUpdatedBy': adminUid,
+          'moderationUpdatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+      batch.set(
+        FirebaseFirestore.instance
+            .collection('reports')
+            .doc(widget.reportId)
+            .collection('history')
+            .doc(),
+        {
+          'action': 'reactivated',
+          'adminId': adminUid,
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+      );
+      await batch.commit();
+      AuditLogService.log(
+        role == 'farmer'
+            ? AuditAction.reactivateFarmer
+            : AuditAction.reactivateAccount,
+        'Reactivated the account of user $farmerId '
+        '(report ${_shortId(widget.reportId)}).',
+      );
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Farmer account reactivated.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Account reactivated.')));
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
@@ -1484,34 +1501,34 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  TextField(
+                  AdminField(
                     controller: reasonController,
                     minLines: 2,
                     maxLines: 3,
-                    decoration: InputDecoration(
+                    decoration: adminMultilineDecoration(
+                      dialogContext,
                       labelText: requireReason
                           ? 'Reason (required)'
                           : 'Reason (optional)',
-                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  AdminField(
                     controller: notesController,
                     minLines: 2,
                     maxLines: 3,
-                    decoration: const InputDecoration(
+                    decoration: adminMultilineDecoration(
+                      dialogContext,
                       labelText: 'Admin notes (internal, optional)',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   if (severityOptions != null) ...[
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
                       initialValue: severity,
+                      borderRadius: BorderRadius.circular(kAdminPopupRadius),
                       decoration: const InputDecoration(
                         labelText: 'Violation severity',
-                        border: OutlineInputBorder(),
                       ),
                       items: severityOptions
                           .map(
@@ -1562,13 +1579,165 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
     );
   }
 
+  // Confirm Violation: the Admin picks what to do about it — only the
+  // actions that apply to this report — and says why.
+  Future<void> _openViolationDialog(Map<String, dynamic> report) async {
+    final c = widget.palette;
+    final options = violationActionsFor(report);
+    final reasonController = TextEditingController();
+    final notesController = TextEditingController();
+    var chosen = options.first;
+    var missingReason = false;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Confirm Violation'),
+          content: SizedBox(
+            width: 440,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'This records a confirmed violation on the reported '
+                    'account. Choose the action to take.',
+                    style: TextStyle(color: c.textSecondary, fontSize: 13),
+                  ),
+                  const SizedBox(height: 10),
+                  for (final option in options)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: () => setDialogState(() => chosen = option),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              option == chosen
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_unchecked,
+                              size: 20,
+                              color: option == chosen
+                                  ? adminActionColor(c)
+                                  : c.textMuted,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                option.label,
+                                style: TextStyle(
+                                  color: c.textPrimary,
+                                  fontSize: 13.5,
+                                  fontWeight: option == chosen
+                                      ? FontWeight.w700
+                                      : FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  AdminField(
+                    controller: reasonController,
+                    minLines: 2,
+                    maxLines: 3,
+                    decoration: adminMultilineDecoration(
+                      dialogContext,
+                      labelText: 'Reason (required)',
+                    ),
+                  ),
+                  if (missingReason)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 4),
+                      child: Text(
+                        'Give the reason for this decision.',
+                        style: TextStyle(color: c.red, fontSize: 12),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  AdminField(
+                    controller: notesController,
+                    minLines: 2,
+                    maxLines: 3,
+                    decoration: adminMultilineDecoration(
+                      dialogContext,
+                      labelText: 'Admin notes (internal, optional)',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (reasonController.text.trim().isEmpty) {
+                  setDialogState(() => missingReason = true);
+                  return;
+                }
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: const Text('Confirm Violation'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true) return;
+
+    // Whose account it is decides how a suspension or ban is logged, and
+    // is kept on the violation record.
+    String? role;
+    final uid = reportedUserIdOf(report);
+    if (uid.isNotEmpty) {
+      try {
+        role = (await _reportedUser(uid)).data()?['role']?.toString();
+      } catch (_) {}
+    }
+    await _runAction(
+      report: report,
+      action: chosen.code,
+      violationConfirmed: true,
+      reason: reasonController.text.trim(),
+      notes: notesController.text.trim(),
+      severity: chosen.severity,
+      violation: chosen,
+      reportedRole: role,
+    );
+  }
+
+  // Opens one of the portal's pages from the popup, which closes first.
+  void _openPage(AdminNotificationTarget page) {
+    Navigator.of(context).pop();
+    adminOpenPageRequest.value = page;
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Each read below is started once (AdminReadOnce): the popup rebuilds
+    // whenever the report changes or the Admin types, and must not fetch
+    // the farmer, listing, review and history again each time.
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('reports')
-          .doc(widget.reportId)
-          .snapshots(),
+      stream: watchOnce(
+        'report',
+        () => FirebaseFirestore.instance
+            .collection('reports')
+            .doc(widget.reportId)
+            .snapshots(),
+      ),
       builder: (context, snap) {
         if (snap.hasError) {
           return AlertDialog(
@@ -1588,7 +1757,7 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
           return const AlertDialog(
             content: SizedBox(
               height: 120,
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: AdminLoadingBar()),
             ),
           );
         }
@@ -1608,19 +1777,23 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
           );
         }
 
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) => _claimIfPending(report),
-        );
-
         final hasProduct =
             (report['productId']?.toString().trim().isNotEmpty ?? false);
         final targetType =
             (report['targetType'] ?? (hasProduct ? 'listing' : 'farmer'))
                 .toString();
-        final farmerId = (report['farmerId'] ?? report['reportedUserId'] ?? '')
-            .toString();
+        // The reported account's uid: the key to its user record, its
+        // history and any action taken on it.
+        final farmerId = reportedUserIdOf(report);
+        final c = widget.palette;
         final productId = report['productId']?.toString();
         final reviewId = report['reviewId']?.toString();
+        final conversationId = (report['conversationId'] ?? '')
+            .toString()
+            .trim();
+        final orderId = (report['relatedOrderId'] ?? report['orderId'] ?? '')
+            .toString()
+            .trim();
         final rawStatus = (report['status'] ?? 'pending').toString();
         final bucketStatus = rawStatus == 'dismissed' ? 'resolved' : rawStatus;
         final isResolved = bucketStatus == 'resolved';
@@ -1661,8 +1834,8 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                   ),
                   if (moderationAction != null)
                     _detailRow(
-                      'Admin Action Taken',
-                      _capitalize(moderationAction),
+                      'Admin Decision',
+                      adminDecisionLabel(moderationAction),
                     ),
                   if (adminNotes.isNotEmpty)
                     _detailRow('Admin Notes', adminNotes),
@@ -1673,18 +1846,13 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                   _detailRow('Reporter ID', _shortId(reporterId)),
                   const SizedBox(height: 10),
 
-                  _sectionLabel('Reported Farmer'),
+                  _sectionLabel('Reported User'),
                   FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                    future: farmerId.isEmpty
-                        ? null
-                        : FirebaseFirestore.instance
-                              .collection('users')
-                              .doc(farmerId)
-                              .get(),
+                    future: farmerId.isEmpty ? null : _reportedUser(farmerId),
                     builder: (context, farmerSnap) {
                       if (farmerId.isEmpty) {
                         return Text(
-                          'No farmer on record for this report.',
+                          'No user is on record for this report.',
                           style: TextStyle(
                             color: Colors.grey[600],
                             fontSize: 12.5,
@@ -1704,7 +1872,7 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                       final farmer = farmerSnap.data?.data();
                       if (farmer == null) {
                         return Text(
-                          'Farmer account not found.',
+                          'This user\'s account could not be found.',
                           style: TextStyle(
                             color: Colors.grey[600],
                             fontSize: 12.5,
@@ -1716,24 +1884,95 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                             farmer['fullName'],
                             farmer['name'],
                           ]) ??
-                          'Unknown Farmer';
-                      final barangay =
-                          _firstNonEmpty([farmer['barangay']]) ?? '—';
-                      final approvalStatus = (farmer['approvalStatus'] ?? '—')
-                          .toString();
-                      final accountStatus =
-                          (farmer['accountStatus'] ?? 'active').toString();
+                          'Unnamed account';
+                      final role = (farmer['role'] ?? '').toString();
+                      final isFarmer = role == 'farmer';
+                      final email = (farmer['email'] ?? '').toString().trim();
+                      final area = [
+                        _firstNonEmpty([farmer['barangay']]),
+                        _firstNonEmpty([
+                          farmer['municipality'],
+                          farmer['province'],
+                        ]),
+                      ].whereType<String>().join(', ');
+                      final accountStatus = accountStatusOf(farmer);
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _detailRow('Farmer Name', name),
-                          _detailRow('Farmer ID', _shortId(farmerId)),
-                          _detailRow('Barangay', barangay),
+                          // The same account as in User Accounts: clicking
+                          // the name opens it.
+                          InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: () => showAdminAccountDialog(
+                              context,
+                              palette: c,
+                              uid: farmerId,
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Row(
+                                children: [
+                                  adminUserAvatar(
+                                    c,
+                                    name: name,
+                                    photoUrl: farmer['photoUrl']?.toString(),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          name,
+                                          style: TextStyle(
+                                            color: adminActionColor(c),
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 14.5,
+                                            decoration:
+                                                TextDecoration.underline,
+                                          ),
+                                        ),
+                                        Text(
+                                          '${isFarmer ? 'Farmer' : 'Buyer'} · '
+                                          'View account',
+                                          style: TextStyle(
+                                            color: Colors.grey[600],
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.open_in_new_rounded,
+                                    size: 16,
+                                    color: Colors.grey[600],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
                           _detailRow(
-                            'Approval Status',
-                            approvalStatus.isEmpty
+                            '${isFarmer ? 'Farmer' : 'Buyer'} ID',
+                            _shortId(farmerId),
+                          ),
+                          if (isFarmer)
+                            _detailRow(
+                              'RSBA No.',
+                              farmerIdOf(farmer) ?? kNoFarmerId,
+                            ),
+                          // A buyer's email is partly hidden, as it is
+                          // everywhere in the portal.
+                          _detailRow(
+                            'Email',
+                            email.isEmpty
                                 ? '—'
-                                : _capitalize(approvalStatus),
+                                : (isFarmer ? email : maskEmail(email)),
+                          ),
+                          _detailRow(
+                            'General Area',
+                            area.isEmpty ? 'Not saved' : area,
                           ),
                           Padding(
                             padding: const EdgeInsets.symmetric(vertical: 4),
@@ -1750,10 +1989,7 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                                     ),
                                   ),
                                 ),
-                                _accountStatusBadge(
-                                  AdminThemeScope.of(context).palette,
-                                  accountStatus,
-                                ),
+                                adminAccountStatusBadge(c, accountStatus),
                               ],
                             ),
                           ),
@@ -1764,7 +2000,8 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                               label: const Text('Reactivate Account'),
                               onPressed: _busy
                                   ? null
-                                  : () => _reactivateFarmer(farmerId),
+                                  : () =>
+                                        _reactivateFarmer(farmerId, role: role),
                             ),
                           ],
                         ],
@@ -1773,15 +2010,47 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                   ),
                   const SizedBox(height: 10),
 
+                  // What the report is tied to, by id: each opens the page
+                  // that record is on.
+                  if ((productId != null && productId.isNotEmpty) ||
+                      orderId.isNotEmpty ||
+                      conversationId.isNotEmpty) ...[
+                    _sectionLabel('Related Records'),
+                    if (productId != null && productId.isNotEmpty)
+                      _linkRow(
+                        'Related Listing',
+                        (report['productName'] ?? _shortId(productId))
+                            .toString(),
+                        'Open Listings',
+                        () => _openPage(AdminNotificationTarget.listings),
+                      ),
+                    if (orderId.isNotEmpty)
+                      _linkRow(
+                        'Related Order',
+                        _shortId(orderId),
+                        'Open Transactions',
+                        () => _openPage(AdminNotificationTarget.transactions),
+                      ),
+                    if (conversationId.isNotEmpty)
+                      _detailRow(
+                        'Related Conversation',
+                        _shortId(conversationId),
+                      ),
+                    const SizedBox(height: 10),
+                  ],
+
                   if (targetType == 'listing') ...[
                     _sectionLabel('Reported Listing'),
                     FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                       future: (productId == null || productId.isEmpty)
                           ? null
-                          : FirebaseFirestore.instance
-                                .collection('products')
-                                .doc(productId)
-                                .get(),
+                          : readOnce(
+                              'product/$productId',
+                              () => FirebaseFirestore.instance
+                                  .collection('products')
+                                  .doc(productId)
+                                  .get(),
+                            ),
                       builder: (context, productSnap) {
                         if (productId == null || productId.isEmpty) {
                           return Text(
@@ -1864,7 +2133,12 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                             ),
                             _detailRow('Quantity', qty?.toString() ?? '—'),
                             _detailRow('Listing Status', listingStatus),
-                            _detailRow('Listing Owner', _shortId(farmerId)),
+                            _detailRow(
+                              'Listing Owner',
+                              _shortId(
+                                (product['farmerId'] ?? farmerId).toString(),
+                              ),
+                            ),
                           ],
                         );
                       },
@@ -1877,10 +2151,13 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
                     FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
                       future: (reviewId == null || reviewId.isEmpty)
                           ? null
-                          : FirebaseFirestore.instance
-                                .collection('productReviews')
-                                .doc(reviewId)
-                                .get(),
+                          : readOnce(
+                              'review/$reviewId',
+                              () => FirebaseFirestore.instance
+                                  .collection('productReviews')
+                                  .doc(reviewId)
+                                  .get(),
+                            ),
                       builder: (context, reviewSnap) {
                         if (reviewId == null || reviewId.isEmpty) {
                           return Text(
@@ -1940,7 +2217,10 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
 
                   _sectionLabel('Violation History'),
                   FutureBuilder<_FarmerViolationHistory>(
-                    future: _loadFarmerViolationHistory(farmerId),
+                    future: readOnce(
+                      'history/$farmerId',
+                      () => _loadFarmerViolationHistory(farmerId),
+                    ),
                     builder: (context, histSnap) {
                       if (histSnap.connectionState != ConnectionState.done) {
                         return const Padding(
@@ -1986,151 +2266,89 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog> {
               ),
             ),
           ),
-          actions: isResolved
-              ? [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                ]
-              : [
-                  TextButton(
-                    onPressed: _busy ? null : () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                  TextButton(
-                    onPressed: _busy
-                        ? null
-                        : () => _openActionDialog(
-                            report: report,
-                            title: 'Dismiss this report?',
-                            actionLabel: 'Dismiss',
-                            actionColor: Colors.grey,
-                            action: 'dismissed',
-                            violationConfirmed: false,
-                            requireReason: false,
-                          ),
-                    child: const Text('Dismiss Report'),
-                  ),
-                  if (targetType != 'review')
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.orange,
+          // Pending → Start Review → one of three decisions. A report is
+          // never treated as a violation until the Admin confirms one.
+          actions: [
+            TextButton(
+              onPressed: _busy ? null : () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+            if (bucketStatus == 'pending')
+              FilledButton.icon(
+                icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                label: const Text('Start Review'),
+                onPressed: _busy ? null : () => _startReview(report),
+              )
+            else if (!isResolved) ...[
+              TextButton(
+                onPressed: _busy
+                    ? null
+                    : () => _openActionDialog(
+                        report: report,
+                        title: 'Dismiss this report?',
+                        actionLabel: 'Dismiss Report',
+                        actionColor: Colors.grey,
+                        action: 'dismissed',
+                        violationConfirmed: false,
+                        requireReason: false,
                       ),
-                      onPressed: _busy
-                          ? null
-                          : () => _openActionDialog(
-                              report: report,
-                              title: 'Issue a warning?',
-                              actionLabel: 'Issue Warning',
-                              actionColor: Colors.orange,
-                              action: 'warning',
-                              violationConfirmed: true,
-                              severityOptions: const ['minor', 'moderate'],
-                              defaultSeverity: 'minor',
-                            ),
-                      child: const Text('Issue Warning'),
-                    ),
-                  if (targetType == 'review')
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
+                child: const Text('Dismiss Report'),
+              ),
+              OutlinedButton(
+                onPressed: _busy
+                    ? null
+                    : () => _openActionDialog(
+                        report: report,
+                        title: 'Resolve with no violation?',
+                        actionLabel: 'Resolve',
+                        actionColor: adminActionColor(c),
+                        action: 'no_violation',
+                        violationConfirmed: false,
+                        requireReason: false,
                       ),
-                      onPressed: _busy
-                          ? null
-                          : () => _openActionDialog(
-                              report: report,
-                              title: 'Remove this buyer review?',
-                              actionLabel: 'Remove Review',
-                              actionColor: Colors.red,
-                              action: 'review_removed',
-                              violationConfirmed: false,
-                              requireReason: true,
-                            ),
-                      child: const Text('Remove Review'),
-                    )
-                  else if (targetType == 'listing') ...[
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.blueGrey,
-                      ),
-                      onPressed: _busy
-                          ? null
-                          : () => _openActionDialog(
-                              report: report,
-                              title: 'Hide this listing?',
-                              actionLabel: 'Hide Listing',
-                              actionColor: Colors.blueGrey,
-                              action: 'hidden',
-                              violationConfirmed: true,
-                              severityOptions: const ['minor', 'moderate'],
-                              defaultSeverity: 'minor',
-                            ),
-                      child: const Text('Hide Listing'),
-                    ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: _busy
-                          ? null
-                          : () => _openActionDialog(
-                              report: report,
-                              title: 'Remove this listing?',
-                              actionLabel: 'Remove Listing',
-                              actionColor: Colors.red,
-                              action: 'removed',
-                              violationConfirmed: true,
-                              severityOptions: const ['moderate', 'serious'],
-                              defaultSeverity: 'moderate',
-                            ),
-                      child: const Text('Remove Listing'),
-                    ),
-                  ] else ...[
-                    OutlinedButton(
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.deepOrange,
-                      ),
-                      onPressed: _busy
-                          ? null
-                          : () => _openActionDialog(
-                              report: report,
-                              title: 'Temporarily suspend this Farmer?',
-                              actionLabel: 'Suspend',
-                              actionColor: Colors.deepOrange,
-                              action: 'suspended',
-                              violationConfirmed: true,
-                              severityOptions: const ['serious'],
-                              defaultSeverity: 'serious',
-                            ),
-                      child: const Text('Temporary Suspension'),
-                    ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red,
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: _busy
-                          ? null
-                          : () => _openActionDialog(
-                              report: report,
-                              title:
-                                  'Permanently deactivate this Farmer account?',
-                              actionLabel: 'Ban / Deactivate',
-                              actionColor: Colors.red,
-                              action: 'banned',
-                              violationConfirmed: true,
-                              severityOptions: const ['critical'],
-                              defaultSeverity: 'critical',
-                            ),
-                      child: const Text('Permanent Ban / Deactivate'),
-                    ),
-                  ],
-                ],
+                child: const Text('Resolve with No Violation'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: c.red,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: _busy ? null : () => _openViolationDialog(report),
+                child: const Text('Confirm Violation'),
+              ),
+            ],
+          ],
         );
       },
     );
   }
+}
+
+// A row whose value opens something.
+Widget _linkRow(
+  String label,
+  String value,
+  String linkLabel,
+  VoidCallback onOpen,
+) {
+  return Padding(
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 160,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.grey[700],
+            ),
+          ),
+        ),
+        Expanded(child: Text(value)),
+        TextButton(onPressed: onOpen, child: Text(linkLabel)),
+      ],
+    ),
+  );
 }

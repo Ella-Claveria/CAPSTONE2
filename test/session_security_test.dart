@@ -61,6 +61,37 @@ void main() {
       expect(decide({'role': 'something'}), AuthRouteDecision.missingRole);
       expect(decide({}), AuthRouteDecision.missingRole);
     });
+
+    test('unfinished registration resumes email verification', () {
+      expect(
+        decide(null, verified: false),
+        AuthRouteDecision.emailVerificationRequired,
+      );
+      expect(decide(null, verified: true), AuthRouteDecision.missingProfile);
+    });
+  });
+
+  // flutter test runs as the mobile build, where an admin is turned away;
+  // the web build's branch is the mirror image (admin in, everyone else
+  // blocked) and is exercised in the browser.
+  group('Admin Dashboard access', () {
+    test('an admin account is not let into the mobile app', () {
+      expect(decide({'role': 'admin'}), AuthRouteDecision.blockedAdminOnMobile);
+    });
+
+    test('an open dashboard keeps its access only while still an admin', () {
+      String? lost(Map<String, dynamic>? data) =>
+          AuthRoutingService.adminAccessLostReason(data);
+      expect(lost({'role': 'admin'}), isNull);
+      expect(lost({'role': 'admin', 'accountStatus': 'active'}), isNull);
+      // Demoted, suspended, banned, or the record removed.
+      expect(lost({'role': 'farmer'}), isNotNull);
+      expect(lost({'role': 'buyer'}), isNotNull);
+      expect(lost({}), isNotNull);
+      expect(lost({'role': 'admin', 'accountStatus': 'suspended'}), isNotNull);
+      expect(lost({'role': 'admin', 'accountStatus': 'banned'}), isNotNull);
+      expect(lost(null), isNotNull);
+    });
   });
 
   group('device identifier', () {

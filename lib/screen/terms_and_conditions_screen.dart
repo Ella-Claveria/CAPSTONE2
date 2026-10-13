@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -103,18 +104,7 @@ class TermsAndConditionsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bgLight,
-      appBar: AppBar(
-        backgroundColor: AppTheme.dark,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'Terms & Conditions',
-          style: GoogleFonts.montserrat(
-            fontWeight: FontWeight.bold,
-            fontSize: 17,
-          ),
-        ),
-      ),
+      appBar: const AgriAppBar(title: 'Terms & Conditions'),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
         children: [

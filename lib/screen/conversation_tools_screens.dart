@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
+import '../widgets/app_search_bar.dart';
+import '../widgets/agri_empty_state.dart';
 
 // Conversation tools opened from Conversation Info, shared by the Farmer
 // and Buyer chats:
@@ -214,33 +217,16 @@ class _ConversationSearchScreenState extends State<ConversationSearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        iconTheme: const IconThemeData(color: AppTheme.dark),
-        titleSpacing: 0,
-        title: TextField(
-          controller: _query,
-          autofocus: true,
-          textInputAction: TextInputAction.search,
-          style: GoogleFonts.montserrat(fontSize: 15),
-          decoration: InputDecoration(
-            hintText: 'Search this conversation',
-            hintStyle: GoogleFonts.montserrat(
-              fontSize: 15,
-              color: Colors.black38,
-            ),
-            border: InputBorder.none,
+      appBar: AgriAppBar(
+        titleWidget: Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: AppSearchBar(
+            hint: 'Search this conversation',
+            controller: _query,
+            autofocus: true,
+            onClear: _query.clear,
           ),
         ),
-        actions: [
-          if (_query.text.isNotEmpty)
-            IconButton(
-              tooltip: 'Clear',
-              icon: const Icon(Icons.close),
-              onPressed: _query.clear,
-            ),
-        ],
       ),
       body: FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
         future: _messages,
@@ -367,19 +353,7 @@ class _ConversationPhotosScreenState extends State<ConversationPhotosScreen> {
     final myUid = FirebaseAuth.instance.currentUser?.uid;
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        iconTheme: const IconThemeData(color: AppTheme.dark),
-        title: const Text(
-          'Photos',
-          style: TextStyle(
-            color: Colors.black87,
-            fontSize: 17,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
+      appBar: const AgriAppBar(title: 'Photos'),
       body: FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
         future: _messages,
         builder: (context, snapshot) {
@@ -400,29 +374,12 @@ class _ConversationPhotosScreenState extends State<ConversationPhotosScreen> {
               .toList();
           if (photos.isEmpty) {
             return Center(
-              child: Padding(
+              child: AgriEmptyState(
+                icon: Icons.photo_library_outlined,
+                title: 'No photos yet',
+                subtitle:
+                    'Photos you and $otherDisplayName send will appear here.',
                 padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.photo_library_outlined,
-                      size: 44,
-                      color: Colors.grey[400],
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      'No photos yet',
-                      style: TextStyle(fontSize: 14, color: Colors.grey[700]),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Photos you and $otherDisplayName send will appear here.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
-                    ),
-                  ],
-                ),
               ),
             );
           }

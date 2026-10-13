@@ -52,8 +52,8 @@ class _GoogleCompleteProfileScreenState
     text: widget.initialName ?? '',
   );
   // Holds only the 10 local digits — see RegisterScreen._mobileController's
-  // doc for the full rationale (fixed "+63 " prefix, required for farmers,
-  // optional for buyers).
+  // doc for the full rationale (fixed "+63 " prefix, required for both
+  // roles).
   final _mobileController = TextEditingController();
   late String _selectedRole = widget.initialRole == 'farmer'
       ? 'farmer'
@@ -164,13 +164,12 @@ class _GoogleCompleteProfileScreenState
     final mobile = _mobileController.text.trim();
     if (name.length < 3) return false;
     if (_nameHasDigits(name)) return false;
+    // Required for both roles — order/delivery/pick-up coordination.
+    if (!_mobileNumberValid(mobile)) return false;
     if (_isFarmer) {
-      if (!_mobileNumberValid(mobile)) return false;
       if (_selectedBarangay == null) return false;
       if (_certFile == null) return false;
       if (!_supportedProductsAcknowledged) return false;
-    } else {
-      if (mobile.isNotEmpty && !_mobileNumberValid(mobile)) return false;
     }
     if (!_agreedToTerms) return false;
     return true;
@@ -186,14 +185,14 @@ class _GoogleCompleteProfileScreenState
     return null;
   }
 
-  // Required for farmers (order/delivery/pick-up coordination); optional
-  // for buyers. "Must start with 9" shows live; "required"/"incomplete"
+  // Required for both roles (order/delivery/pick-up coordination).
+  // "Must start with 9" shows live; "required"/"incomplete"
   // only after a submit attempt — same rationale as RegisterScreen.
   String? get _mobileError {
     // Shared rules for every mobile field in the app — see ph_mobile.dart.
     return phMobileError(
       _mobileController.text.trim(),
-      required: _isFarmer,
+      required: true,
       submitted: _triedSubmit,
     );
   }
@@ -653,7 +652,7 @@ class _GoogleCompleteProfileScreenState
                       const SizedBox(height: 4),
                       Center(
                         child: Text(
-                          'Signed in as ${widget.email}',
+                          'Logged in as ${widget.email}',
                           style: AppTheme.body(
                             color: Colors.black54,
                             size: 12.5,
@@ -723,16 +722,10 @@ class _GoogleCompleteProfileScreenState
                       const SizedBox(height: 16),
 
                       // ---- Mobile Number ----
-                      // Required for farmers (order/delivery/pick-up
-                      // coordination); optional for buyers, who can also
-                      // give it later per order instead. Fixed +63 prefix —
-                      // no country dropdown, PH-only scope.
-                      Text(
-                        _isFarmer
-                            ? 'Mobile Number'
-                            : 'Mobile Number (optional)',
-                        style: AppTheme.label(),
-                      ),
+                      // Required for both roles (order/delivery/pick-up
+                      // coordination). Fixed +63 prefix — no country
+                      // dropdown, PH-only scope.
+                      Text('Mobile Number', style: AppTheme.label()),
                       const SizedBox(height: 8),
                       TextField(
                         controller: _mobileController,

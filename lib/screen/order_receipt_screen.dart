@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -34,13 +35,7 @@ class _OrderReceiptScreenState extends State<OrderReceiptScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F5),
-      appBar: AppBar(
-        title: const Text('Transaction Receipt'),
-        backgroundColor: Colors.white,
-        foregroundColor: AppTheme.dark,
-        elevation: 0,
-        titleTextStyle: AppTheme.heading(17).copyWith(color: AppTheme.dark),
-      ),
+      appBar: const AgriAppBar(title: 'Transaction Receipt'),
       body: FutureBuilder<(OrderReceipt, Uint8List)?>(
         future: _receipt,
         builder: (context, snapshot) {

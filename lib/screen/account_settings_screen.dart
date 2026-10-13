@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
@@ -14,7 +15,7 @@ class AccountSettingsScreen extends StatelessWidget {
 
   void _showLanguagePicker(BuildContext context) {
     final t = AppLocalizations.of(context)!;
-    final currentCode = LocaleController.instance.locale?.languageCode ?? 'en';
+    final currentCode = LocaleController.instance.languageCode;
     showAgriSheet<void>(
       context: context,
       title: t.selectLanguage,
@@ -49,7 +50,8 @@ class AccountSettingsScreen extends StatelessWidget {
     );
   }
 
-  void _showHelp(BuildContext context) {
+  // Also opened straight from the Manage Account screen.
+  static void showHelp(BuildContext context) {
     showAgriDialog<void>(
       context: context,
       builder: (dialogContext) => AgriDialog(
@@ -72,23 +74,16 @@ class AccountSettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        foregroundColor: _dark,
-        elevation: 1,
-        title: const Text('Account Settings'),
-      ),
+      appBar: const AgriAppBar(title: 'Account Settings'),
       body: ListView(
         children: [
           ListTile(
             leading: const Icon(Icons.language, color: _dark),
-            title: const Text('Language'),
+            title: Text(AppLocalizations.of(context)!.language),
             subtitle: ListenableBuilder(
               listenable: LocaleController.instance,
               builder: (context, _) => Text(
-                LocaleController.instance.locale?.languageCode == 'tl'
-                    ? 'Tagalog'
-                    : 'English',
+                LocaleController.instance.isTagalog ? 'Filipino' : 'English',
               ),
             ),
             trailing: const Icon(Icons.chevron_right),
@@ -128,7 +123,7 @@ class AccountSettingsScreen extends StatelessWidget {
             leading: const Icon(Icons.help_outline, color: _dark),
             title: const Text('Help & Support'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _showHelp(context),
+            onTap: () => showHelp(context),
           ),
         ],
       ),

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import '../widgets/agri_dialog.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -57,21 +57,40 @@ Future<void> applyAuthRouteResult(
     case AuthRouteDecision.missingProfile:
     case AuthRouteDecision.missingRole:
     case AuthRouteDecision.accountRestricted:
+      await _blockAndReturnToLogin(context, result);
+      return;
     case AuthRouteDecision.error:
-      await _blockAndReturnToLogin(context, result.message);
+      // The role could not be read at all (network, Firestore hiccup) —
+      // that is "unknown", not "unauthorized". On the web Admin Portal the
+      // session is kept, so retrying or refreshing doesn't need a fresh
+      // login; the account is only signed out once its role is confirmed.
+      await _blockAndReturnToLogin(context, result, signOut: !kIsWeb);
       return;
   }
 }
 
 Future<void> _blockAndReturnToLogin(
   BuildContext context,
-  String? message,
-) async {
+  AuthRouteResult result, {
+  bool signOut = true,
+}) async {
+  final message = result.message;
   // Never rely on just hiding a screen — always fully sign the disallowed
   // session out before returning to login. Goes through AuthService (not
   // FirebaseAuth directly) so this device's FCM token is also cleaned up
   // from the blocked account — see AuthService.signOut.
-  await AuthService().signOut();
+  if (signOut) {
+    await AuthService().signOut(
+      reason:
+          'route blocked: ${result.decision.name} '
+          '(role: ${result.role}) — $message',
+    );
+  } else {
+    debugPrint(
+      '[Auth] route check failed (${result.decision.name}) — session kept, '
+      'NOT signing out: $message',
+    );
+  }
   if (!context.mounted) return;
 
   await showAgriDialog<void>(
@@ -80,7 +99,7 @@ Future<void> _blockAndReturnToLogin(
     builder: (dialogContext) => AgriDialog(
       icon: Icons.lock_outline,
       tone: AgriTone.warning,
-      title: const Text('Unable to Sign In'),
+      title: const Text('Unable to Log In'),
       content: Text(
         message ?? 'You are not able to access this at the moment.',
       ),

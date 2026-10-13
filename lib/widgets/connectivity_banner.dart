@@ -90,7 +90,7 @@ class _ConnectivityBannerState extends State<ConnectivityBanner> {
                       Flexible(
                         child: Text(
                           _offline
-                              ? 'No internet connection — some actions are unavailable until you\'re back online.'
+                              ? 'You\'re offline — some features may be unavailable.'
                               : 'Back online — refreshing…',
                           style: const TextStyle(
                             color: Colors.white,

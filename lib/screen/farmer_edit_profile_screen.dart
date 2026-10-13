@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'dart:io';
 
@@ -9,8 +10,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
+import '../services/auth_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/ph_mobile.dart';
+import '../widgets/buyer_location_picker.dart';
 import 'set_farm_location_screen.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -39,8 +42,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   String? _role;
   double? _latitude;
   double? _longitude;
+  // A buyer's saved region/province/city/barangay, for reopening the
+  // location popup where they left off.
+  BuyerLocationResult? _buyerLocation;
 
   bool _loading = false;
+  bool _savingLocation = false;
   bool _initialLoading = true;
   bool _recoveryEmailVerified = false;
 
@@ -99,6 +106,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         _locationController.text = (barangay != null && barangay.isNotEmpty)
             ? '$barangay, $muni, $prov'
             : [muni, prov].where((s) => s.isNotEmpty).join(', ');
+        final region = data['region']?.toString() ?? '';
+        if (barangay != null &&
+            barangay.isNotEmpty &&
+            muni.isNotEmpty &&
+            prov.isNotEmpty) {
+          _buyerLocation = BuyerLocationResult(
+            region: region.isNotEmpty ? region : prov,
+            province: prov,
+            city: muni,
+            barangay: barangay,
+          );
+        }
       }
     }
 
@@ -119,12 +138,17 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Future<void> _save() async {
     final name = _nameController.text.trim();
     final phoneDigits = _phoneController.text.trim();
-    // Always stored as +639XXXXXXXXX (empty if the user cleared it).
+    // Always stored as +639XXXXXXXXX.
     final phone = phMobileE164(phoneDigits);
     final location = _locationController.text.trim();
     final recoveryEmail = _recoveryEmailController.text.trim();
 
-    if (phoneDigits.isNotEmpty && !isValidPhMobile(phoneDigits)) {
+    // Required, like at registration — it is what Place Order starts from.
+    if (phoneDigits.isEmpty) {
+      _showMessage('Mobile number is required.');
+      return;
+    }
+    if (!isValidPhMobile(phoneDigits)) {
       _showMessage(kPhMobileInvalidMessage);
       return;
     }
@@ -266,6 +290,40 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
   void showComingSoon(String feature) =>
       _showMessage('$feature — coming soon.');
+
+  // The buyer's location: the same popup as Place Order and Delivery &
+  // Pickup, saved the same way — the readable area on the profile, the
+  // coordinates (when there are any) only under private/geo.
+  Future<void> _editBuyerLocation() async {
+    final user = _user;
+    if (user == null || _savingLocation) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    final picked = await showBuyerLocationOptions(
+      context,
+      initial: _buyerLocation,
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _savingLocation = true);
+    final error = await AuthService().saveBuyerLocation(
+      uid: user.uid,
+      latitude: picked.latitude,
+      longitude: picked.longitude,
+      region: picked.region,
+      province: picked.province,
+      city: picked.city,
+      barangay: picked.barangay,
+    );
+    if (!mounted) return;
+    setState(() {
+      _savingLocation = false;
+      if (error == null) {
+        _buyerLocation = picked;
+        _locationController.text = picked.readable;
+      }
+    });
+    _showMessage(error ?? 'Location updated.');
+  }
 
   Future<void> _openLocationPicker() async {
     final picked = await Navigator.push<LatLng>(
@@ -446,20 +504,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: Colors.black87,
-        centerTitle: true,
-        title: Text(
-          'Edit Profile',
-          style: GoogleFonts.montserrat(
-            fontWeight: FontWeight.bold,
-            fontSize: 17,
-            color: Colors.black87,
-          ),
-        ),
-      ),
+      appBar: const AgriAppBar(title: 'Edit Profile'),
       body: _initialLoading
           ? const Center(child: CircularProgressIndicator(color: _dark))
           : SingleChildScrollView(
@@ -530,11 +575,39 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   const SizedBox(height: 14),
 
                   _fieldLabel('LOCATION'),
-                  TextField(
-                    controller: _locationController,
-                    style: GoogleFonts.montserrat(fontSize: 14),
-                    decoration: _fieldDecoration(Icons.location_on_outlined),
-                  ),
+                  if (_role == 'buyer')
+                    TextField(
+                      controller: _locationController,
+                      readOnly: true,
+                      onTap: _editBuyerLocation,
+                      style: GoogleFonts.montserrat(fontSize: 14),
+                      decoration: _fieldDecoration(Icons.location_on_outlined)
+                          .copyWith(
+                            hintText: 'Tap to set your location',
+                            suffixIcon: _savingLocation
+                                ? const Padding(
+                                    padding: EdgeInsets.all(14),
+                                    child: SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: _dark,
+                                      ),
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.chevron_right,
+                                    color: Colors.grey,
+                                  ),
+                          ),
+                    )
+                  else
+                    TextField(
+                      controller: _locationController,
+                      style: GoogleFonts.montserrat(fontSize: 14),
+                      decoration: _fieldDecoration(Icons.location_on_outlined),
+                    ),
 
                   if (_role == 'farmer') ...[
                     const SizedBox(height: 14),

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
+import '../widgets/existing_account_dialog.dart';
+import '../widgets/language_toggle.dart';
 import '../widgets/login_form_fields.dart';
 import '../widgets/login_hero.dart';
-import 'register_screen.dart';
-import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
 
 /// The app's front door: "Log In" or "Don't have an account? Create One."
@@ -90,41 +90,65 @@ class RoleSelectionScreen extends StatelessWidget {
                       const SizedBox(height: 18),
 
                       // ----- Create account -----
+                      // Only "Create One." is tappable — the question
+                      // before it is plain text.
                       Center(
-                        child: GestureDetector(
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              slideRoute(const RegisterScreen()),
-                            );
-                          },
-                          child: RichText(
-                            text: TextSpan(
-                              style: GoogleFonts.montserrat(
-                                fontSize: 14,
-                                color: Colors.black87,
-                              ),
-                              children: [
-                                TextSpan(
-                                  text: AppLocalizations.of(
-                                    context,
-                                  )!.noAccountSignUp,
+                        child: Wrap(
+                          alignment: WrapAlignment.center,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            RichText(
+                              text: TextSpan(
+                                text: AppLocalizations.of(
+                                  context,
+                                )!.noAccountSignUp,
+                                style: GoogleFonts.montserrat(
+                                  fontSize: 14,
+                                  color: Colors.black87,
                                 ),
-                                TextSpan(
-                                  text: AppLocalizations.of(context)!.createOne,
-                                  style: GoogleFonts.montserrat(
-                                    fontWeight: FontWeight.bold,
-                                    color: AppTheme.dark,
+                              ),
+                            ),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () =>
+                                  openRegistration(context, onLoginPage: true),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
+                                child: RichText(
+                                  text: TextSpan(
+                                    text: AppLocalizations.of(
+                                      context,
+                                    )!.createOne,
+                                    style: GoogleFonts.montserrat(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppTheme.dark,
+                                    ),
                                   ),
                                 ),
-                              ],
+                              ),
                             ),
-                          ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
+              ),
+            ),
+          ),
+
+          // ---- Language, top-right over the hero photo. This is the ----
+          // ---- first screen after onboarding, so it also introduces ----
+          // ---- the switch, once. ----
+          const SafeArea(
+            child: Align(
+              alignment: Alignment.topRight,
+              child: Padding(
+                padding: EdgeInsets.only(top: 11, right: 12),
+                child: LanguageToggle(introduce: true),
               ),
             ),
           ),

@@ -1,10 +1,12 @@
+import '../widgets/existing_account_dialog.dart';
+import '../widgets/admin_session_dialogs.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
-import 'register_screen.dart';
+import 'admin_login_view.dart';
+import '../widgets/app_back_button.dart';
 import '../widgets/login_form_fields.dart';
 import '../widgets/login_hero.dart';
-import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -16,11 +18,16 @@ class LoginScreen extends StatefulWidget {
   final String? flashMessage;
   final bool disableBackNavigation;
 
+  /// The Admin was sent here because the account signed in on another
+  /// device: says so in a popup once the page is up.
+  final bool adminSessionEnded;
+
   const LoginScreen({
     super.key,
     this.role,
     this.flashMessage,
     this.disableBackNavigation = false,
+    this.adminSessionEnded = false,
   });
 
   @override
@@ -29,6 +36,16 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool get _isAdmin => widget.role == 'admin';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.adminSessionEnded) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) showAdminSessionEndedDialog(context);
+      });
+    }
+  }
 
   // Human-readable label for the role subtitle under the AgriTrade+ logo.
   String? get _roleLabel {
@@ -41,12 +58,21 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // The web admin door gets its own desktop layout; everything below is
+    // the mobile farmer/buyer screen.
+    if (_isAdmin) {
+      return PopScope(
+        canPop: !widget.disableBackNavigation,
+        child: AdminLoginView(flashMessage: widget.flashMessage),
+      );
+    }
+
     final screenHeight = MediaQuery.sizeOf(context).height;
     // Keyboard up = give the form the room back instead of overflowing.
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     final heroHeight = keyboardOpen
         ? 120.0
-        : (screenHeight * 0.36).clamp(200.0, 320.0);
+        : (screenHeight * 0.33).clamp(200.0, 290.0);
 
     return PopScope(
       canPop: !widget.disableBackNavigation,
@@ -54,9 +80,9 @@ class _LoginScreenState extends State<LoginScreen> {
         backgroundColor: Colors.white,
         body: Stack(
           children: [
-            // ---- Hero: brand gradient + the AgriTrade+ lockup ----
-            // Swap assets/images/login_hero.png for your own photo whenever
-            // you're ready — it just sits behind the logo lockup below.
+            // ---- Hero: farm landscape photo + the AgriTrade+ lockup ----
+            // Swap assets/images/login_landscape.png for another photo whenever
+            // you like — it just sits behind the logo lockup below.
             AnimatedPositioned(
               duration: const Duration(milliseconds: 200),
               top: 0,
@@ -135,43 +161,51 @@ class _LoginScreenState extends State<LoginScreen> {
                             // for that door.
                             if (!_isAdmin) ...[
                               const SizedBox(height: 14),
+                              // Only "Create One." is tappable — the
+                              // question before it is plain text.
                               Center(
-                                child: TextButton(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      slideRoute(
-                                        widget.role != null
-                                            ? RegisterScreen(
-                                                initialRole: widget.role!,
-                                              )
-                                            : const RegisterScreen(),
-                                      ),
-                                    );
-                                  },
-                                  child: RichText(
-                                    text: TextSpan(
-                                      style: const TextStyle(
-                                        color: Colors.black87,
-                                      ),
-                                      children: [
-                                        TextSpan(
-                                          text: AppLocalizations.of(
-                                            context,
-                                          )!.noAccountSignUp,
+                                child: Wrap(
+                                  alignment: WrapAlignment.center,
+                                  crossAxisAlignment: WrapCrossAlignment.center,
+                                  children: [
+                                    RichText(
+                                      text: TextSpan(
+                                        text: AppLocalizations.of(
+                                          context,
+                                        )!.noAccountSignUp,
+                                        style: const TextStyle(
+                                          color: Colors.black87,
                                         ),
-                                        TextSpan(
-                                          text: AppLocalizations.of(
-                                            context,
-                                          )!.createOne,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: AppTheme.dark,
+                                      ),
+                                    ),
+                                    GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      // Says so first if the account last used on this
+                                      // phone already exists (a farmer waiting for
+                                      // approval), instead of opening the form again.
+                                      onTap: () => openRegistration(
+                                        context,
+                                        role: widget.role,
+                                        onLoginPage: true,
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                          vertical: 14,
+                                        ),
+                                        child: RichText(
+                                          text: TextSpan(
+                                            text: AppLocalizations.of(
+                                              context,
+                                            )!.createOne,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: AppTheme.dark,
+                                            ),
                                           ),
                                         ),
-                                      ],
+                                      ),
                                     ),
-                                  ),
+                                  ],
                                 ),
                               ),
                             ],
@@ -185,15 +219,16 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
 
             if (!kIsWeb && !widget.disableBackNavigation)
-              SafeArea(
+              const SafeArea(
                 child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
-                  ),
+                  padding: EdgeInsets.only(top: 8, left: 12),
+                  // Over the hero photo, so the circle stays on.
+                  child: AppBackButton(overImage: true),
                 ),
               ),
+
+            // No language switch here: the language is chosen inside the
+            // app, in the farmer's and the buyer's Settings.
           ],
         ),
       ),

@@ -6,7 +6,6 @@ import '../services/notification_permission_prompt.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/coach_mark.dart';
-import '../widgets/agri_header.dart';
 import '../widgets/unread_messages_dot.dart';
 import 'add_product_screen.dart';
 import 'market_tab.dart';
@@ -139,11 +138,6 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
       },
       child: Scaffold(
         backgroundColor: _bg,
-        appBar: AgriHeader(
-          onLogoTap: () => setState(() => _selectedIndex = 0),
-          onNotificationsPressed: _openNotifications,
-        ),
-
         // ---- Bottom navigation bar (Market · Messages · + · Orders · Profile) ----
         bottomNavigationBar: SafeArea(
           top: false,
@@ -203,16 +197,27 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
         // ---- Each tab lives in its own file now ----
         // Note: no longer `const [...]` — MarketTab now takes a callback
         // closure (onNavigateToTab), which can't be const.
-        body: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            MarketTab(
-              onNavigateToTab: (i) => setState(() => _selectedIndex = i),
+        // No app bar: every tab starts with its own header row — logo and
+        // title, see PageHeader. SafeArea keeps that row clear of the
+        // status bar, and the overlay style keeps the status bar icons
+        // dark on the light background.
+        body: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle.dark,
+          child: SafeArea(
+            bottom: false,
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: [
+                MarketTab(
+                  onNavigateToTab: (i) => setState(() => _selectedIndex = i),
+                  onNotificationsPressed: _openNotifications,
+                ),
+                const ChatListScreen(),
+                const OrdersTab(),
+                const ProfileTab(),
+              ],
             ),
-            const ChatListScreen(),
-            const OrdersTab(),
-            const ProfileTab(),
-          ],
+          ),
         ),
       ),
     );

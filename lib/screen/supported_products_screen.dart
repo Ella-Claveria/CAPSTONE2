@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -17,18 +18,7 @@ class SupportedProductsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bgLight,
-      appBar: AppBar(
-        backgroundColor: AppTheme.dark,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Text(
-          'Supported Products',
-          style: GoogleFonts.montserrat(
-            fontWeight: FontWeight.bold,
-            fontSize: 17,
-          ),
-        ),
-      ),
+      appBar: const AgriAppBar(title: 'Supported Products'),
       // Rebuilds whenever the Admin adds, moves or disables a commodity.
       body: ListenableBuilder(
         listenable: CommodityRegistry.instance,
@@ -42,9 +32,7 @@ class SupportedProductsScreen extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
       children: [
         Text(
-          'AgriTrade+ currently supports selected agricultural commodities based on '
-          'the products identified with the agricultural office. Only products on '
-          'this list can be posted in the marketplace.',
+          'Only products on this list can be posted in the marketplace.',
           style: GoogleFonts.montserrat(
             fontSize: 13,
             color: Colors.black87,
@@ -93,15 +81,6 @@ class SupportedProductsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 20),
         ],
-        Text(
-          'This list may be updated in the future based on the agricultural '
-          'office/client and the approved system scope.',
-          style: GoogleFonts.montserrat(
-            fontSize: 11.5,
-            color: Colors.black45,
-            height: 1.4,
-          ),
-        ),
       ],
     );
   }

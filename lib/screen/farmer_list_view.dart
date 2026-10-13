@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
-import 'dart:convert';
 
+import '../services/admin_perf.dart';
+import '../services/rsba_number.dart';
+import 'admin_filter_controls.dart';
 import '../services/audit_log_service.dart';
 import '../services/dashboard_analytics_service.dart';
 import '../services/dashboard_data_service.dart';
@@ -12,7 +14,6 @@ import 'admin_dashboard_screen.dart'
     show
         AdminPalette,
         AdminThemeScope,
-        AdminStatCard,
         AdminStatusBadge,
         AdminEmptyState,
         AdminLoadingSpinner,
@@ -22,7 +23,7 @@ import 'admin_dashboard_screen.dart'
 /// Farmer List — a physically separate screen from Verification Queue.
 /// It does not import or reuse Verification Queue's dialog, data loaders,
 /// or approve/reject actions; it only shares the common Admin Dashboard
-/// design-system pieces (AdminStatCard, AdminStatusBadge, etc.) that every
+/// design-system pieces (AdminStatusBadge, AdminEmptyState, etc.) that every
 /// admin page is built from.
 ///
 /// Shows role == 'farmer' && approvalStatus == 'approved' only — no
@@ -62,6 +63,9 @@ class _FarmerListRow {
       ? data['municipality'].toString()
       : '—';
   Timestamp? get reviewedAt => data['reviewedAt'] as Timestamp?;
+
+  /// The farmer's RSBA number (see farmerIdOf), or "Not provided".
+  String get farmerId => farmerIdOf(data) ?? kNoFarmerId;
 }
 
 /// Joins approved-farmer docs with their products/orders — shared by the
@@ -119,10 +123,10 @@ class FarmerListView extends StatefulWidget {
   State<FarmerListView> createState() => _FarmerListViewState();
 }
 
-class _FarmerListViewState extends State<FarmerListView> {
-  String _search = '';
+class _FarmerListViewState extends State<FarmerListView> with AdminPageSearch {
+  // Typed in the header's search box.
+  String get _search => pageSearch;
   String _barangayFilter = 'All';
-  String _municipalityFilter = 'All';
   _SortOption _sort = _SortOption.newestApproved;
   bool _exporting = false;
 
@@ -133,17 +137,13 @@ class _FarmerListViewState extends State<FarmerListView> {
       if (_barangayFilter != 'All' && r.barangay != _barangayFilter) {
         return false;
       }
-      if (_municipalityFilter != 'All' &&
-          r.municipality != _municipalityFilter) {
-        return false;
-      }
       final q = _search.trim().toLowerCase();
       if (q.isEmpty) return true;
       return r.fullName.toLowerCase().contains(q) ||
           r.email.toLowerCase().contains(q) ||
           r.barangay.toLowerCase().contains(q) ||
           r.municipality.toLowerCase().contains(q) ||
-          r.uid.toLowerCase().contains(q);
+          r.farmerId.toLowerCase().contains(q);
     }).toList();
 
     rows.sort((a, b) {
@@ -178,19 +178,19 @@ class _FarmerListViewState extends State<FarmerListView> {
     if (_exporting) return;
     setState(() => _exporting = true);
     try {
-      final results = await Future.wait([
-        FirebaseFirestore.instance
-            .collection('users')
-            .where('role', isEqualTo: 'farmer')
-            .where('approvalStatus', isEqualTo: 'approved')
-            .get(),
-        FirebaseFirestore.instance.collection('products').get(),
-        FirebaseFirestore.instance.collection('orders').get(),
-      ]);
+      // The listings and orders are the live ones the page is already
+      // showing (DashboardDataService) — not downloaded a second time.
+      final data = DashboardDataService.instance;
+      await data.ensureLoaded();
+      final farmers = await FirebaseFirestore.instance
+          .collection('users')
+          .where('role', isEqualTo: 'farmer')
+          .where('approvalStatus', isEqualTo: 'approved')
+          .get();
       final allRows = _computeFarmerRows(
-        results[0].docs,
-        results[1].docs,
-        results[2].docs,
+        farmers.docs,
+        data.products,
+        data.allOrders,
       );
       final rows = _filterAndSort(allRows);
 
@@ -207,7 +207,7 @@ class _FarmerListViewState extends State<FarmerListView> {
         rows: rows
             .map(
               (r) => (
-                farmerId: r.uid.length > 8 ? r.uid.substring(0, 8) : r.uid,
+                farmerId: r.farmerId,
                 fullName: r.fullName,
                 email: r.email,
                 barangay: r.barangay,
@@ -247,45 +247,11 @@ class _FarmerListViewState extends State<FarmerListView> {
     final c = AdminThemeScope.of(context).palette;
 
     return Padding(
-      padding: const EdgeInsets.all(28.0),
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Farmer List',
-                    style: TextStyle(
-                      fontSize: 30,
-                      height: 1.15,
-                      letterSpacing: -0.6,
-                      fontWeight: FontWeight.w800,
-                      color: c.textPrimary,
-                    ),
-                  ),
-                  Text(
-                    'View and manage approved farmer accounts registered in AgriTrade+.',
-                    style: TextStyle(
-                      color: c.textSecondary,
-                      fontSize: 14,
-                      height: 1.5,
-                    ),
-                  ),
-                ],
-              ),
-              AdminQuickActionButton(
-                icon: Icons.picture_as_pdf_outlined,
-                label: 'Export Report',
-                onPressed: _exporting ? () {} : _export,
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-
+          // The title is in the utility bar above.
           Expanded(
             // users/products/orders are shared, app-session-lifetime reads
             // via DashboardDataService (see its class doc) instead of this
@@ -321,25 +287,9 @@ class _FarmerListViewState extends State<FarmerListView> {
                       svc.allOrders,
                     );
 
-                    final totalFarmers = allRows.length;
-                    final activeListingsTotal = allRows.fold<int>(
-                      0,
-                      (total, r) => total + r.activeListings,
-                    );
-                    final completedOrdersTotal = allRows.fold<int>(
-                      0,
-                      (total, r) => total + r.completedOrders,
-                    );
-
                     final barangayOptions = {
                       'All',
                       ...allRows.map((r) => r.barangay).where((b) => b != '—'),
-                    }.toList()..sort();
-                    final municipalityOptions = {
-                      'All',
-                      ...allRows
-                          .map((r) => r.municipality)
-                          .where((m) => m != '—'),
                     }.toList()..sort();
 
                     final rows = _filterAndSort(allRows);
@@ -348,77 +298,28 @@ class _FarmerListViewState extends State<FarmerListView> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          LayoutBuilder(
-                            builder: (context, constraints) {
-                              // A Wrap (not a fixed-childAspectRatio
-                              // GridView) so each card sizes to its own
-                              // content height — it can't overflow at any
-                              // width — while the column count still
-                              // reflows continuously with the available
-                              // space (see the same fix on the Dashboard
-                              // Overview's KPI row).
-                              const spacing = 16.0;
-                              final width = constraints.maxWidth;
-                              final columns = width >= 760
-                                  ? 3
-                                  : (width >= 480 ? 2 : 1);
-                              final cardWidth =
-                                  (width - spacing * (columns - 1)) / columns;
-                              final cards = [
-                                AdminStatCard(
-                                  label: 'Total Farmers',
-                                  value: '$totalFarmers',
-                                  delta: 'Approved & active on AgriTrade+',
-                                  icon: Icons.groups_outlined,
-                                  iconColor: (c) => c.green,
-                                  iconBg: (c) => c.greenBg,
-                                  isEmpty: totalFarmers == 0,
+                          // The filters, and Export Report level with them.
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _FarmerListFilterBar(
+                                  c: c,
+                                  barangayOptions: barangayOptions,
+                                  barangayFilter: _barangayFilter,
+                                  onBarangayChanged: (v) =>
+                                      setState(() => _barangayFilter = v),
+                                  sort: _sort,
+                                  onSortChanged: (v) =>
+                                      setState(() => _sort = v),
                                 ),
-                                AdminStatCard(
-                                  label: 'Active Listings',
-                                  value: '$activeListingsTotal',
-                                  delta: 'From approved farmers',
-                                  icon: Icons.inventory_2_outlined,
-                                  iconColor: (c) => c.blue,
-                                  iconBg: (c) => c.blueBg,
-                                  isEmpty: activeListingsTotal == 0,
-                                ),
-                                AdminStatCard(
-                                  label: 'Completed Orders',
-                                  value: '$completedOrdersTotal',
-                                  delta: 'From approved farmers',
-                                  icon: Icons.local_shipping_outlined,
-                                  iconColor: (c) => c.amber,
-                                  iconBg: (c) => c.amberBg,
-                                  isEmpty: completedOrdersTotal == 0,
-                                ),
-                              ];
-                              return Wrap(
-                                spacing: spacing,
-                                runSpacing: spacing,
-                                children: [
-                                  for (final card in cards)
-                                    SizedBox(width: cardWidth, child: card),
-                                ],
-                              );
-                            },
-                          ),
-                          const SizedBox(height: 20),
-
-                          _FarmerListFilterBar(
-                            c: c,
-                            search: _search,
-                            onSearchChanged: (v) => setState(() => _search = v),
-                            barangayOptions: barangayOptions,
-                            barangayFilter: _barangayFilter,
-                            onBarangayChanged: (v) =>
-                                setState(() => _barangayFilter = v),
-                            municipalityOptions: municipalityOptions,
-                            municipalityFilter: _municipalityFilter,
-                            onMunicipalityChanged: (v) =>
-                                setState(() => _municipalityFilter = v),
-                            sort: _sort,
-                            onSortChanged: (v) => setState(() => _sort = v),
+                              ),
+                              const SizedBox(width: 12),
+                              AdminQuickActionButton(
+                                icon: Icons.picture_as_pdf_outlined,
+                                label: 'Export Report',
+                                onPressed: _exporting ? () {} : _export,
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 16),
 
@@ -455,27 +356,17 @@ class _FarmerListViewState extends State<FarmerListView> {
 
 class _FarmerListFilterBar extends StatelessWidget {
   final AdminPalette c;
-  final String search;
-  final ValueChanged<String> onSearchChanged;
   final List<String> barangayOptions;
   final String barangayFilter;
   final ValueChanged<String> onBarangayChanged;
-  final List<String> municipalityOptions;
-  final String municipalityFilter;
-  final ValueChanged<String> onMunicipalityChanged;
   final _SortOption sort;
   final ValueChanged<_SortOption> onSortChanged;
 
   const _FarmerListFilterBar({
     required this.c,
-    required this.search,
-    required this.onSearchChanged,
     required this.barangayOptions,
     required this.barangayFilter,
     required this.onBarangayChanged,
-    required this.municipalityOptions,
-    required this.municipalityFilter,
-    required this.onMunicipalityChanged,
     required this.sort,
     required this.onSortChanged,
   });
@@ -489,101 +380,35 @@ class _FarmerListFilterBar extends StatelessWidget {
     _SortOption.mostOrders: 'Most Completed Orders',
   };
 
-  InputDecoration _fieldDecoration(String hint, IconData icon) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
-      prefixIcon: Icon(icon, size: 18, color: c.textSecondary),
-      filled: true,
-      fillColor: c.surfaceAlt,
-      isDense: true,
-      contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final fieldStyle = TextStyle(color: c.textPrimary, fontSize: 13);
-
     return Wrap(
       spacing: 12,
       runSpacing: 12,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        SizedBox(
-          width: 300,
-          child: TextField(
-            style: fieldStyle,
-            decoration: _fieldDecoration(
-              'Search name, email, Farmer ID, barangay, municipality…',
-              Icons.search,
-            ),
-            onChanged: onSearchChanged,
-          ),
-        ),
-        SizedBox(
-          width: 170,
-          child: DropdownButtonFormField<String>(
-            initialValue: barangayFilter,
-            style: fieldStyle,
-            dropdownColor: c.surface,
-            isExpanded: true,
-            decoration: _fieldDecoration('Barangay', Icons.place_outlined),
-            items: barangayOptions
-                .map(
-                  (b) => DropdownMenuItem(
-                    value: b,
-                    child: Text(b, overflow: TextOverflow.ellipsis),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) => v != null ? onBarangayChanged(v) : null,
-          ),
-        ),
-        SizedBox(
+        AdminPillDropdown<String>(
+          value: barangayFilter,
           width: 190,
-          child: DropdownButtonFormField<String>(
-            initialValue: municipalityFilter,
-            style: fieldStyle,
-            dropdownColor: c.surface,
-            isExpanded: true,
-            decoration: _fieldDecoration(
-              'Municipality',
-              Icons.location_city_outlined,
-            ),
-            items: municipalityOptions
-                .map(
-                  (m) => DropdownMenuItem(
-                    value: m,
-                    child: Text(m, overflow: TextOverflow.ellipsis),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) => v != null ? onMunicipalityChanged(v) : null,
-          ),
+          icon: Icons.place_outlined,
+          items: [
+            for (final b in barangayOptions)
+              DropdownMenuItem(
+                value: b,
+                child: Text(b == 'All' ? 'All barangays' : b),
+              ),
+          ],
+          onChanged: onBarangayChanged,
         ),
-        SizedBox(
-          width: 220,
-          child: DropdownButtonFormField<_SortOption>(
-            initialValue: sort,
-            style: fieldStyle,
-            dropdownColor: c.surface,
-            isExpanded: true,
-            decoration: _fieldDecoration('Sort by', Icons.sort),
-            items: _sortLabels.entries
-                .map(
-                  (e) => DropdownMenuItem(
-                    value: e.key,
-                    child: Text(e.value, overflow: TextOverflow.ellipsis),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) => v != null ? onSortChanged(v) : null,
-          ),
+        AdminPillDropdown<_SortOption>(
+          value: sort,
+          width: 240,
+          icon: Icons.sort,
+          items: [
+            for (final e in _sortLabels.entries)
+              DropdownMenuItem(value: e.key, child: Text(e.value)),
+          ],
+          onChanged: onSortChanged,
         ),
       ],
     );
@@ -604,21 +429,20 @@ class _FarmerListTable extends StatelessWidget {
         border: Border.all(color: c.border),
       ),
       padding: const EdgeInsets.all(8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          headingRowColor: WidgetStateProperty.all(c.surfaceAlt),
+      child: AdminTableFit(
+        table: DataTable(
+          headingRowColor: WidgetStateProperty.all(adminTableHeaderColor(c)),
           dataRowColor: WidgetStateProperty.all(Colors.transparent),
-          columnSpacing: 28,
-          horizontalMargin: 12,
-          headingTextStyle: TextStyle(
-            color: c.textSecondary,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
+          columnSpacing: kAdminTableColumnSpacing,
+          horizontalMargin: kAdminTableMargin,
+          headingTextStyle: adminTableHeaderStyle(c),
+          dataTextStyle: TextStyle(
+            fontFamily: kAdminFontFamily,
+            color: c.textPrimary,
+            fontSize: 13,
           ),
-          dataTextStyle: TextStyle(color: c.textPrimary, fontSize: 13),
           columns: const [
-            DataColumn(label: Text('Farmer ID')),
+            DataColumn(label: Text('RSBA No.')),
             DataColumn(label: Text('Full Name')),
             DataColumn(label: Text('Email')),
             DataColumn(label: Text('Barangay')),
@@ -630,15 +454,31 @@ class _FarmerListTable extends StatelessWidget {
             DataColumn(label: Text('Actions')),
           ],
           rows: rows.map((r) {
-            final farmerId = r.uid.length > 8 ? r.uid.substring(0, 8) : r.uid;
             final dateApproved = r.reviewedAt != null
                 ? DateFormat('MMM d, y').format(r.reviewedAt!.toDate())
                 : '—';
 
             return DataRow(
               cells: [
-                DataCell(Text(farmerId)),
-                DataCell(Text(r.fullName)),
+                DataCell(Text(r.farmerId)),
+                DataCell(
+                  // The account's current photo, or its initials.
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AdminAvatar(
+                        name: r.fullName,
+                        photoUrl: r.data['photoUrl']?.toString(),
+                        radius: 14,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        r.fullName.isEmpty ? '—' : r.fullName,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
                 DataCell(Text(r.email)),
                 DataCell(Text(r.barangay)),
                 DataCell(Text(r.municipality)),
@@ -705,10 +545,18 @@ class _FarmerMarketplaceActivity {
 Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(
   String uid,
 ) async {
-  final products = await FirebaseFirestore.instance
-      .collection('products')
-      .where('farmerId', isEqualTo: uid)
-      .get();
+  // The two reads don't depend on each other: side by side, not in turn.
+  final firestore = FirebaseFirestore.instance;
+  final results = await AdminPerf.time(
+    'farmer detail: listings + orders',
+    () => Future.wait([
+      firestore.collection('products').where('farmerId', isEqualTo: uid).get(),
+      firestore.collection('orders').where('sellerId', isEqualTo: uid).get(),
+    ]),
+    describe: (r) => '${r[0].docs.length} products, ${r[1].docs.length} orders',
+  );
+  final products = results[0];
+  final orders = results[1];
   var active = 0, archived = 0;
   for (final p in products.docs) {
     if ((p.data()['isArchived'] ?? false) == true) {
@@ -718,10 +566,6 @@ Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(
     }
   }
 
-  final orders = await FirebaseFirestore.instance
-      .collection('orders')
-      .where('sellerId', isEqualTo: uid)
-      .get();
   final completedCount = orders.docs
       .where(
         (o) =>
@@ -743,9 +587,18 @@ Future<_FarmerMarketplaceActivity> _loadFarmerMarketplaceActivity(
   );
 }
 
-class _FarmerListDetailDialog extends StatelessWidget {
+class _FarmerListDetailDialog extends StatefulWidget {
   final String uid;
   const _FarmerListDetailDialog({required this.uid});
+
+  @override
+  State<_FarmerListDetailDialog> createState() =>
+      _FarmerListDetailDialogState();
+}
+
+class _FarmerListDetailDialogState extends State<_FarmerListDetailDialog>
+    with AdminReadOnce {
+  String get uid => widget.uid;
 
   static String? _firstNonEmpty(List<dynamic> candidates) {
     for (final c in candidates) {
@@ -758,16 +611,20 @@ class _FarmerListDetailDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .snapshots(),
+      stream: watchOnce(
+        'user',
+        () =>
+            FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      ),
       builder: (context, userSnap) {
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('verificationDocs')
-              .doc(uid)
-              .snapshots(),
+          stream: watchOnce(
+            'verification',
+            () => FirebaseFirestore.instance
+                .collection('verificationDocs')
+                .doc(uid)
+                .snapshots(),
+          ),
           builder: (context, verifSnap) {
             if (userSnap.hasError || verifSnap.hasError) {
               return AlertDialog(
@@ -787,7 +644,7 @@ class _FarmerListDetailDialog extends StatelessWidget {
               return const AlertDialog(
                 content: SizedBox(
                   height: 120,
-                  child: Center(child: CircularProgressIndicator()),
+                  child: Center(child: AdminLoadingBar()),
                 ),
               );
             }
@@ -817,7 +674,9 @@ class _FarmerListDetailDialog extends StatelessWidget {
                 ]) ??
                 'Unknown Farmer';
             final email = (user['email'] ?? '—').toString();
-            final phone = _firstNonEmpty([user['phone']]) ?? '—';
+            // Registration saves it as mobileNumber; older accounts as phone.
+            final phone =
+                _firstNonEmpty([user['mobileNumber'], user['phone']]) ?? '—';
             final barangay = _firstNonEmpty([user['barangay']]) ?? '—';
             final municipality = _firstNonEmpty([user['municipality']]) ?? '—';
             final createdAt = user['createdAt'] as Timestamp?;
@@ -838,113 +697,191 @@ class _FarmerListDetailDialog extends StatelessWidget {
                 ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate())
                 : '—';
             final reviewedByUid = _firstNonEmpty([user['reviewedBy']]);
-            final reviewedBy = reviewedByUid == null
-                ? '—'
-                : (reviewedByUid.length > 8
-                      ? reviewedByUid.substring(0, 8)
-                      : reviewedByUid);
-            final document = (verif?['document'] ?? '').toString();
+            final farmerId = farmerIdOf(user, verif);
+            final approved = approvalStatus == 'approved';
+
+            final scheme = Theme.of(context).colorScheme;
+            final muted = scheme.onSurface.withValues(alpha: 0.62);
 
             return AlertDialog(
-              title: Text(fullName),
+              titlePadding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
+              contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+              actionsPadding: const EdgeInsets.fromLTRB(24, 4, 24, 18),
+              title: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // The farmer's current photo, or their initials.
+                  AdminAvatar(
+                    name: fullName,
+                    photoUrl: user['photoUrl']?.toString(),
+                    radius: 28,
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          fullName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurface,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                'RSBA No. ${farmerId ?? kNoFarmerId}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w500,
+                                  color: muted,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            AdminStatusBadge(
+                              text: statusLabel,
+                              color: approved ? scheme.primary : muted,
+                              bg: (approved ? scheme.primary : scheme.onSurface)
+                                  .withValues(alpha: 0.12),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icon(Icons.close, size: 20, color: muted),
+                  ),
+                ],
+              ),
               content: SizedBox(
-                width: 500,
+                width: 560,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      _sectionLabel('Profile'),
-                      _detailRow('Full Name', fullName),
-                      _detailRow('Email', email),
-                      _detailRow('Phone Number', phone),
-                      _detailRow('Barangay', barangay),
-                      _detailRow('Municipality', municipality),
-                      _detailRow('Date Registered', dateRegistered),
-                      const SizedBox(height: 10),
-                      _sectionLabel('Verification'),
-                      _detailRow('Approval Status', statusLabel),
-                      _detailRow('Date Submitted', dateSubmitted),
-                      _detailRow('Date Approved', dateApproved),
-                      _detailRow('Reviewed By', reviewedBy),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        icon: const Icon(
-                          Icons.image_search,
-                          color: Colors.blue,
-                        ),
-                        label: const Text('View Verification Document'),
-                        onPressed: document.isEmpty
-                            ? null
-                            : () => _showFarmerListDocument(context, document),
+                      Divider(
+                        height: 1,
+                        color: scheme.onSurface.withValues(alpha: 0.1),
                       ),
-                      if (document.isEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'No verification document was submitted for this account.',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 16),
+                      // What the farmer has done on the marketplace, as
+                      // four figures side by side.
                       FutureBuilder<_FarmerMarketplaceActivity>(
-                        future: _loadFarmerMarketplaceActivity(uid),
+                        future: readOnce(
+                          'activity',
+                          () => _loadFarmerMarketplaceActivity(uid),
+                        ),
                         builder: (context, activitySnap) {
-                          if (activitySnap.connectionState !=
-                              ConnectionState.done) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                            );
-                          }
-                          if (activitySnap.hasError || !activitySnap.hasData) {
+                          if (activitySnap.hasError) {
                             return Text(
                               'Could not load marketplace activity.',
-                              style: TextStyle(
-                                color: Colors.grey[600],
-                                fontSize: 12,
-                              ),
+                              style: TextStyle(color: muted, fontSize: 12.5),
                             );
                           }
-                          final a = activitySnap.data!;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          final a = activitySnap.data;
+                          String figure(
+                            String Function(_FarmerMarketplaceActivity) of,
+                          ) => a == null ? '…' : of(a);
+                          return Row(
                             children: [
-                              _sectionLabel('Marketplace Activity'),
-                              _detailRow(
+                              _stat(
+                                context,
+                                Icons.storefront_outlined,
                                 'Active Listings',
-                                '${a.activeListings}',
+                                figure((a) => '${a.activeListings}'),
                               ),
-                              _detailRow(
+                              const SizedBox(width: 10),
+                              _stat(
+                                context,
+                                Icons.archive_outlined,
                                 'Archived Products',
-                                '${a.archivedProducts}',
+                                figure((a) => '${a.archivedProducts}'),
                               ),
-                              _detailRow(
+                              const SizedBox(width: 10),
+                              _stat(
+                                context,
+                                Icons.task_alt_rounded,
                                 'Completed Orders',
-                                '${a.completedOrders}',
+                                figure((a) => '${a.completedOrders}'),
                               ),
-                              _detailRow(
-                                'Total Sales / Transaction Value',
-                                formatPeso(a.totalSales),
+                              const SizedBox(width: 10),
+                              _stat(
+                                context,
+                                Icons.payments_outlined,
+                                'Total Sales',
+                                figure((a) => formatPeso(a.totalSales)),
                               ),
                             ],
                           );
                         },
+                      ),
+                      const SizedBox(height: 18),
+                      _section(context, Icons.person_outline, 'Profile', [
+                        _field(context, 'Email', email),
+                        _field(context, 'Phone Number', phone),
+                        _field(context, 'Barangay', barangay),
+                        _field(context, 'Municipality', municipality),
+                        _field(context, 'Date Registered', dateRegistered),
+                      ]),
+                      const SizedBox(height: 18),
+                      _section(
+                        context,
+                        Icons.verified_user_outlined,
+                        'Verification',
+                        [
+                          _field(context, 'Date Submitted', dateSubmitted),
+                          _field(context, 'Date Approved', dateApproved),
+                          // The officer's name, not their account code.
+                          FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                            future: reviewedByUid == null
+                                ? null
+                                : readOnce(
+                                    'officer/$reviewedByUid',
+                                    () => FirebaseFirestore.instance
+                                        .collection('users')
+                                        .doc(reviewedByUid)
+                                        .get(),
+                                  ),
+                            builder: (context, officerSnap) {
+                              final officer = officerSnap.data?.data();
+                              return _field(
+                                context,
+                                'Reviewed By',
+                                reviewedByUid == null
+                                    ? '—'
+                                    : _firstNonEmpty([
+                                            officer?['fullName'],
+                                            officer?['name'],
+                                            officer?['email'],
+                                          ]) ??
+                                          (officerSnap.connectionState ==
+                                                  ConnectionState.done
+                                              ? 'Admin'
+                                              : '…'),
+                              );
+                            },
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
               ),
               actions: [
-                TextButton(
+                OutlinedButton(
                   onPressed: () => Navigator.of(context).pop(),
                   child: const Text('Close'),
                 ),
@@ -956,84 +893,133 @@ class _FarmerListDetailDialog extends StatelessWidget {
     );
   }
 
-  Widget _sectionLabel(String label) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 12.5,
-          color: Colors.grey[600],
-          letterSpacing: 0.4,
+  // One figure of the farmer's marketplace activity: an icon, the number
+  // and what it counts.
+  Widget _stat(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String value,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 11),
+        decoration: BoxDecoration(
+          color: scheme.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 18, color: scheme.primary),
+            const SizedBox(height: 8),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                value,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11.5,
+                color: scheme.onSurface.withValues(alpha: 0.62),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _detailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 160,
-            child: Text(
-              label,
+  // One titled group of details: its name with an icon, then its fields
+  // two to a row.
+  Widget _section(
+    BuildContext context,
+    IconData icon,
+    String title,
+    List<Widget> fields,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Icon(icon, size: 16, color: scheme.primary),
+            const SizedBox(width: 6),
+            Text(
+              title,
               style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[700],
+                fontWeight: FontWeight.w700,
+                fontSize: 13.5,
+                color: scheme.onSurface,
               ),
             ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: scheme.onSurface.withValues(alpha: 0.1)),
           ),
-          Expanded(child: Text(value)),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              const gap = 16.0;
+              final width = (constraints.maxWidth - gap) / 2;
+              return Wrap(
+                spacing: gap,
+                children: [
+                  for (final field in fields)
+                    SizedBox(width: width, child: field),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  // A detail: its name in small grey text, its value under it.
+  Widget _field(BuildContext context, String label, String value) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              color: scheme.onSurface.withValues(alpha: 0.62),
+            ),
+          ),
+          const SizedBox(height: 3),
+          SelectableText(
+            value,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w600,
+              color: scheme.onSurface,
+            ),
+          ),
         ],
       ),
     );
   }
-}
-
-void _showFarmerListDocument(BuildContext context, String document) {
-  Widget imageWidget;
-
-  try {
-    if (document.startsWith('http://') || document.startsWith('https://')) {
-      imageWidget = Image.network(
-        document,
-        width: 400,
-        height: 400,
-        fit: BoxFit.contain,
-        errorBuilder: (_, _, _) => const Text('Failed to load document image.'),
-      );
-    } else if (document.isNotEmpty) {
-      final cleanBase64 = document.contains(',')
-          ? document.split(',').last
-          : document;
-      imageWidget = Image.memory(
-        base64Decode(cleanBase64),
-        width: 400,
-        height: 400,
-        fit: BoxFit.contain,
-      );
-    } else {
-      imageWidget = const Text('No document image provided.');
-    }
-  } catch (e) {
-    imageWidget = const Text('Failed to load image format.');
-  }
-
-  showDialog(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Agricultural Certification'),
-      content: imageWidget,
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-      ],
-    ),
-  );
 }

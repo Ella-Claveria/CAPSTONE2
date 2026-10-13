@@ -25,6 +25,10 @@ class GlowField extends StatefulWidget {
   // A fixed, non-editable label shown before the editable text — e.g.
   // "+63 " for a Philippines-only mobile number field.
   final String? prefixText;
+  final bool autofocus;
+
+  /// Shows the value, greyed, without letting it be edited or focused.
+  final bool readOnly;
 
   const GlowField({
     super.key,
@@ -39,6 +43,8 @@ class GlowField extends StatefulWidget {
     this.autofillHints,
     this.inputFormatters,
     this.prefixText,
+    this.autofocus = false,
+    this.readOnly = false,
   });
 
   @override
@@ -93,6 +99,13 @@ class _GlowFieldState extends State<GlowField> {
             child: TextField(
               controller: widget.controller,
               focusNode: _focusNode,
+              autofocus: widget.autofocus,
+              readOnly: widget.readOnly,
+              canRequestFocus: !widget.readOnly,
+              enableInteractiveSelection: !widget.readOnly,
+              style: widget.readOnly
+                  ? const TextStyle(color: Colors.black54)
+                  : null,
               keyboardType: widget.keyboardType,
               obscureText: widget.obscureText,
               textInputAction: widget.textInputAction,

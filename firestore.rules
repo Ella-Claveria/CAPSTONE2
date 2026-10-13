@@ -77,6 +77,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ---- Failed-login cooldown ----
+    // Counted and enforced only by the checkLoginAllowed / reportLoginFailure
+    // / clearLoginFailures Cloud Functions (Admin SDK). No client access, so
+    // the app cannot reset or read its own count.
+    match /loginThrottles/{emailHash} {
+      allow read, write: if false;
+    }
+
     // ---- Products ----
     match /products/{productId} {
       allow read: if marketplaceUser();
@@ -157,6 +165,9 @@ service cloud.firestore {
           request.resource.data.get('reviewCount', null) == resource.data.get('reviewCount', null) &&
           request.resource.data.get('trustedBuyer', null) == resource.data.get('trustedBuyer', null) &&
           request.resource.data.get('trustedBuyerReviewCount', null) == resource.data.get('trustedBuyerReviewCount', null) &&
+          request.resource.data.get('identityVerified', null) == resource.data.get('identityVerified', null) &&
+          request.resource.data.get('identityVerifiedBy', null) == resource.data.get('identityVerifiedBy', null) &&
+          request.resource.data.get('identityVerifiedAt', null) == resource.data.get('identityVerifiedAt', null) &&
           request.resource.data.get('reviewedBy', null) == resource.data.get('reviewedBy', null) &&
           request.resource.data.get('reviewedAt', null) == resource.data.get('reviewedAt', null) &&
           request.resource.data.get('accountStatus', null) == resource.data.get('accountStatus', null) &&
@@ -490,6 +501,55 @@ service cloud.firestore {
         && request.resource.data.cancelledAt == request.time;
 
       allow delete: if false;
+
+      // ---- Order contact numbers ----
+      // orders/{orderId}/private/buyer and .../private/farmer each hold
+      // one mobile number for this order ({contact, updatedAt}), kept off
+      // the order document so the other side cannot read it early.
+      //   - Each side always reads its own.
+      //   - The other side reads it only while the order is confirmed or
+      //     shipped: not while pending, and not after it is completed,
+      //     rejected or cancelled.
+      //   - The buyer sets theirs while the order is still pending; the
+      //     farmer sets theirs from confirmation onwards.
+      // No collection-group rule exists for 'private', so these can never
+      // be listed across orders.
+      match /private/{side} {
+        function contactOrder() {
+          return get(/databases/$(database)/documents/orders/$(orderId)).data;
+        }
+        function contactShared() {
+          return contactOrder().status in ['confirmed', 'shipped'];
+        }
+        function validContact() {
+          return request.resource.data.keys().hasOnly(['contact', 'updatedAt'])
+            && request.resource.data.contact is string
+            && request.resource.data.contact.matches('[+]639[0-9]{9}');
+        }
+
+        allow get: if marketplaceUser() && (
+          (side == 'buyer' && (
+            contactOrder().buyerId == request.auth.uid ||
+            (contactOrder().sellerId == request.auth.uid && contactShared())
+          )) ||
+          (side == 'farmer' && (
+            contactOrder().sellerId == request.auth.uid ||
+            (contactOrder().buyerId == request.auth.uid && contactShared())
+          )) ||
+          (side in ['buyer', 'farmer'] && isAdmin())
+        );
+        allow list: if false;
+
+        allow create, update: if marketplaceUser() && validContact() && (
+          (side == 'buyer' &&
+            contactOrder().buyerId == request.auth.uid &&
+            contactOrder().status == 'pending') ||
+          (side == 'farmer' &&
+            contactOrder().sellerId == request.auth.uid &&
+            contactOrder().status in ['pending', 'confirmed', 'shipped'])
+        );
+        allow delete: if false;
+      }
     }
 
     // ---- Transaction receipts — one per completed order (doc id ==
@@ -612,6 +672,24 @@ service cloud.firestore {
       }
     }
 
+    // ---- Confirmed violations ----
+    // Written when an Admin confirms a violation on a report (Moderation
+    // Queue): tied to the reported account by uid (reportedUserId) and to
+    // the report it came from (sourceReportId, also the document's id, so
+    // one report can never yield two). Admin-only, and never rewritten or
+    // removed afterwards.
+    match /violations/{violationId} {
+      allow read: if request.auth != null &&
+        isAdmin();
+      allow create: if request.auth != null &&
+        isAdmin() &&
+        request.resource.data.sourceReportId == violationId &&
+        request.resource.data.confirmedBy == request.auth.uid &&
+        request.resource.data.reportedUserId is string &&
+        request.resource.data.reportedUserId.size() > 0;
+      allow update, delete: if false;
+    }
+
     // ---- Support requests (buyer/farmer -> admin) ----
     match /supportRequests/{requestId} {
       // The requester can read back their own submitted requests; an admin
@@ -635,11 +713,49 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ---- Historical monthly demand, imported by an Admin from a
+    // spreadsheet (Admin → Market Forecasts). Forecasting support only:
+    // kept apart from orders/market_sales, and Admin-only both ways. ----
+    match /historical_demand/{recordId} {
+      allow read, write: if request.auth != null &&
+        isAdmin();
+    }
+
     // ---- Admin-managed baseline commodity prices ----
+    // The Admin Portal's single active session (functions/admin_session.js
+    // writes it, through the Admin SDK). An Admin can read only their own
+    // record, and change nothing in it except to say the session is still
+    // open; nobody else has any access.
+    match /adminSessions/{adminUid} {
+      allow read: if request.auth != null &&
+        request.auth.uid == adminUid &&
+        isAdmin();
+      allow update: if request.auth != null &&
+        request.auth.uid == adminUid &&
+        isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['lastActiveAt']);
+      allow create, delete: if false;
+
+      match /history/{sessionId} {
+        allow read: if request.auth != null &&
+          request.auth.uid == adminUid &&
+          isAdmin();
+        allow write: if false;
+      }
+    }
+
     match /market_prices/{commodityId} {
       allow read: if true;
       allow write: if request.auth != null &&
         isAdmin();
+
+      // One dated entry per reference price the office has set (Admin →
+      // Price Management). Admin-only both ways.
+      match /history/{entryId} {
+        allow read, write: if request.auth != null &&
+          isAdmin();
+      }
     }
 
     // ---- In-app notification history, written by Cloud Functions
@@ -676,6 +792,26 @@ service cloud.firestore {
     }
     match /searchTrendVotes/{voteId} {
       allow read, write: if false;
+    }
+
+    // ---- Announcements: a message from the Admin to farmers, or to
+    // farmers and buyers (a maintenance notice). The Admin creates one;
+    // the sendAnnouncement Cloud Function delivers it to each recipient's
+    // own notifications, which is where they read it. Never edited or
+    // deleted from a client, so what was sent stays on record. ----
+    match /announcements/{announcementId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.title is string &&
+        request.resource.data.title.size() > 0 &&
+        request.resource.data.title.size() <= 80 &&
+        request.resource.data.body is string &&
+        request.resource.data.body.size() > 0 &&
+        request.resource.data.body.size() <= 600 &&
+        request.resource.data.kind in ['announcement', 'maintenance'] &&
+        request.resource.data.audience in ['farmers', 'all'];
+      allow update, delete: if false;
     }
 
     // ---- Admin Portal audit log — written only by the logAuditEvent

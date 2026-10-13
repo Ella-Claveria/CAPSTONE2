@@ -11,8 +11,8 @@
 // WHY THIS SCREEN EXISTS:
 // Your paper says only VERIFIED local farmers may sell, so that
 // buyers can trust the products. That means a farmer cannot go
-// straight into the app after signing up — a Department of
-// Agriculture officer must approve them first.
+// straight into the app after signing up — an officer of the
+// Agricultural Office of Laurel, Batangas must approve them first.
 //
 // This screen is where a farmer waits. It shows one of three
 // states: pending, approved, or rejected.
@@ -23,6 +23,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
+import '../services/notification_permission_prompt.dart';
+import '../services/push_notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import 'farmer_home_screen.dart';
@@ -47,6 +49,33 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   bool _returningToLogin = false;
   bool _loginRedirectStarted = false;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
+
+  // The office's reason for not approving, kept with the application.
+  String _rejectionReason = '';
+  bool _reasonAsked = false;
+
+  Future<void> _loadRejectionReason() async {
+    if (_reasonAsked) return;
+    _reasonAsked = true;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final application = await FirebaseFirestore.instance
+          .collection('verificationDocs')
+          .doc(uid)
+          .get();
+      final reason = (application.data()?['rejectionReason'] ?? '')
+          .toString()
+          .trim();
+      if (mounted && reason.isNotEmpty) {
+        setState(() => _rejectionReason = reason);
+      }
+    } catch (_) {
+      // Shown without a reason; the office can still be asked.
+      _reasonAsked = false;
+    }
+  }
+
   // Firestore streams can re-emit the same value (e.g. a metadata-only
   // change), so this guards pushAndRemoveUntil from firing more than once.
   bool _navigated = false;
@@ -61,6 +90,20 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   // writes straight to users/{uid}, so this picks it up the moment it
   // happens — no need for the farmer to do anything on this screen.
   void _listenForApproval() {
+    // Registered and verified, now waiting: the moment notifications are
+    // worth having. Explained first, asked once per phone, and declining
+    // changes nothing here (see NotificationPermissionPrompt).
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      await NotificationPermissionPrompt.instance.onEnteredApp(context);
+      // Puts this phone on the account's push list when notifications are
+      // allowed (now, or from before) — it never asks by itself. A farmer
+      // who has just registered reaches this screen without passing the
+      // app's usual start-up registration.
+      try {
+        await PushNotificationService().setupFCM();
+      } catch (_) {}
+    });
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
       setState(() => _loading = false);
@@ -150,7 +193,14 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     } catch (_) {}
 
     try {
-      await _authService.signOut().timeout(const Duration(seconds: 3));
+      // Still under review: this phone stays on the account's push list,
+      // so the office's decision reaches it while signed out.
+      await _authService
+          .signOut(
+            reason: 'farmer returned to login from the approval screen',
+            keepPushToken: _status == 'pending',
+          )
+          .timeout(const Duration(seconds: 3));
     } catch (_) {
       try {
         await FirebaseAuth.instance.signOut().timeout(
@@ -173,6 +223,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   @override
   Widget build(BuildContext context) {
     final rejected = _status == 'rejected';
+    if (rejected) _loadRejectionReason();
 
     return Scaffold(
       backgroundColor: AppTheme.bgLight,
@@ -230,17 +281,50 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
 
                   Text(
                     rejected
-                        ? 'The Department of Agriculture did not approve '
-                              'your application. Please contact their office '
+                        ? 'The Agricultural Office of Laurel, Batangas did not '
+                              'approve your application. Please contact their office '
                               'for clarification.'
                         : "You've submitted your farmer application, "
-                              'including your agricultural certificate. A '
-                              'Department of Agriculture officer now reviews '
-                              'it to confirm you\'re a genuine farmer before '
+                              'including your verification details. An '
+                              'officer of the Agricultural Office of Laurel, '
+                              'Batangas now reviews it to confirm you\'re a '
+                              'genuine farmer before '
                               'you can sell on AgriTrade+.',
                     style: AppTheme.body(size: 13.5),
                     textAlign: TextAlign.center,
                   ),
+                  if (rejected && _rejectionReason.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.red.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.red.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Reason',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.red[700],
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _rejectionReason,
+                            style: AppTheme.body(size: 13.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 18),
 
                   if (!rejected) ...[

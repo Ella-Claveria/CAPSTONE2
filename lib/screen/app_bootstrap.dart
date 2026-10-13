@@ -1,8 +1,10 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../data/commodity_master_list.dart';
 import '../firebase_options.dart';
@@ -14,7 +16,11 @@ import '../services/push_notification_service.dart';
 import '../widgets/branded_loading_screen.dart';
 import '../widgets/no_internet_screen.dart';
 import 'app_router.dart';
-import 'login_screen.dart';
+import 'admin_session_gate.dart';
+
+// One listener for the whole app run — AppBootstrap itself can be rebuilt
+// (e.g. after a session timeout).
+StreamSubscription<User?>? _authLogSub;
 
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // Runs in a separate isolate; keep it minimal.
@@ -59,15 +65,10 @@ class _AppBootstrapState extends State<AppBootstrap> {
   }
 
   Future<void> _boot() async {
-    // ---- Step 1: is there even a network interface? ----
-    // Cheap and Firebase-independent, so an obviously offline device (e.g.
-    // airplane mode) never has to wait on anything else to find that out.
-    setState(() => _phase = _BootPhase.checkingInternet);
-    if (!await _hasNetworkInterface()) {
-      if (!mounted) return;
-      setState(() => _phase = _BootPhase.offline);
-      return;
-    }
+    // ---- Step 1: nothing is decided from the network interface alone ----
+    // connectivity_plus can report "none" on a device that is in fact
+    // online, so it never blocks startup by itself; step 3's real
+    // reachability check is the only judge.
 
     // ---- Step 2: local, network-independent Firebase SDK setup ----
     if (Firebase.apps.isEmpty) {
@@ -89,11 +90,27 @@ class _AppBootstrapState extends State<AppBootstrap> {
       }
     }
 
+    // Debug trail for unexpected logouts: every sign-in / sign-out /
+    // restored session is printed with its uid and email. Pair it with the
+    // "[Auth] signOut() called — reason: …" line from AuthService.signOut
+    // to see exactly what ended a session.
+    _authLogSub ??= FirebaseAuth.instance.authStateChanges().listen((user) {
+      debugPrint(
+        user == null
+            ? '[Auth] auth state changed → signed OUT (no current user)'
+            : '[Auth] auth state changed → signed IN '
+                  '(uid: ${user.uid}, email: ${user.email})',
+      );
+    });
+
     // ---- Step 3: confirm Firebase is actually reachable, not just that ----
     // a network interface exists (a device can show full signal on a dead
     // access point or a captive portal and still have zero real access).
     setState(() => _phase = _BootPhase.checkingInternet);
-    final reachable = await ConnectivityService.instance.checkNow(force: true);
+    final reachable = await ConnectivityService.instance.checkNow(
+      force: true,
+      reason: 'app start',
+    );
     if (!mounted) return;
     if (!reachable) {
       setState(() => _phase = _BootPhase.offline);
@@ -155,17 +172,6 @@ class _AppBootstrapState extends State<AppBootstrap> {
     setState(() => _phase = _BootPhase.ready);
   }
 
-  Future<bool> _hasNetworkInterface() async {
-    try {
-      final results = await Connectivity().checkConnectivity();
-      return results.any((r) => r != ConnectivityResult.none);
-    } catch (_) {
-      // Plugin unavailable on this platform/build — let the real Firebase
-      // reachability probe in step 3 be the judge instead of blocking here.
-      return true;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     switch (_phase) {
@@ -187,10 +193,11 @@ class _AppBootstrapState extends State<AppBootstrap> {
           onRetry: _boot,
         );
       case _BootPhase.ready:
-        // Flutter Web is the Admin portal only — same shared login design as
-        // mobile, just pre-set to the admin door (see AuthRoutingService for
-        // the actual role/platform enforcement after sign-in).
-        return kIsWeb ? const LoginScreen(role: 'admin') : const AppRouter();
+        // Flutter Web is the Admin portal only. AdminSessionGate restores an
+        // existing Admin session (e.g. after a page refresh) or shows the
+        // admin login door (see AuthRoutingService for the actual
+        // role/platform enforcement).
+        return kIsWeb ? const AdminSessionGate() : const AppRouter();
       case _BootPhase.initializing:
       case _BootPhase.checkingInternet:
       case _BootPhase.checkingAuthentication:

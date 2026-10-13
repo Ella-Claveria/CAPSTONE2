@@ -12,11 +12,14 @@ import '../services/product_recommendation_service.dart';
 import '../services/product_visibility_service.dart';
 import '../services/saved_products_service.dart';
 import '../services/search_trends.dart';
+import '../widgets/app_back_button.dart';
+import '../widgets/app_search_bar.dart';
 import '../widgets/explore_product_card.dart';
 import '../widgets/save_product_button.dart';
 import '../widgets/retry_message.dart';
 import 'product_detail_screen.dart';
 import 'farmer_storefront_screen.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// The dedicated Buyer Search experience — opened by tapping the (non-
 /// editable) search bar on Explore, never an inline field on the
@@ -336,64 +339,23 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.black87),
+            icon: const AppBackIcon(),
             onPressed: () => Navigator.of(context).pop(),
           ),
           Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: TextField(
-                controller: _controller,
-                focusNode: _focusNode,
-                textAlignVertical: TextAlignVertical.center,
-                style: const TextStyle(fontSize: 13.5, color: Colors.black87),
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  isDense: true,
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide.none,
-                  ),
-                  prefixIcon: Icon(
-                    Icons.search,
-                    color: Colors.grey[500],
-                    size: 20,
-                  ),
-                  suffixIcon: _controller.text.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: Icon(
-                            Icons.close,
-                            color: Colors.grey[500],
-                            size: 18,
-                          ),
-                          onPressed: _clearSearch,
-                        ),
-                  hintText: 'Search crops, livestock, or farmers...',
-                  hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13.5),
-                ),
-                onChanged: (value) => setState(() {
-                  _typed = value;
-                  // Editing the field after a search was active returns to
-                  // live typing/suggestions instead of silently keeping a
-                  // stale results view on screen.
-                  _activeQuery = null;
-                }),
-                onSubmitted: _commitSearch,
-              ),
+            // The same bar as Marketplace's, here as a real field.
+            child: AppSearchBar(
+              controller: _controller,
+              focusNode: _focusNode,
+              onClear: _clearSearch,
+              onChanged: (value) => setState(() {
+                _typed = value;
+                // Editing the field after a search was active returns to
+                // live typing/suggestions instead of silently keeping a
+                // stale results view on screen.
+                _activeQuery = null;
+              }),
+              onSubmitted: _commitSearch,
             ),
           ),
         ],
@@ -695,34 +657,11 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
                 farmerHits.isEmpty &&
                 normalizedQuery.isNotEmpty) {
               return Center(
-                child: Padding(
+                child: AgriEmptyState(
+                  icon: Icons.search_off_rounded,
+                  title: 'No results for "$query"',
+                  subtitle: 'Try a different search term.',
                   padding: const EdgeInsets.all(32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.search_off_rounded,
-                        size: 56,
-                        color: Colors.grey[350],
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'No results for "$query"',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.black87,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'Try a different search term.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.black54, fontSize: 13.5),
-                      ),
-                    ],
-                  ),
                 ),
               );
             }

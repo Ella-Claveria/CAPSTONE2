@@ -1,4 +1,5 @@
 import '../theme/app_theme.dart';
+import '../widgets/notification_bell.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -8,15 +9,27 @@ import '../services/product_service.dart';
 import '../services/product_recommendation_service.dart';
 import '../services/product_visibility_service.dart';
 import '../services/saved_products_service.dart';
+import '../widgets/page_header.dart';
 import '../widgets/retry_message.dart';
 import '../widgets/agri_refresh_indicator.dart';
+import '../widgets/app_search_bar.dart';
 import 'buyer_search_screen.dart';
 import 'product_detail_screen.dart';
 import '../widgets/explore_product_card.dart';
 import '../widgets/save_product_button.dart';
+import '../widgets/agri_empty_state.dart';
 
 class BuyerExploreScreen extends StatefulWidget {
-  const BuyerExploreScreen({super.key});
+  /// The notification bell in this tab's header; [bellKey] lets the
+  /// first-time walkthrough point at it.
+  final VoidCallback? onNotificationsPressed;
+  final Key? bellKey;
+
+  const BuyerExploreScreen({
+    super.key,
+    this.onNotificationsPressed,
+    this.bellKey,
+  });
 
   @override
   State<BuyerExploreScreen> createState() => _BuyerExploreScreenState();
@@ -28,7 +41,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   String _selectedCategory = 'All Postings';
   // Derived from the Commodity Master List so every category a farmer can
   // now pick on Add Product (Grains, Root Crops, Vegetables, Spices,
-  // Fruits, Livestock, Fisheries) also has a matching buyer-side filter —
+  // Fruits, Livestock) also has a matching buyer-side filter —
   // not a separately hand-maintained list that can fall out of sync.
   List<String> get _categories => [
     'All Postings',
@@ -105,6 +118,17 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Same title row as Messages, Orders and Profile.
+        PageHeader(
+          title: 'Explore',
+          trailing: widget.onNotificationsPressed == null
+              ? null
+              : NotificationBell(
+                  key: widget.bellKey,
+                  onPressed: widget.onNotificationsPressed!,
+                  color: AppTheme.dark,
+                ),
+        ),
         _buildSearchBar(),
         _buildCategoryChips(),
         _buildLocationFilter(),
@@ -122,42 +146,10 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   Widget _buildSearchBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      child: Material(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const BuyerSearchScreen()),
-          ),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-            child: Row(
-              children: [
-                Icon(Icons.search, color: Colors.grey[500], size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Search crops, livestock, or farmers...',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: Colors.grey[500], fontSize: 13.5),
-                  ),
-                ),
-              ],
-            ),
-          ),
+      child: AppSearchBar(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const BuyerSearchScreen()),
         ),
       ),
     );
@@ -350,42 +342,20 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
               _selectedCategory != 'All Postings';
 
           return Center(
-            child: Padding(
+            child: AgriEmptyState(
+              icon: isFiltered ? Icons.search_off_rounded : Icons.eco_outlined,
+              title: _selectedBarangay != 'All Locations'
+                  ? 'No listings yet in $_selectedBarangay'
+                  : 'No products available yet',
+              subtitle: isFiltered
+                  ? 'Try a different search or clear your filters to see '
+                        'everything on offer.'
+                  : 'New marketplace listings will appear here once farmers '
+                        'post products.',
               padding: const EdgeInsets.all(32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    isFiltered ? Icons.search_off_rounded : Icons.eco_outlined,
-                    size: 56,
-                    color: Colors.grey[350],
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    _selectedBarangay != 'All Locations'
-                        ? 'No listings yet in $_selectedBarangay'
-                        : 'No products available yet',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.black87,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    isFiltered
-                        ? 'Try a different search or clear your filters to see everything on offer.'
-                        : 'New marketplace listings will appear here once farmers post products.',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.black54,
-                      fontSize: 13.5,
-                    ),
-                  ),
-                  if (isFiltered) ...[
-                    const SizedBox(height: 20),
-                    OutlinedButton.icon(
+              action: !isFiltered
+                  ? null
+                  : OutlinedButton.icon(
                       onPressed: () {
                         setState(() {
                           _selectedBarangay = 'All Locations';
@@ -406,9 +376,6 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
                         ),
                       ),
                     ),
-                  ],
-                ],
-              ),
             ),
           );
         }

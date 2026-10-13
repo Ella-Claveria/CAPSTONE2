@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'dart:async';
 
@@ -9,6 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import '../services/location_permission_prompt.dart';
 import '../services/public_farm_location.dart';
 import '../widgets/profile_avatar.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// "Approx. 4.8 km away" — never presented as exact: one decimal below
 /// 10 km, whole kilometres beyond that. Null (no buyer location, or no
@@ -237,19 +239,10 @@ class _BuyerMapViewState extends State<BuyerMapView> {
 
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        surfaceTintColor: Colors.white,
-        foregroundColor: Colors.black87,
-        elevation: 1,
+      appBar: AgriAppBar(
+        title: 'Farm Location',
         // Returns to the Product Details this map was opened from.
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          tooltip: 'Back',
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        titleSpacing: 0,
-        title: Text('Farm Location', style: AppTheme.heading(18)),
+        onBack: () => Navigator.of(context).pop(),
       ),
       body: Stack(
         children: [
@@ -323,20 +316,11 @@ class _BuyerMapViewState extends State<BuyerMapView> {
     return Container(
       color: const Color(0xFFF4F7F4),
       alignment: const Alignment(0, -0.35),
-      padding: const EdgeInsets.all(32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.location_off_outlined, size: 52, color: Colors.grey[500]),
-          const SizedBox(height: 14),
-          Text('Farm location unavailable', style: AppTheme.heading(17)),
-          const SizedBox(height: 6),
-          Text(
-            'We could not place this farmer’s area on the map.',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.grey[800]),
-          ),
-        ],
+      child: const AgriEmptyState(
+        icon: Icons.location_off_outlined,
+        title: 'Farm location unavailable',
+        subtitle: 'We could not place this farmer’s area on the map.',
+        padding: EdgeInsets.all(32),
       ),
     );
   }

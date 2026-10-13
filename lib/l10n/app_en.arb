@@ -37,7 +37,7 @@
   "password": "Password",
   "forgotPassword": "Forgot Password?",
   "loginButton": "Login",
-  "loginSubtitle": "Sign in to your AgriTrade+ account",
+  "loginSubtitle": "Log in to your AgriTrade+ account",
   "noAccountSignUp": "Don't have an account? ",
   "signUp": "Sign up",
   "createOne": "Create One.",
@@ -59,9 +59,23 @@
 
   "selectLanguage": "Select Language",
   "english": "English",
-  "tagalog": "Tagalog",
+  "tagalog": "Filipino",
+  "language": "Language",
+  "languageHintTitle": "Choose your language",
+  "languageHintMessage": "Tap E for English or F for Filipino. You can change it here anytime, or later in Settings.",
+  "coachGotIt": "Got it",
   "languageChanged": "Language set to {language}.",
   "@languageChanged": {
     "placeholders": { "language": { "type": "String" } }
-  }
+  },
+
+  "onboardingSkip": "Skip",
+  "onboardingNext": "Next",
+  "onboardingGetStarted": "Get Started",
+  "onboardingTitle1": "Fresh Products, Direct Trading",
+  "onboardingDescription1": "Buy and sell selected agricultural products directly through AgriTrade+.",
+  "onboardingTitle2": "Smart and Convenient Marketplace",
+  "onboardingDescription2": "Discover products, connect with farmers and buyers, and manage your transactions in one place.",
+  "onboardingTitle3": "Stay Connected",
+  "onboardingDescription3": "Manage orders, messages, and important transaction updates through AgriTrade+."
 }

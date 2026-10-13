@@ -1,9 +1,11 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/message_search_history_service.dart';
 import '../services/message_service.dart';
+import '../widgets/app_search_bar.dart';
 import '../widgets/profile_avatar.dart';
 import 'chat_navigation.dart';
 
@@ -21,7 +23,6 @@ class MessageSearchScreen extends StatefulWidget {
 class _MessageSearchScreenState extends State<MessageSearchScreen> {
   static const Color _dark = AppTheme.dark;
   static const Color _bg = Colors.white;
-  static const Color _fieldFill = Color(0xFFF3F6F2);
 
   final MessageService _messageService = MessageService();
   final MessageSearchHistoryService _historyService =
@@ -118,48 +119,15 @@ class _MessageSearchScreenState extends State<MessageSearchScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        iconTheme: const IconThemeData(color: _dark),
-        titleSpacing: 0,
-        title: Padding(
+      appBar: AgriAppBar(
+        titleWidget: Padding(
           padding: const EdgeInsets.only(right: 12),
-          child: TextField(
+          child: AppSearchBar(
+            hint: 'Search conversations...',
             controller: _controller,
             autofocus: true,
-            textInputAction: TextInputAction.search,
             onSubmitted: (_) => _saveSearch(),
-            decoration: InputDecoration(
-              hintText: 'Search conversations...',
-              hintStyle: TextStyle(color: Colors.grey[500], fontSize: 14),
-              prefixIcon: Icon(
-                Icons.search_rounded,
-                color: Colors.grey[500],
-                size: 21,
-              ),
-              suffixIcon: _query.isNotEmpty
-                  ? IconButton(
-                      icon: Icon(
-                        Icons.close,
-                        color: Colors.grey[500],
-                        size: 20,
-                      ),
-                      onPressed: _controller.clear,
-                    )
-                  : null,
-              filled: true,
-              fillColor: _fieldFill,
-              contentPadding: const EdgeInsets.symmetric(
-                vertical: 10,
-                horizontal: 4,
-              ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(14),
-                borderSide: BorderSide.none,
-              ),
-              constraints: const BoxConstraints(minHeight: 42, maxHeight: 42),
-            ),
+            onClear: _controller.clear,
           ),
         ),
       ),

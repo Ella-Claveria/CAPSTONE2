@@ -12,6 +12,7 @@ import '../theme/app_theme.dart';
 import 'agri_dialog.dart';
 import 'agri_refresh_indicator.dart';
 import 'retry_message.dart';
+import 'agri_empty_state.dart';
 
 // The Orders body shared by the Farmer and Buyer sides (see OrdersView):
 // plain text status tabs with a green underline, a red corner badge for
@@ -534,42 +535,12 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: const BoxDecoration(
-              color: Color(0xFFEFF6E8),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(tab.emptyIcon, size: 30, color: AppTheme.dark),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            tab.emptyTitle,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.montserrat(
-              fontSize: 14.5,
-              fontWeight: FontWeight.w700,
-              color: Colors.black87,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.montserrat(
-              fontSize: 12.5,
-              color: Colors.grey[600],
-              height: 1.4,
-            ),
-          ),
-          if (action != null) ...[const SizedBox(height: 16), action!],
-        ],
-      ),
+    // The app-wide empty state; Orders is where its look comes from.
+    return AgriEmptyState(
+      icon: tab.emptyIcon,
+      title: tab.emptyTitle,
+      subtitle: subtitle,
+      action: action,
     );
   }
 }

@@ -19,6 +19,9 @@
 // see AuthService.completeRegistration's doc comment for why.
 // ============================================================
 
+import '../widgets/agri_app_bar.dart';
+import '../widgets/email_delivery_notice.dart';
+import '../widgets/email_request_leave_guard.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -90,6 +93,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
     // Very important: stop the timer when leaving this screen,
     // or it keeps running in the background and causes errors.
     _cooldownTimer?.cancel();
+    _leaveConfirm.dismiss();
     _codeController.dispose();
     _codeFocus.dispose();
     super.dispose();
@@ -108,6 +112,17 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
 
     final result = await _authService.requestEmailOtp(resend: resend);
     if (!mounted) return;
+    // If "Leave This Process?" is on screen, the result waits for the
+    // answer: applied after Stay, dropped on Leave. Nothing here changes
+    // or navigates while the question is open.
+    _leaveConfirm.whenResolved(() => _applyCodeRequest(result, resend));
+  }
+
+  Future<void> _applyCodeRequest(
+    EmailOtpRequestResult result,
+    bool resend,
+  ) async {
+    if (!mounted || _navigatingAway) return;
     setState(() => _requesting = false);
 
     if (result.alreadyVerified) {
@@ -251,6 +266,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
           profile?.supportedProductsAcknowledged ?? false,
       barangay: profile?.barangay,
       certificateUrl: profile?.certificateUrl,
+      rsbaNumber: profile?.rsbaNumber,
       emailOtpVerified: true,
     );
     if (error == null) await _authService.clearPendingProfile(uid);
@@ -309,6 +325,19 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
 
   // Back (the arrow or the system back button): to Login, staying signed
   // in. The stack is cleared, so Login is the one and only route.
+  // Back (the arrow and the system back button). While a code request is
+  // still being sent it asks "Leave This Process?" first; otherwise it
+  // goes straight back to the login door, as before.
+  final _leaveConfirm = EmailLeaveConfirm();
+
+  Future<void> _onBack() async {
+    if (_requesting) {
+      final leave = await _leaveConfirm.show(context);
+      if (!leave || !mounted) return;
+    }
+    _backToLoginDoor();
+  }
+
   void _backToLoginDoor() {
     if (_navigatingAway) return;
     _navigatingAway = true;
@@ -441,21 +470,14 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
       // The system back button does what the arrow does.
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _backToLoginDoor();
+        if (!didPop) _onBack();
       },
       child: Scaffold(
         backgroundColor: AppTheme.bgLight,
-        appBar: AppBar(
-          backgroundColor: AppTheme.bgLight,
-          foregroundColor: AppTheme.dark,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          automaticallyImplyLeading: false,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            tooltip: 'Back to login',
-            onPressed: busy ? null : _backToLoginDoor,
-          ),
+        appBar: AgriAppBar(
+          onBack: _onBack,
+          backEnabled: !busy,
+          backTooltip: 'Back to login',
         ),
         body: SafeArea(
           child: Center(
@@ -488,7 +510,7 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                     const SizedBox(height: 14),
 
                     Text(
-                      'Verify your email',
+                      'Verify Your Email',
                       style: GoogleFonts.lilitaOne(
                         fontSize: 24,
                         color: Colors.black87,
@@ -498,7 +520,10 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                     const SizedBox(height: 10),
 
                     Text(
-                      'We sent a 6-digit verification code to:',
+                      // "Requested", not "sent": this text is on screen
+                      // whether or not the email has gone out yet.
+                      "We've requested a verification email with a 6-digit "
+                      'code for:',
                       style: AppTheme.body(size: 13.5),
                       textAlign: TextAlign.center,
                     ),
@@ -609,12 +634,12 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                       ),
                     ),
 
-                    const SizedBox(height: 4),
-                    Text(
-                      "If it's not in your Inbox, check Spam or Promotions. "
-                      'If it\'s there, mark it as "Not spam".',
-                      style: AppTheme.body(size: 11.5),
-                      textAlign: TextAlign.center,
+                    const SizedBox(height: 8),
+                    const EmailDeliveryNotice(
+                      text:
+                          'Please check your Inbox, including your Spam or '
+                          'Junk folder. The email may take a few minutes to '
+                          'arrive. If it is in Spam, mark it as "Not spam".',
                     ),
                   ],
                 ),

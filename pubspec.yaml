@@ -2,7 +2,7 @@ name: agritrade
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.12.2
@@ -67,9 +67,27 @@ flutter:
     - assets/images/onboarding_2_connection.png
     - assets/images/onboarding_3_marketplace.png
     - assets/images/login_hero.png
+    - assets/images/login_landscape.png
+    - assets/images/bg_adminside.png
     - assets/images/bg_admin.png
     - assets/images/bg_panel.png
     - assets/images/market_farmer.png
+
+  # Montserrat with its real weights, for the Admin Portal: a browser does
+  # not fake a bold from the regular file, so titles need the bold one.
+  fonts:
+    - family: Montserrat
+      fonts:
+        - asset: assets/fonts/Montserrat-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Montserrat-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Montserrat-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Montserrat-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Montserrat-ExtraBold.ttf
+          weight: 800
 
 flutter_launcher_icons:
   android: true

@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -143,13 +144,8 @@ class _FarmerReviewsScreenState extends State<FarmerReviewsScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F5),
-      appBar: AppBar(
-        title: Text(_forProduct ? 'Product Reviews' : 'Buyer Reviews'),
-        backgroundColor: Colors.white,
-        foregroundColor: _green,
-        elevation: 0,
-        scrolledUnderElevation: 0.5,
-        titleTextStyle: AppTheme.heading(17).copyWith(color: _green),
+      appBar: AgriAppBar(
+        title: _forProduct ? 'Product Reviews' : 'Buyer Reviews',
       ),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _reviews,

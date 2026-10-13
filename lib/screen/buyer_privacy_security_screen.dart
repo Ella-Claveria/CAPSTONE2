@@ -5,6 +5,7 @@ import 'buyer_saved_products_screen.dart' show buyerSubScreenAppBar;
 import 'farmer_edit_profile_screen.dart';
 import 'privacy_policy_screen.dart';
 import 'terms_and_conditions_screen.dart';
+import 'sign_in_activity_screen.dart';
 
 /// Security and privacy controls for a buyer — nothing else. Changing the
 /// password is the item above this one in Account Settings, so it isn't
@@ -25,6 +26,13 @@ class BuyerPrivacySecurityScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          ListTile(
+            leading: const Icon(Icons.devices_other_outlined, color: _dark),
+            title: const Text('Devices & login activity'),
+            subtitle: const Text('Where your account is logged in, and alerts'),
+            trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+            onTap: () => open(const SignInActivityScreen()),
+          ),
           ListTile(
             leading: const Icon(Icons.security_outlined, color: _dark),
             title: const Text('Recovery email'),

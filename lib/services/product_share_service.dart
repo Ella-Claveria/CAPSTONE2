@@ -14,7 +14,7 @@ import 'market_price_helpers.dart';
 /// Where shared product links point: the AgriTrade+ web app on Firebase
 /// Hosting (see firebase.json). The same address is registered as an app
 /// link in AndroidManifest.xml, so on a phone with the app installed (and
-/// the link verified — see web/.well-known/assetlinks.json) it opens the
+/// the link verified — see web/assetlinks.json, served at /.well-known/assetlinks.json) it opens the
 /// app instead; everyone else lands on the web app.
 const String kProductLinkBase = 'https://agritrade-bef87.web.app';
 

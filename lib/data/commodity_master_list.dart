@@ -14,10 +14,12 @@ import 'package:flutter/foundation.dart';
 /// touching listings that already use it. [CommodityRegistry] keeps a live
 /// copy so the rest of the app can keep asking synchronously.
 ///
+/// Deleting a commodity there removes it here as well.
+///
 /// [_defaultCommodities] is only the starting set: the commodities agreed
-/// with the agricultural office, used until the Admin's list has loaded and
-/// for any of them the Admin hasn't added a record for yet. An Admin record
-/// with the same name always wins.
+/// with the agricultural office, used until the Admin's list has loaded, or
+/// while the Admin has no commodity on record at all. It also lends its
+/// category and unit to an Admin record of the same name that lacks one.
 
 class Commodity {
   final String name;
@@ -51,8 +53,6 @@ const List<Commodity> _defaultCommodities = [
   Commodity('Swine', 'Livestock', 'kg liveweight'),
   Commodity('Chicken', 'Livestock', 'kg liveweight'),
   Commodity('Cattle', 'Livestock', 'head'),
-  Commodity('Tilapia', 'Fisheries', 'kg'),
-  Commodity('Catfish', 'Fisheries', 'kg'),
 ];
 
 /// The default unit used whenever a commodity has no configured unit (or
@@ -91,17 +91,21 @@ class CommodityRegistry extends ChangeNotifier {
         );
   }
 
-  /// Rebuilds the list from the Admin's `market_prices` records, laid over
-  /// the default set.
+  /// Rebuilds the list from the Admin's `market_prices` records. Once the
+  /// Admin has any commodity on record, that list is the whole list: one
+  /// the Admin deletes is gone here too, default or not.
   void applyAdminRecords(Iterable<Map<String, dynamic>> records) {
-    final merged = <String, Commodity>{
+    // The defaults only lend a category or unit to an Admin record of the
+    // same name that lacks one; they are not added to the list themselves.
+    final defaults = <String, Commodity>{
       for (final c in _defaultCommodities) c.name.toLowerCase(): c,
     };
+    final merged = <String, Commodity>{};
     for (final data in records) {
       final name = (data['name'] ?? '').toString().trim();
       if (name.isEmpty) continue;
       final key = name.toLowerCase();
-      final fallback = merged[key];
+      final fallback = defaults[key];
       final category = (data['category'] ?? '').toString().trim();
       // A price record with no category isn't a postable commodity yet.
       if (category.isEmpty && fallback == null) continue;
@@ -115,7 +119,10 @@ class CommodityRegistry extends ChangeNotifier {
         isActive: data['isActive'] != false,
       );
     }
-    _all = merged.values.toList(growable: false);
+    // Nothing from the Admin yet (a new installation): the starting set.
+    _all = merged.isEmpty
+        ? _defaultCommodities
+        : merged.values.toList(growable: false);
     notifyListeners();
   }
 

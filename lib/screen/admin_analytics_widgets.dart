@@ -5,6 +5,8 @@ import '../services/market_price_helpers.dart';
 import '../data/commodity_master_list.dart';
 import 'admin_dashboard_screen.dart'
     show AdminThemeScope, AdminPalette, AdminEmptyState, AdminRadii;
+import 'admin_overview_widgets.dart'
+    show AdminChartCard, AdminChartEmpty, adminGreenAt;
 
 // ============================================================
 // New chart widgets for the Admin Analytics Dashboard redesign. Every
@@ -14,164 +16,15 @@ import 'admin_dashboard_screen.dart'
 // this file stays decoupled from its private helper types.
 // ============================================================
 
-// ---- Sales by Category (donut) ----
-class AdminSalesByCategoryCard extends StatelessWidget {
-  final Map<String, num> categoryRevenue;
-  const AdminSalesByCategoryCard({super.key, required this.categoryRevenue});
-
-  static const List<Color> _palette = [
-    Color(0xFF4CAF50),
-    Color(0xFFFF9800),
-    Color(0xFF2196F3),
-    Color(0xFFE91E63),
-    Color(0xFF9C27B0),
-    Color(0xFF795548),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    final entries = categoryRevenue.entries.where((e) => e.value > 0).toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final total = entries.fold<num>(0, (sum, e) => sum + e.value);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(AdminRadii.card),
-        border: Border.all(color: c.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Sales by Category',
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Share of completed-order revenue',
-            style: TextStyle(color: c.textSecondary, fontSize: 13),
-          ),
-          const SizedBox(height: 16),
-          if (entries.isEmpty)
-            const AdminEmptyState(
-              icon: Icons.pie_chart_outline,
-              title: 'No sales yet',
-              subtitle: 'Category breakdown will appear once orders complete.',
-            )
-          else
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                SizedBox(
-                  width: 130,
-                  height: 130,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      PieChart(
-                        PieChartData(
-                          sections: [
-                            for (var i = 0; i < entries.length; i++)
-                              PieChartSectionData(
-                                value: entries[i].value.toDouble(),
-                                color: _palette[i % _palette.length],
-                                radius: 22,
-                                showTitle: false,
-                              ),
-                          ],
-                          centerSpaceRadius: 40,
-                          sectionsSpace: 2,
-                        ),
-                      ),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            formatPeso(total),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: c.textPrimary,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                            ),
-                          ),
-                          Text(
-                            'Total',
-                            style: TextStyle(
-                              color: c.textSecondary,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 18),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      for (var i = 0; i < entries.length; i++)
-                        Padding(
-                          padding: EdgeInsets.only(
-                            bottom: i == entries.length - 1 ? 0 : 8,
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 10,
-                                height: 10,
-                                decoration: BoxDecoration(
-                                  color: _palette[i % _palette.length],
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  entries[i].key,
-                                  style: TextStyle(
-                                    color: c.textPrimary,
-                                    fontSize: 12.5,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              Text(
-                                total > 0
-                                    ? '${(entries[i].value / total * 100).toStringAsFixed(0)}%'
-                                    : '0%',
-                                style: TextStyle(
-                                  color: c.textSecondary,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-        ],
-      ),
-    );
-  }
-}
+// The two Market Intelligence cards share this body height, so they stay
+// the same size side by side.
+const double _marketCardBodyHeight = 288;
 
 // ---- Top-Selling Products (ranked horizontal bars, top 5) ----
+/// What buyers actually bought most: products ranked by the revenue of
+/// their completed orders, with the quantity sold. Ranked by revenue
+/// rather than quantity because quantities come in different units (kg,
+/// pieces, heads) and cannot be compared with each other.
 class AdminTopProductsCard extends StatelessWidget {
   final List<({String name, num revenue, num quantity})> products;
   const AdminTopProductsCard({super.key, required this.products});
@@ -179,59 +32,28 @@ class AdminTopProductsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    final maxRevenue = products.isEmpty
-        ? 1.0
-        : products
-              .map((p) => p.revenue.toDouble())
-              .reduce((a, b) => a > b ? a : b);
+    final maxRevenue = products.fold<double>(
+      0,
+      (max, p) => p.revenue > max ? p.revenue.toDouble() : max,
+    );
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(AdminRadii.card),
-        border: Border.all(color: c.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.emoji_events_outlined, size: 18, color: c.amber),
-              const SizedBox(width: 8),
-              Text(
-                'Top-Selling Products',
-                style: TextStyle(
-                  color: c.textPrimary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Platform-wide, by completed-order revenue',
-            style: TextStyle(color: c.textSecondary, fontSize: 13),
-          ),
-          const SizedBox(height: 16),
-          if (products.isEmpty)
-            const AdminEmptyState(
+    return AdminChartCard(
+      title: 'Top-Selling Products',
+      subtitle: 'Ranked by sales value of completed orders',
+      bodyHeight: _marketCardBodyHeight,
+      child: products.isEmpty
+          ? const AdminChartEmpty(
               icon: Icons.emoji_events_outlined,
-              title: 'No completed sales yet',
-              subtitle: 'Top products will appear here once orders complete.',
+              message: 'No completed sales data available yet.',
             )
-          else
-            for (var i = 0; i < products.length; i++)
-              Padding(
-                padding: EdgeInsets.only(
-                  bottom: i == products.length - 1 ? 0 : 14,
-                ),
-                child: _row(c, i, products[i], maxRevenue),
-              ),
-        ],
-      ),
+          : Column(
+              children: [
+                for (var i = 0; i < products.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 8),
+                  _row(c, i, products[i], maxRevenue),
+                ],
+              ],
+            ),
     );
   }
 
@@ -245,90 +67,126 @@ class AdminTopProductsCard extends StatelessWidget {
     final barValue = maxRevenue <= 0
         ? 0.0
         : (p.revenue / maxRevenue).clamp(0.03, 1.0);
-    return Container(
-      padding: EdgeInsets.all(isTop ? 12 : 0),
-      decoration: isTop
-          ? BoxDecoration(
-              color: c.amberBg,
-              borderRadius: BorderRadius.circular(AdminRadii.control),
-              border: Border.all(color: c.amber.withValues(alpha: 0.35)),
-            )
-          : null,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 24,
-            child: Text(
-              '#${index + 1}',
-              style: TextStyle(
-                color: isTop ? c.amber : c.textSecondary,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
+    // The same green steps as the charts above: strongest for #1.
+    final strength = products.length == 1
+        ? 1.0
+        : 1 - index / (products.length - 1) * 0.75;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Container(
+          width: 26,
+          height: 26,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: isTop ? adminGreenAt(c, 1) : c.greenBg,
+            shape: BoxShape.circle,
+          ),
+          child: Text(
+            '${index + 1}',
+            style: TextStyle(
+              color: isTop ? Colors.white : c.green,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
             ),
           ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        p.name,
-                        style: TextStyle(
-                          color: c.textPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13.5,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      formatPeso(p.revenue),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      p.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: c.green,
-                        fontWeight: FontWeight.bold,
+                        color: c.textPrimary,
+                        fontWeight: FontWeight.w600,
                         fontSize: 13,
                       ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: barValue,
-                    minHeight: 6,
-                    backgroundColor: c.surfaceAlt,
-                    valueColor: AlwaysStoppedAnimation(
-                      isTop ? c.amber : c.green,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    formatPeso(p.revenue),
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
                     ),
                   ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: barValue,
+                  minHeight: 6,
+                  backgroundColor: c.surfaceAlt,
+                  valueColor: AlwaysStoppedAnimation(adminGreenAt(c, strength)),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '${formatStock(p.quantity, unitForProductName(p.name))} sold',
-                  style: TextStyle(color: c.textSecondary, fontSize: 11),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '${formatStock(p.quantity, unitForProductName(p.name))} sold',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: c.textSecondary, fontSize: 11),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
-// ---- Price Trend vs. Baseline (line chart + commodity chips) ----
+/// The commodities whose name has a word starting with [query] — "ch"
+/// finds Chicken, "co" finds Coconut and Corn — names that start with it
+/// first. An empty query returns them all.
+List<String> matchCommodities(Iterable<String> names, String query) {
+  final q = query.trim().toLowerCase();
+  final sorted = names.toList()
+    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  if (q.isEmpty) return sorted;
+  final starts = <String>[];
+  final wordStarts = <String>[];
+  for (final name in sorted) {
+    final lower = name.toLowerCase();
+    if (lower.startsWith(q)) {
+      starts.add(name);
+    } else if (lower.split(RegExp(r'[\s/()-]+')).any((w) => w.startsWith(q))) {
+      wordStarts.add(name);
+    }
+  }
+  return [...starts, ...wordStarts];
+}
+
+// ---- Price Trend vs. Baseline (line chart + commodity search) ----
+/// One commodity's weekly average price in completed buyer orders, against
+/// the Admin's baseline (reference) price for that same commodity.
+///
+/// The commodity is chosen from a search field that suggests matches from
+/// the supported commodity list as the admin types.
 class AdminPriceTrendCard extends StatefulWidget {
+  /// The supported commodities offered by the search.
+  final List<String> commodities;
+
+  /// Admin baseline price per commodity; a commodity without one is absent.
   final Map<String, double> baselineByCommodity;
+
+  /// Weekly average completed-order price per commodity, oldest first;
+  /// null for a week with no completed order.
   final Map<String, List<double?>> weeklyPricesByCommodity;
 
   const AdminPriceTrendCard({
     super.key,
+    required this.commodities,
     required this.baselineByCommodity,
     required this.weeklyPricesByCommodity,
   });
@@ -340,94 +198,138 @@ class AdminPriceTrendCard extends StatefulWidget {
 class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
   String? _selected;
 
+  bool _hasSales(String name) =>
+      (widget.weeklyPricesByCommodity[name] ?? const []).any((v) => v != null);
+
+  // Opens on a commodity that has sales to show, when there is one.
+  String? _initial(List<String> names) {
+    if (names.isEmpty) return null;
+    for (final name in names) {
+      if (_hasSales(name)) return name;
+    }
+    return names.first;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    final names = widget.baselineByCommodity.keys.toList()..sort();
+    final names = matchCommodities(widget.commodities, '');
     if (_selected == null || !names.contains(_selected)) {
-      _selected = names.isNotEmpty ? names.first : null;
+      _selected = _initial(names);
     }
+    final selected = _selected;
 
-    final weekly = _selected == null
+    final weekly = selected == null
         ? const <double?>[]
-        : (widget.weeklyPricesByCommodity[_selected] ?? const []);
-    final baseline = _selected == null
+        : (widget.weeklyPricesByCommodity[selected] ?? const <double?>[]);
+    final baseline = selected == null
         ? null
-        : widget.baselineByCommodity[_selected];
+        : widget.baselineByCommodity[selected];
     final hasData = weekly.any((v) => v != null);
+    final latest = weekly.lastWhere((v) => v != null, orElse: () => null);
 
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(AdminRadii.card),
-        border: Border.all(color: c.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Price Trend vs. Baseline',
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
+    return AdminChartCard(
+      title: 'Price Trend vs. Baseline',
+      subtitle: 'Weekly average price in completed orders',
+      bodyHeight: _marketCardBodyHeight,
+      trailing: names.isEmpty
+          ? null
+          : AdminCommoditySearchField(
+              // Rebuilt when the selection changes, so the field shows it.
+              key: ValueKey(selected),
+              commodities: names,
+              selected: selected,
+              onSelected: (name) => setState(() => _selected = name),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Weekly average price from completed orders, dashed line = admin baseline',
-            style: TextStyle(color: c.textSecondary, fontSize: 12.5),
-          ),
-          const SizedBox(height: 14),
-          if (names.isEmpty)
-            const AdminEmptyState(
+      child: selected == null
+          ? const AdminChartEmpty(
               icon: Icons.show_chart,
-              title: 'No commodities tracked yet',
-              subtitle: 'Set a baseline price in Manage Prices first.',
+              message: 'No supported commodities to show yet.',
             )
-          else ...[
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final name in names)
-                  ChoiceChip(
-                    label: Text(name),
-                    selected: _selected == name,
-                    onSelected: (_) => setState(() => _selected = name),
-                    selectedColor: c.green,
-                    backgroundColor: c.surfaceAlt,
-                    side: BorderSide(color: c.border),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AdminRadii.control),
-                    ),
-                    labelStyle: TextStyle(
-                      color: _selected == name ? Colors.white : c.textPrimary,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                _summary(c, selected, baseline, latest),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: hasData
+                      ? LineChart(_chartData(c, weekly, baseline))
+                      : const AdminChartEmpty(
+                          icon: Icons.show_chart,
+                          message:
+                              'No completed sales data available yet for '
+                              'this commodity.',
+                        ),
+                ),
               ],
             ),
-            const SizedBox(height: 16),
-            if (!hasData)
-              AdminEmptyState(
-                icon: Icons.show_chart,
-                title:
-                    'No completed sales for ${_selected ?? "this commodity"} yet',
-                subtitle:
-                    'The trend line fills in once matching orders complete.',
-              )
-            else
-              SizedBox(
-                height: 190,
-                child: LineChart(_chartData(c, weekly, baseline)),
-              ),
-          ],
-        ],
-      ),
+    );
+  }
+
+  // The selected commodity, with its two reference figures. The baseline
+  // is shown whenever the Admin has set one, sales or not.
+  Widget _summary(
+    AdminPalette c,
+    String name,
+    double? baseline,
+    double? latest,
+  ) {
+    final unit = unitForProductName(name);
+
+    Widget figure(Widget marker, String label, String value) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        marker,
+        const SizedBox(width: 6),
+        Text(label, style: TextStyle(color: c.textSecondary, fontSize: 12)),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          style: TextStyle(
+            color: c.textPrimary,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+
+    return Wrap(
+      spacing: 20,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text(
+          name,
+          style: TextStyle(
+            color: c.textPrimary,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        figure(
+          Container(width: 14, height: 3, color: c.green),
+          'Latest average',
+          latest == null ? '—' : formatPriceWithUnit(latest, unit),
+        ),
+        figure(
+          // Dashed, like the baseline line on the chart.
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < 3; i++)
+                Container(
+                  width: 4,
+                  height: 2,
+                  margin: EdgeInsets.only(left: i == 0 ? 0 : 2),
+                  color: c.textSecondary,
+                ),
+            ],
+          ),
+          'Admin baseline',
+          baseline == null ? 'Not set' : formatPriceWithUnit(baseline, unit),
+        ),
+      ],
     );
   }
 
@@ -449,6 +351,7 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
     final minY = (rawMin - pad).clamp(0, double.infinity).toDouble();
     final maxY = rawMax + pad;
     final lastIndex = (weekly.length - 1).toDouble();
+    final axisStyle = TextStyle(color: c.textSecondary, fontSize: 11);
 
     return LineChartData(
       minY: minY,
@@ -479,7 +382,7 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   weeksAgo == 0 ? 'Now' : '-${weeksAgo}w',
-                  style: TextStyle(color: c.textSecondary, fontSize: 10),
+                  style: axisStyle,
                 ),
               );
             },
@@ -488,10 +391,14 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
         leftTitles: AxisTitles(
           sideTitles: SideTitles(
             showTitles: true,
-            reservedSize: 42,
-            getTitlesWidget: (value, meta) => Text(
-              '₱${value.toStringAsFixed(0)}',
-              style: TextStyle(color: c.textSecondary, fontSize: 10),
+            reservedSize: 48,
+            getTitlesWidget: (value, meta) => Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text(
+                '₱${value.toStringAsFixed(0)}',
+                textAlign: TextAlign.right,
+                style: axisStyle,
+              ),
             ),
           ),
         ),
@@ -499,17 +406,21 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
       borderData: FlBorderData(show: false),
       lineTouchData: const LineTouchData(enabled: false),
       lineBarsData: [
+        // The trend: the dashboard's green.
         LineChartBarData(
           spots: spots,
           isCurved: true,
+          preventCurveOverShooting: true,
           color: c.green,
           barWidth: 3,
           dotData: const FlDotData(show: true),
           belowBarData: BarAreaData(
             show: true,
-            color: c.green.withValues(alpha: 0.12),
+            color: c.green.withValues(alpha: 0.10),
           ),
         ),
+        // The baseline: a neutral dashed line, so it reads as a reference
+        // rather than as a second series.
         if (baseline != null)
           LineChartBarData(
             spots: [
@@ -517,12 +428,145 @@ class _AdminPriceTrendCardState extends State<AdminPriceTrendCard> {
               FlSpot(lastIndex < 1 ? 1 : lastIndex, baseline),
             ],
             isCurved: false,
-            color: c.amber,
-            barWidth: 2,
+            color: c.textSecondary,
+            barWidth: 1.5,
             dashArray: const [6, 4],
             dotData: const FlDotData(show: false),
           ),
       ],
+    );
+  }
+}
+
+/// The commodity search on the Price Trend card: type to get matching
+/// commodities suggested, pick one to load its chart. Shows the current
+/// commodity until the admin starts typing.
+class AdminCommoditySearchField extends StatelessWidget {
+  final List<String> commodities;
+  final String? selected;
+  final ValueChanged<String> onSelected;
+
+  const AdminCommoditySearchField({
+    super.key,
+    required this.commodities,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  static const double _width = 240;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+    return SizedBox(
+      width: _width,
+      child: Autocomplete<String>(
+        initialValue: TextEditingValue(text: selected ?? ''),
+        // With the current commodity still in the field, list them all;
+        // once the admin types something else, only the matches.
+        optionsBuilder: (value) => matchCommodities(
+          commodities,
+          value.text.trim() == (selected ?? '') ? '' : value.text,
+        ),
+        onSelected: onSelected,
+        fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+          return TextField(
+            controller: controller,
+            focusNode: focusNode,
+            onSubmitted: (_) => onSubmitted(),
+            // Select the current name on focus, so typing replaces it.
+            onTap: () => controller.selection = TextSelection(
+              baseOffset: 0,
+              extentOffset: controller.text.length,
+            ),
+            style: TextStyle(color: c.textPrimary, fontSize: 13),
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'Search commodity',
+              hintStyle: TextStyle(color: c.textMuted, fontSize: 13),
+              prefixIcon: Icon(Icons.search, size: 18, color: c.textSecondary),
+              prefixIconConstraints: const BoxConstraints(
+                minWidth: 38,
+                minHeight: 36,
+              ),
+              filled: true,
+              fillColor: c.surface,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AdminRadii.pill),
+                borderSide: BorderSide(color: c.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AdminRadii.pill),
+                borderSide: BorderSide(color: c.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AdminRadii.pill),
+                borderSide: BorderSide(color: c.green, width: 1.5),
+              ),
+            ),
+          );
+        },
+        optionsViewBuilder: (context, onPick, options) {
+          return Align(
+            alignment: Alignment.topLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Material(
+                color: c.surface,
+                elevation: 6,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: c.border),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: _width,
+                    maxHeight: 240,
+                  ),
+                  child: ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    shrinkWrap: true,
+                    itemCount: options.length,
+                    itemBuilder: (context, i) {
+                      final name = options.elementAt(i);
+                      final isCurrent = name == selected;
+                      final highlighted =
+                          AutocompleteHighlightedOption.of(context) == i;
+                      return InkWell(
+                        onTap: () => onPick(name),
+                        child: Container(
+                          color: highlighted ? c.surfaceAlt : null,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 9,
+                          ),
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: isCurrent
+                                  ? FontWeight.w600
+                                  : FontWeight.w500,
+                              color: isCurrent ? c.green : c.textPrimary,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

@@ -42,24 +42,71 @@ class BuyerLocationResult {
 /// provinces, picking "Batangas" narrows it to Batangas's cities/
 /// municipalities, and so on down to barangay, which closes the sheet.
 ///
+/// A detected location that maps onto the list skips straight to its
+/// barangay list, under a compact "Location detected" summary; the full
+/// hierarchy is the fallback when detection or that mapping fails.
+///
 /// [initial], when given (e.g. "Edit Location"), best-effort drills the
 /// list down to match the previous pick so the buyer doesn't have to
 /// start over from Region — any step that fails to match just stops
 /// there, leaving the rest to pick fresh.
+///
+/// With [autoDetect] the popup starts detecting the current location as
+/// soon as it opens, as if "Use My Current Location" had been tapped; the
+/// manual steps are still there underneath if that fails.
 Future<BuyerLocationResult?> showBuyerLocationPicker(
   BuildContext context, {
   BuyerLocationResult? initial,
+  bool autoDetect = false,
 }) {
   return showAgriPanelSheet<BuyerLocationResult>(
     context: context,
     isScrollControlled: true,
-    builder: (_) => _BuyerLocationPopup(initial: initial),
+    builder: (_) =>
+        _BuyerLocationPopup(initial: initial, autoDetect: autoDetect),
+  );
+}
+
+/// Asks how the buyer wants to set their location — "Use My Current
+/// Location" or "Set Location Manually" — then opens the same popup as
+/// [showBuyerLocationPicker] in that mode. Location permission is only
+/// requested once "Use My Current Location" is chosen.
+Future<BuyerLocationResult?> showBuyerLocationOptions(
+  BuildContext context, {
+  BuyerLocationResult? initial,
+}) async {
+  final useCurrent = await showAgriSheet<bool>(
+    context: context,
+    title: 'Set Your Location',
+    builder: (sheetContext) => Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AgriSheetAction(
+          icon: Icons.my_location,
+          label: 'Use My Current Location',
+          onTap: () => Navigator.pop(sheetContext, true),
+        ),
+        AgriSheetAction(
+          icon: Icons.list_alt_outlined,
+          label: 'Set Location Manually',
+          onTap: () => Navigator.pop(sheetContext, false),
+        ),
+        const SizedBox(height: 8),
+      ],
+    ),
+  );
+  if (useCurrent == null || !context.mounted) return null;
+  return showBuyerLocationPicker(
+    context,
+    initial: useCurrent ? null : initial,
+    autoDetect: useCurrent,
   );
 }
 
 class _BuyerLocationPopup extends StatefulWidget {
   final BuyerLocationResult? initial;
-  const _BuyerLocationPopup({this.initial});
+  final bool autoDetect;
+  const _BuyerLocationPopup({this.initial, this.autoDetect = false});
 
   @override
   State<_BuyerLocationPopup> createState() => _BuyerLocationPopupState();
@@ -85,12 +132,16 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
 
   bool _locating = false;
   String? _gpsError;
-  // "Use My Current Location" got a valid position but not a full address:
-  // the position is kept, and used as the pin for whichever barangay the
-  // buyer then picks from the list.
+  // "Use My Current Location" got a valid position but its address could
+  // not be mapped onto the list: the position is kept, and used as the pin
+  // for whichever barangay the buyer then picks manually.
   String? _gpsNote;
   double? _detectedLatitude;
   double? _detectedLongitude;
+  // The detected address was mapped onto the list: region, province and
+  // city are preselected and only the barangay is left to confirm.
+  bool _detected = false;
+  String? _detectedBarangayCode;
 
   @override
   void initState() {
@@ -101,6 +152,10 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
   Future<void> _init() async {
     await _loadRegions();
     if (!mounted) return;
+    if (widget.autoDetect) {
+      await _useMyLocation();
+      return;
+    }
     final initial = widget.initial;
     if (initial == null) return;
     try {
@@ -344,11 +399,22 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       _locating = true;
       _gpsError = null;
       _gpsNote = null;
+      _detected = false;
+      _detectedBarangayCode = null;
     });
     try {
       final granted = await requestBuyerLocationPermission(context);
       _log('gps', 'permission ${granted ? 'granted' : 'NOT granted'}');
-      if (!granted) return;
+      if (!granted) {
+        // The permission helper has already explained this; only the way
+        // to carry on is left to say.
+        if (!mounted) return;
+        setState(
+          () => _gpsNote =
+              'Location access is off. Please choose your location below.',
+        );
+        return;
+      }
 
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
@@ -411,45 +477,31 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
         return;
       }
 
+      // The coordinates are good whatever the address turns out to be: they
+      // are the pin saved with the barangay the buyer confirms.
+      setState(() {
+        _detectedLatitude = position.latitude;
+        _detectedLongitude = position.longitude;
+      });
+
       final city = addr?.city;
-      final province = addr?.province;
-      if (city == null || province == null) {
-        // The coordinates are good; only the address is incomplete (or the
-        // lookup itself failed). Keep the fix and let the buyer finish the
-        // address from the list — the pin saved will be this GPS position.
-        _log(
-          'address',
-          'incomplete (city=$city, province=$province) — keeping the '
-              'coordinates and asking the buyer to pick the barangay',
-        );
-        setState(() {
-          _detectedLatitude = position.latitude;
-          _detectedLongitude = position.longitude;
-          _gpsNote =
-              'Location detected. Please choose your barangay from the list '
-              'below to confirm.';
-        });
-        return;
-      }
-
-      final region =
-          await _psgc.regionNameForProvinceName(province) ??
-          addr?.region ??
-          province;
+      final mapped =
+          city != null &&
+          await _preselectDetected(
+            city: city,
+            province: addr?.province,
+            region: addr?.region,
+            barangay: addr?.barangay,
+          );
       if (!mounted) return;
-      _log('address', 'ok: $city, $province ($region)');
-
-      Navigator.pop(
-        context,
-        BuyerLocationResult(
-          region: region,
-          province: province,
-          city: city,
-          barangay: addr?.barangay ?? city,
-          latitude: position.latitude,
-          longitude: position.longitude,
-        ),
-      );
+      if (!mapped) {
+        _log('address', 'not mapped to the list — manual selection');
+        setState(
+          () => _gpsNote =
+              "We found your position but couldn't match it to an address. "
+              'Please choose your location below.',
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       setState(
@@ -457,6 +509,60 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       );
     } finally {
       if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  // Drills the list down to the detected city, leaving only the barangay to
+  // confirm. False when the address can't be mapped onto the list.
+  Future<bool> _preselectDetected({
+    required String city,
+    String? province,
+    String? region,
+    String? barangay,
+  }) async {
+    try {
+      final match = await _psgc.matchDetectedLocation(
+        city: city,
+        province: province,
+        region: region,
+      );
+      if (match == null || !mounted) return false;
+      _log(
+        'address',
+        'mapped: ${match.region.name} > ${match.province?.name ?? '-'} > '
+            '${match.city.name}',
+      );
+
+      await _pickRegion(match.region);
+      if (!mounted) return false;
+      final matchedProvince = match.province;
+      if (matchedProvince != null) {
+        await _pickProvince(matchedProvince);
+        if (!mounted) return false;
+      }
+      await _pickCity(match.city);
+      if (!mounted) return false;
+
+      if (_listError != null || _barangays.isEmpty) {
+        setState(() {
+          _selectedRegion = null;
+          _selectedProvince = null;
+          _selectedCity = null;
+          _regionHasNoProvinces = false;
+          _listError = null;
+        });
+        return false;
+      }
+      setState(() {
+        _detected = true;
+        _detectedBarangayCode = barangay == null
+            ? null
+            : _psgc.matchBarangay(_barangays, barangay)?.code;
+      });
+      return true;
+    } catch (e) {
+      _log('address', 'FAILED: could not map to the list: $e');
+      return false;
     }
   }
 
@@ -561,55 +667,59 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
                     ),
                   ],
                   const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      const Expanded(child: Divider()),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text(
-                          'Or choose manually',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: Colors.grey[600],
+                  if (_detected)
+                    _buildDetectedSummary()
+                  else
+                    Row(
+                      children: [
+                        const Expanded(child: Divider()),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text(
+                            'Or choose manually',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Colors.grey[600],
+                            ),
                           ),
                         ),
+                        const Expanded(child: Divider()),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+            if (!_detected)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Row(
+                  children: [
+                    if (_selectedRegion != null) ...[
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back, size: 18),
+                        onPressed: _goBack,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
                       ),
-                      const Expanded(child: Divider()),
+                      const SizedBox(width: 8),
                     ],
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Row(
-                children: [
-                  if (_selectedRegion != null) ...[
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back, size: 18),
-                      onPressed: _goBack,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  Expanded(
-                    child: Text(
-                      _breadcrumb.isEmpty
-                          ? 'Select your $_levelLabel'
-                          : '${_breadcrumb.join(' › ')} — Select $_levelLabel',
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black54,
+                    Expanded(
+                      child: Text(
+                        _breadcrumb.isEmpty
+                            ? 'Select your $_levelLabel'
+                            : '${_breadcrumb.join(' › ')} — Select $_levelLabel',
+                        style: const TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black54,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
             Expanded(child: _buildCurrentList()),
           ],
         ),
@@ -617,8 +727,70 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
     );
   }
 
+  // Stands in for the breadcrumb and the upper levels once the detected
+  // location is preselected. "Change" hands the same drill-down back to
+  // the manual steps, still at the barangay level.
+  Widget _buildDetectedSummary() {
+    final place = [
+      _selectedCity?.name,
+      _selectedProvince?.name ?? _selectedRegion?.name,
+    ].whereType<String>().join(', ');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+      decoration: BoxDecoration(
+        color: _dark.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _dark.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.location_on, color: _dark, size: 22),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Location detected',
+                  style: TextStyle(
+                    color: _dark,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  place,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _detectedBarangayCode != null
+                      ? 'Please confirm your barangay'
+                      : 'Choose your barangay to confirm',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () => setState(() => _detected = false),
+            style: TextButton.styleFrom(foregroundColor: _dark),
+            child: const Text('Change'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCurrentList() {
-    if (_confirming || _loadingList) {
+    // While detecting, the lists stay out of sight: a detected location
+    // goes straight to its barangays, never back through the regions.
+    if (_confirming || _loadingList || _locating) {
       return const Center(child: CircularProgressIndicator(color: _dark));
     }
     if (_listError != null) {
@@ -647,7 +819,21 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
     }
 
     if (_selectedCity != null) {
-      return _list(_barangays, (b) => b.name, _pickBarangay);
+      // A barangay the detection could name goes first, marked, and still
+      // takes a tap to confirm.
+      final detectedCode = _detected ? _detectedBarangayCode : null;
+      if (detectedCode == null) {
+        return _list(_barangays, (b) => b.name, _pickBarangay);
+      }
+      return _list(
+        [
+          ..._barangays.where((b) => b.code == detectedCode),
+          ..._barangays.where((b) => b.code != detectedCode),
+        ],
+        (b) => b.name,
+        _pickBarangay,
+        isDetected: (b) => b.code == detectedCode,
+      );
     }
     if (_selectedProvince != null || _regionHasNoProvinces) {
       return _list(_cities, (c) => c.name, _pickCity);
@@ -673,8 +859,9 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
   Widget _list<T>(
     List<T> items,
     String Function(T) label,
-    ValueChanged<T> onTap,
-  ) {
+    ValueChanged<T> onTap, {
+    bool Function(T)? isDetected,
+  }) {
     if (items.isEmpty) {
       return const Center(
         child: Text(
@@ -689,8 +876,22 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (_, i) {
         final item = items[i];
+        final detected = isDetected?.call(item) ?? false;
         return ListTile(
-          title: Text(label(item), style: const TextStyle(fontSize: 14)),
+          tileColor: detected ? _dark.withValues(alpha: 0.06) : null,
+          title: Text(
+            label(item),
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: detected ? FontWeight.bold : null,
+            ),
+          ),
+          subtitle: detected
+              ? const Text(
+                  'Detected — tap to confirm',
+                  style: TextStyle(fontSize: 11.5, color: _dark),
+                )
+              : null,
           trailing: const Icon(
             Icons.chevron_right,
             color: Colors.grey,

@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import '../theme/app_theme.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/profile_avatar.dart';
 import 'chat_list_screen.dart';
+import '../widgets/agri_empty_state.dart';
 
 // The message-management sections opened from the Messages menu (the ☰ in
 // the Messages header): Muted, Reported and Blocked Users. Archived lives in
@@ -28,19 +30,7 @@ class MessageFolderScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 1,
-        iconTheme: const IconThemeData(color: AppTheme.dark),
-        title: Text(
-          title,
-          style: const TextStyle(
-            color: Colors.black87,
-            fontSize: 17,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
+      appBar: AgriAppBar(title: title),
       body: SafeArea(child: body),
     );
   }
@@ -374,26 +364,11 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: AgriEmptyState(
+        icon: icon,
+        title: title,
+        subtitle: subtitle,
         padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 44, color: Colors.grey[400]),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: Colors.grey[700]),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
-            ),
-          ],
-        ),
       ),
     );
   }

@@ -9,6 +9,7 @@ import 'buyer_saved_products_screen.dart' show buyerSubScreenAppBar;
 import 'farmer_reviews_screen.dart' show RatingStars;
 import 'order_details_screen.dart';
 import 'product_detail_screen.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// The reviews this buyer has written. Every review belongs to one of
 /// their own completed orders — a review's document id is that order's id,
@@ -235,30 +236,14 @@ class _BuyerMyReviewsScreenState extends State<BuyerMyReviewsScreen> {
   );
 
   Widget _empty() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.rate_review_outlined, size: 56, color: Colors.grey[350]),
-            const SizedBox(height: 16),
-            const Text(
-              'No reviews yet',
-              style: TextStyle(
-                color: Colors.black87,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Once an order is completed, you can review the product from your Orders.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.black54, fontSize: 13.5),
-            ),
-          ],
-        ),
+    return const Center(
+      child: AgriEmptyState(
+        icon: Icons.rate_review_outlined,
+        title: 'No reviews yet',
+        subtitle:
+            'Once an order is completed, you can review the product from '
+            'your Orders.',
+        padding: EdgeInsets.all(32),
       ),
     );
   }

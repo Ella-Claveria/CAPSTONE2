@@ -38,12 +38,19 @@ class ResolvedAddress {
   /// ISO country code of the result, e.g. "PH".
   final String? countryCode;
 
+  /// Every field of the result that might be naming the barangay, most
+  /// specific first. A lookup does not always put it in the same place,
+  /// so callers that need to recognize one (see laurel_barangay_match.dart)
+  /// check all of these instead of trusting [barangay] alone.
+  final List<String> barangayCandidates;
+
   const ResolvedAddress({
     this.barangay,
     this.city,
     this.province,
     this.region,
     this.countryCode,
+    this.barangayCandidates = const [],
   });
 
   String get readable => [
@@ -89,7 +96,19 @@ ResolvedAddress parseGeocodeResults(List<dynamic> results) {
   }
 
   final region = first(['administrative_area_level_1']);
+  final candidates = [
+    for (final type in const [
+      'sublocality_level_1',
+      'sublocality',
+      'neighborhood',
+      'administrative_area_level_5',
+      'administrative_area_level_4',
+      'administrative_area_level_3',
+    ])
+      ?first([type]),
+  ];
   return ResolvedAddress(
+    barangayCandidates: candidates,
     barangay: first([
       'sublocality_level_1',
       'sublocality',
@@ -104,6 +123,40 @@ ResolvedAddress parseGeocodeResults(List<dynamic> results) {
     province: first(['administrative_area_level_2']) ?? region,
     region: region,
     countryCode: first(['country']),
+  );
+}
+
+/// Reads an OpenStreetMap (Nominatim) reverse-lookup `address` object.
+///
+/// For the Philippines the barangay is usually `village`, but can be a
+/// `suburb`, `quarter`, `neighbourhood` or `hamlet`; the city or
+/// municipality is `city`, `town` or `municipality`; the province is
+/// `state` (or `province`), with the region alongside it.
+ResolvedAddress parseOsmAddress(Map<String, dynamic> address) {
+  String? field(String key) {
+    final value = address[key]?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  final candidates = [
+    for (final key in const [
+      'village',
+      'suburb',
+      'quarter',
+      'neighbourhood',
+      'hamlet',
+      'city_district',
+      'borough',
+    ])
+      ?field(key),
+  ];
+  return ResolvedAddress(
+    barangay: candidates.isEmpty ? null : candidates.first,
+    city: field('city') ?? field('town') ?? field('municipality'),
+    province: field('state') ?? field('province') ?? field('region'),
+    region: field('region'),
+    countryCode: field('country_code')?.toUpperCase(),
+    barangayCandidates: candidates,
   );
 }
 
@@ -159,8 +212,67 @@ class GeocodingService {
   /// [reverseGeocode] plus why it failed, for callers that need to tell
   /// "the lookup did not work" (network, API key, quota — `status` is the
   /// API's own, e.g. REQUEST_DENIED) from "it worked but found little".
+  ///
+  /// Google is asked first. Its key is restricted to the website, so from
+  /// the phone app that request is refused (REQUEST_DENIED) — whenever
+  /// Google gives no address, for that or any other reason, the same
+  /// position is looked up with OpenStreetMap instead, which needs no key
+  /// and has no charge.
   static Future<({ResolvedAddress? address, String status, String? error})>
   reverseGeocodeDetailed(double lat, double lng) async {
+    final google = await _reverseGeocodeGoogle(lat, lng);
+    if (google.address != null) return google;
+    final osm = await _reverseGeocodeOsm(lat, lng);
+    return osm.address != null ? osm : google;
+  }
+
+  // OpenStreetMap's public lookup. Its usage policy asks for an
+  // identifying User-Agent and light use; this is only ever called when a
+  // person taps a location button or settles a map pin.
+  static Future<({ResolvedAddress? address, String status, String? error})>
+  _reverseGeocodeOsm(double lat, double lng) async {
+    try {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
+        'format': 'jsonv2',
+        'lat': '$lat',
+        'lon': '$lng',
+        'zoom': '16',
+        'addressdetails': '1',
+        'accept-language': 'en',
+      });
+      final res = await http
+          .get(
+            uri,
+            headers: const {
+              'User-Agent': 'AgriTradePlus/1.0 (agritrade.team@gmail.com)',
+            },
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) {
+        return (
+          address: null,
+          status: 'OSM_HTTP_${res.statusCode}',
+          error: null,
+        );
+      }
+      final body = jsonDecode(res.body);
+      final raw = body is Map<String, dynamic> ? body['address'] : null;
+      if (raw is! Map<String, dynamic>) {
+        return (address: null, status: 'OSM_NO_RESULT', error: null);
+      }
+      final addr = parseOsmAddress(raw);
+      return (
+        address: addr.isEmpty ? null : addr,
+        status: addr.isEmpty ? 'OSM_NO_ADDRESS' : 'OK',
+        error: null,
+      );
+    } catch (e) {
+      return (address: null, status: 'OSM_EXCEPTION', error: e.toString());
+    }
+  }
+
+  static Future<({ResolvedAddress? address, String status, String? error})>
+  _reverseGeocodeGoogle(double lat, double lng) async {
     try {
       final uri = Uri.https('maps.googleapis.com', '/maps/api/geocode/json', {
         'latlng': '$lat,$lng',
@@ -201,7 +313,52 @@ class GeocodingService {
   /// uses instead of ever inventing a barangay/city center itself; a
   /// failure here is non-fatal — the readable address is still saved,
   /// just without a coordinate (see buyer_location_picker.dart).
+  ///
+  /// Google is tried first; when it gives nothing (a Maps key restricted
+  /// to the website is refused by Google's Geocoding web service outright),
+  /// OpenStreetMap's public lookup is asked instead.
   static Future<({double lat, double lng})?> forwardGeocode(
+    String address,
+  ) async =>
+      await _forwardGeocodeGoogle(address) ?? await _forwardGeocodeOsm(address);
+
+  // OpenStreetMap's public search, limited to the Philippines. Same light
+  // use and identifying User-Agent as the reverse lookup above: called for
+  // a place a person picked, or once per area name on the Demand Heatmap.
+  static Future<({double lat, double lng})?> _forwardGeocodeOsm(
+    String address,
+  ) async {
+    try {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/search', {
+        'format': 'jsonv2',
+        'q': address,
+        'countrycodes': 'ph',
+        'limit': '1',
+        'accept-language': 'en',
+      });
+      final res = await http
+          .get(
+            uri,
+            headers: const {
+              'User-Agent': 'AgriTradePlus/1.0 (agritrade.team@gmail.com)',
+            },
+          )
+          .timeout(const Duration(seconds: 8));
+      if (res.statusCode != 200) return null;
+      final body = jsonDecode(res.body);
+      if (body is! List || body.isEmpty) return null;
+      final first = body.first;
+      if (first is! Map<String, dynamic>) return null;
+      final lat = double.tryParse('${first['lat']}');
+      final lng = double.tryParse('${first['lon']}');
+      if (lat == null || lng == null) return null;
+      return (lat: lat, lng: lng);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<({double lat, double lng})?> _forwardGeocodeGoogle(
     String address,
   ) async {
     try {

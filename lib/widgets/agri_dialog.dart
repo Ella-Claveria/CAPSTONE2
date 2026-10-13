@@ -128,6 +128,10 @@ class AgriDialog extends StatelessWidget {
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      // On a phone the screen sets the width. On a wide window (the Admin
+      // Portal in a browser) it stays a popup instead of stretching from
+      // edge to edge.
+      constraints: const BoxConstraints(minWidth: 280, maxWidth: 440),
       child: AgriFrostedCard(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
@@ -165,7 +169,7 @@ class AgriDialog extends StatelessWidget {
               ?body,
               if (actions.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                _actionsRow(),
+                _actionsRow(context),
               ],
             ],
           ),
@@ -176,15 +180,32 @@ class AgriDialog extends StatelessWidget {
 
   // Two actions side by side (secondary left, primary right as passed);
   // anything else stacked full-width.
-  Widget _actionsRow() {
+  Widget _actionsRow(BuildContext context) {
+    // A lone button on a wide window (the Admin Portal in a browser) is
+    // only as wide as its label, centred, instead of a bar across the
+    // whole popup. On a phone it stays full-width, easy to reach.
+    if (actions.length == 1 && MediaQuery.sizeOf(context).width >= 600) {
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 160),
+          child: IntrinsicWidth(child: actions.single),
+        ),
+      );
+    }
     if (actions.length <= 2) {
-      return Row(
-        children: [
-          for (var i = 0; i < actions.length; i++) ...[
-            if (i > 0) const SizedBox(width: 10),
-            Expanded(child: actions[i]),
+      // Equal widths, and equal heights too: when one label is long enough
+      // to wrap ("Enable Notifications"), the other button grows with it
+      // instead of sitting shorter beside it.
+      return IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var i = 0; i < actions.length; i++) ...[
+              if (i > 0) const SizedBox(width: 10),
+              Expanded(child: actions[i]),
+            ],
           ],
-        ],
+        ),
       );
     }
     return Column(
@@ -216,6 +237,10 @@ class AgriDialogButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final AgriButtonKind kind;
 
+  /// A shorter, narrower button for tips (see coach_mark.dart), where a
+  /// full-size dialog button would be too heavy.
+  final bool compact;
+
   /// Shows a spinner instead of the label (and ignores taps).
   final bool loading;
 
@@ -225,6 +250,7 @@ class AgriDialogButton extends StatelessWidget {
     required this.onPressed,
     this.kind = AgriButtonKind.secondary,
     this.loading = false,
+    this.compact = false,
   });
 
   @override
@@ -233,10 +259,15 @@ class AgriDialogButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(30),
     );
     final textStyle = GoogleFonts.montserrat(
-      fontSize: 13.5,
+      fontSize: compact ? 12.5 : 13.5,
       fontWeight: FontWeight.w600,
     );
-    const padding = EdgeInsets.symmetric(vertical: 12, horizontal: 12);
+    final padding = compact
+        ? const EdgeInsets.symmetric(vertical: 6, horizontal: 16)
+        : const EdgeInsets.symmetric(vertical: 12, horizontal: 12);
+    // Null leaves the theme's own minimum size and tap target.
+    final minimumSize = compact ? const Size(0, 32) : null;
+    final tapTargetSize = compact ? MaterialTapTargetSize.shrinkWrap : null;
     final Widget child = loading
         ? SizedBox(
             width: 18,
@@ -261,6 +292,8 @@ class AgriDialogButton extends StatelessWidget {
             disabledBackgroundColor: Colors.grey.shade400,
             elevation: 0,
             padding: padding,
+            minimumSize: minimumSize,
+            tapTargetSize: tapTargetSize,
             shape: shape,
           ),
           child: child,
@@ -273,6 +306,8 @@ class AgriDialogButton extends StatelessWidget {
             foregroundColor: AppTheme.dark,
             side: const BorderSide(color: AppTheme.dark, width: 1.2),
             padding: padding,
+            minimumSize: minimumSize,
+            tapTargetSize: tapTargetSize,
             shape: shape,
           ),
           child: child,
@@ -285,6 +320,8 @@ class AgriDialogButton extends StatelessWidget {
             foregroundColor: Colors.red.shade700,
             elevation: 0,
             padding: padding,
+            minimumSize: minimumSize,
+            tapTargetSize: tapTargetSize,
             shape: shape,
           ),
           child: child,
@@ -557,10 +594,17 @@ Future<T?> showAgriPopupMenu<T>({
         ),
       );
       if (!upward) {
+        // Each row is about 42 high; near the bottom of the screen the
+        // menu opens above its anchor instead, so it is never cut off.
+        final menuHeight = items.length * 42.0 + 12;
+        final safe = MediaQuery.viewPaddingOf(dialogContext);
+        final fitsBelow =
+            anchor.bottom + 2 + menuHeight <= screen.height - safe.bottom - 8;
         return Stack(
           children: [
             Positioned(
-              top: anchor.bottom + 2,
+              top: fitsBelow ? anchor.bottom + 2 : null,
+              bottom: fitsBelow ? null : screen.height - anchor.top + 2,
               right: (screen.width - anchor.right).clamp(12.0, screen.width),
               width: width,
               child: card,

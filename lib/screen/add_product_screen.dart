@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -769,6 +770,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
   Future<void> _save() async {
     // Closes the keyboard so the message isn't hidden behind it.
     FocusManager.instance.primaryFocus?.unfocus();
+    if (_isArchived) {
+      _blockArchivedEdit();
+      return;
+    }
     try {
       await _submit();
     } catch (error, stack) {
@@ -1706,6 +1711,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
   }
 
+  // An archived product is read-only here: the form shows its details but
+  // takes no input until the farmer restores it.
+  void _blockArchivedEdit() =>
+      _showMessage(ProductService.archivedReadOnlyMessage, isError: true);
+
   Future<void> _toggleArchive() async {
     setState(() => _loading = true);
     final error = _isArchived
@@ -1822,6 +1832,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   Future<void> _confirmExit() async {
     if (_loading || _confirmingExit || _allowPop) return;
+    // Nothing can have been changed on an archived (read-only) product.
+    if (_isArchived) {
+      _closeScreen();
+      return;
+    }
     _confirmingExit = true;
     final shouldLeave = await showAgriConfirm(
       context: context,
@@ -3106,23 +3121,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
       },
       child: Scaffold(
         backgroundColor: _lightGreenBg,
-        appBar: AppBar(
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back),
-            tooltip: 'Back',
-            onPressed: _confirmExit,
-          ),
-          title: Text(
-            _isEditing ? 'Edit Product' : 'Add Product',
-            style: GoogleFonts.montserrat(
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-            ),
-          ),
-          centerTitle: true,
-          backgroundColor: _darkGreen,
-          foregroundColor: Colors.white,
-          elevation: 0,
+        appBar: AgriAppBar(
+          onBack: _confirmExit,
+          title: _isArchived
+              ? 'Product Details'
+              : (_isEditing ? 'Edit Product' : 'Add Product'),
           actions: [
             if (_isEditing) ...[
               IconButton(
@@ -3142,463 +3145,510 @@ class _AddProductScreenState extends State<AddProductScreen> {
             ],
           ],
         ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _profileHeader(),
-              if (_isArchived) ...[
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.orange[50],
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.orange[200]!),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.archive_outlined,
-                        size: 18,
-                        color: Colors.orange[800],
+        // Archived: the only action is Restore, pinned under the details.
+        bottomNavigationBar: _isArchived
+            ? SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+                  child: ElevatedButton.icon(
+                    onPressed: _loading ? null : _toggleArchive,
+                    icon: const Icon(Icons.unarchive_outlined, size: 20),
+                    label: Text(
+                      'Restore Product',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'This listing is archived and hidden from the marketplace.',
-                          style: GoogleFonts.montserrat(
-                            fontSize: 12,
-                            color: Colors.orange[900],
-                          ),
-                        ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _darkGreen,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
                       ),
-                    ],
+                      elevation: 0,
+                    ),
                   ),
                 ),
-              ],
-              const SizedBox(height: 14),
-              const Divider(height: 1, thickness: 1, color: Color(0xFFE8ECE6)),
-              const SizedBox(height: 14),
+              )
+            : null,
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          // While archived the whole form ignores input (it still
+          // scrolls); a tap on it explains why instead.
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _isArchived ? _blockArchivedEdit : null,
+            child: AbsorbPointer(
+              absorbing: _isArchived,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _profileHeader(),
+                  if (_isArchived) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.archive_outlined,
+                            size: 18,
+                            color: Colors.orange[800],
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'This listing is archived and hidden from the marketplace. '
+                              '${ProductService.archivedReadOnlyMessage}',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 12,
+                                color: Colors.orange[900],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: Color(0xFFE8ECE6),
+                  ),
+                  const SizedBox(height: 14),
 
-              // ---- Single photo slot ----
-              KeyedSubtree(key: _photoKey, child: _imageSlot()),
-              _fieldError(_photoKey),
-              const SizedBox(height: 14),
+                  // ---- Single photo slot ----
+                  KeyedSubtree(key: _photoKey, child: _imageSlot()),
+                  _fieldError(_photoKey),
+                  const SizedBox(height: 14),
 
-              _label('Product Name', key: _nameKey),
-              Autocomplete<String>(
-                textEditingController: _nameController,
-                focusNode: _nameFocusNode,
-                optionsBuilder: (value) {
-                  final query = value.text.trim().toLowerCase();
-                  final names = CommodityRegistry.instance.activeNames;
-                  if (query.isEmpty) return names;
-                  return names.where((c) => c.toLowerCase().contains(query));
-                },
-                onSelected: (selection) => setState(() {
-                  _selectedCommodity = selection;
-                  _category = categoryOfCommodity(selection);
-                }),
-                fieldViewBuilder:
-                    (context, controller, focusNode, onSubmitted) {
-                      return _GlowPlate(
-                        error: _hasIssue(_nameKey),
-                        child: TextField(
-                          controller: controller,
-                          focusNode: focusNode,
-                          style: GoogleFonts.montserrat(fontSize: 14),
-                          decoration: _inputDecoration('e.g., Eggplant'),
+                  _label('Product Name', key: _nameKey),
+                  Autocomplete<String>(
+                    textEditingController: _nameController,
+                    focusNode: _nameFocusNode,
+                    optionsBuilder: (value) {
+                      final query = value.text.trim().toLowerCase();
+                      final names = CommodityRegistry.instance.activeNames;
+                      if (query.isEmpty) return names;
+                      return names.where(
+                        (c) => c.toLowerCase().contains(query),
+                      );
+                    },
+                    onSelected: (selection) => setState(() {
+                      _selectedCommodity = selection;
+                      _category = categoryOfCommodity(selection);
+                    }),
+                    fieldViewBuilder:
+                        (context, controller, focusNode, onSubmitted) {
+                          return _GlowPlate(
+                            error: _hasIssue(_nameKey),
+                            child: TextField(
+                              controller: controller,
+                              focusNode: focusNode,
+                              style: GoogleFonts.montserrat(fontSize: 14),
+                              decoration: _inputDecoration('e.g., Eggplant'),
+                            ),
+                          );
+                        },
+                    optionsViewBuilder: (context, onSelected, options) {
+                      return Align(
+                        alignment: Alignment.topLeft,
+                        child: Material(
+                          elevation: 4,
+                          borderRadius: BorderRadius.circular(14),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxHeight: 220,
+                              maxWidth: 340,
+                            ),
+                            child: ListView.builder(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              shrinkWrap: true,
+                              itemCount: options.length,
+                              itemBuilder: (context, index) {
+                                final option = options.elementAt(index);
+                                return ListTile(
+                                  dense: true,
+                                  title: Text(
+                                    option,
+                                    style: GoogleFonts.montserrat(
+                                      fontSize: 13.5,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    categoryOfCommodity(option) ?? '',
+                                    style: GoogleFonts.montserrat(
+                                      fontSize: 10.5,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  onTap: () => onSelected(option),
+                                );
+                              },
+                            ),
+                          ),
                         ),
                       );
                     },
-                optionsViewBuilder: (context, onSelected, options) {
-                  return Align(
-                    alignment: Alignment.topLeft,
-                    child: Material(
-                      elevation: 4,
-                      borderRadius: BorderRadius.circular(14),
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(
-                          maxHeight: 220,
-                          maxWidth: 340,
-                        ),
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          shrinkWrap: true,
-                          itemCount: options.length,
-                          itemBuilder: (context, index) {
-                            final option = options.elementAt(index);
-                            return ListTile(
-                              dense: true,
-                              title: Text(
-                                option,
-                                style: GoogleFonts.montserrat(fontSize: 13.5),
-                              ),
-                              subtitle: Text(
-                                categoryOfCommodity(option) ?? '',
-                                style: GoogleFonts.montserrat(
-                                  fontSize: 10.5,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                              onTap: () => onSelected(option),
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Start typing to select a supported product.',
-                style: GoogleFonts.montserrat(
-                  fontSize: 11,
-                  color: Colors.grey[600],
-                ),
-              ),
-              _fieldError(_nameKey),
-              const SizedBox(height: 8),
-              _supportedProductsBanner(),
-              const SizedBox(height: 12),
-
-              // ---- Category + Quantity side by side ----
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _label('Category'),
-                        _GlowPlate(
-                          child: InputDecorator(
-                            decoration: _inputDecoration(''),
-                            child: Text(
-                              _category ?? 'Select a product name first',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.montserrat(
-                                color: _category == null
-                                    ? Colors.black38
-                                    : Colors.black87,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Start typing to select a supported product.',
+                    style: GoogleFonts.montserrat(
+                      fontSize: 11,
+                      color: Colors.grey[600],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _label('Available Stock', key: _stockKey),
-                        _GlowPlate(
-                          error: _hasIssue(_stockKey),
-                          child: TextField(
-                            controller: _quantityController,
-                            focusNode: _quantityFocusNode,
-                            keyboardType: TextInputType.numberWithOptions(
-                              decimal: !_isCountBasedUnit,
-                            ),
-                            // Numbers only — the unit is the read-only
-                            // suffix below, set by the selected product.
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(
-                                RegExp(
-                                  _isCountBasedUnit ? r'[0-9]' : r'[0-9.]',
+                  _fieldError(_nameKey),
+                  const SizedBox(height: 8),
+                  _supportedProductsBanner(),
+                  const SizedBox(height: 12),
+
+                  // ---- Category + Quantity side by side ----
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _label('Category'),
+                            _GlowPlate(
+                              child: InputDecorator(
+                                decoration: _inputDecoration(''),
+                                child: Text(
+                                  _category ?? 'Select a product name first',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: GoogleFonts.montserrat(
+                                    color: _category == null
+                                        ? Colors.black38
+                                        : Colors.black87,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ),
-                            ],
-                            style: GoogleFonts.montserrat(fontSize: 14),
-                            decoration: _inputDecoration(
-                              '0',
-                              suffix: Padding(
-                                padding: const EdgeInsets.only(right: 18),
-                                child: Center(
-                                  widthFactor: 1,
-                                  child: Text(
-                                    _currentUnit,
-                                    style: GoogleFonts.montserrat(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: _darkGreen,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _label('Available Stock', key: _stockKey),
+                            _GlowPlate(
+                              error: _hasIssue(_stockKey),
+                              child: TextField(
+                                controller: _quantityController,
+                                focusNode: _quantityFocusNode,
+                                keyboardType: TextInputType.numberWithOptions(
+                                  decimal: !_isCountBasedUnit,
+                                ),
+                                // Numbers only — the unit is the read-only
+                                // suffix below, set by the selected product.
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(
+                                      _isCountBasedUnit ? r'[0-9]' : r'[0-9.]',
+                                    ),
+                                  ),
+                                ],
+                                style: GoogleFonts.montserrat(fontSize: 14),
+                                decoration: _inputDecoration(
+                                  '0',
+                                  suffix: Padding(
+                                    padding: const EdgeInsets.only(right: 18),
+                                    child: Center(
+                                      widthFactor: 1,
+                                      child: Text(
+                                        _currentUnit,
+                                        style: GoogleFonts.montserrat(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: _darkGreen,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  _fieldError(_stockKey),
+                  const SizedBox(height: 18),
+
+                  // ---- Harvest date (produce only) ----
+                  if (categoryHasHarvestDate(_category)) ...[
+                    _harvestDateField(),
+                    const SizedBox(height: 18),
+                  ],
+
+                  // ---- AI price recommendation (by product name) ----
+                  _priceRecommendation(),
+                  const SizedBox(height: 18),
+
+                  // ---- Retail Price ----
+                  _label('Retail Price', key: _priceKey),
+                  _GlowPlate(
+                    error: _hasIssue(_priceKey),
+                    child: TextField(
+                      controller: _priceController,
+                      focusNode: _priceFocusNode,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      style: GoogleFonts.montserrat(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      decoration: _inputDecoration(
+                        '0.00',
+                        prefix: Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Text(
+                            '₱',
+                            style: GoogleFonts.montserrat(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: _darkGreen,
+                            ),
                           ),
                         ),
-                      ],
+                        suffix: Padding(
+                          padding: const EdgeInsets.only(right: 14),
+                          child: Text(
+                            '/ $_currentUnit',
+                            style: GoogleFonts.montserrat(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
+                  _fieldError(_priceKey),
+                  _priceWarningBanner(wholesale: false),
+                  const SizedBox(height: 12),
+
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Offer Wholesale',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Set a lower bulk price once the buyer reaches your minimum quantity.',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 11.5,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    activeThumbColor: _darkGreen,
+                    value: _wholesaleEnabled,
+                    onChanged: (value) => setState(() {
+                      _wholesaleEnabled = value;
+                      if (!value) _wholesalePriceController.clear();
+                    }),
+                  ),
+                  if (_wholesaleEnabled) ...[
+                    const SizedBox(height: 4),
+                    _label('Wholesale Price', key: _wholesalePriceKey),
+                    _GlowPlate(
+                      error: _hasIssue(_wholesalePriceKey),
+                      child: TextField(
+                        controller: _wholesalePriceController,
+                        focusNode: _wholesalePriceFocusNode,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        style: GoogleFonts.montserrat(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        decoration: _inputDecoration(
+                          '0.00',
+                          prefix: Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Text(
+                              '₱',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: _darkGreen,
+                              ),
+                            ),
+                          ),
+                          suffix: Padding(
+                            padding: const EdgeInsets.only(right: 14),
+                            child: Text(
+                              '/ $_currentUnit',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 13,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _fieldError(_wholesalePriceKey),
+                    _priceWarningBanner(wholesale: true),
+                    const SizedBox(height: 12),
+                    _label('Minimum Wholesale Quantity', key: _wholesaleMinKey),
+                    _GlowPlate(
+                      error: _hasIssue(_wholesaleMinKey),
+                      child: TextField(
+                        controller: _wholesaleMinimumController,
+                        focusNode: _wholesaleMinFocusNode,
+                        keyboardType: TextInputType.numberWithOptions(
+                          decimal: !_isCountBasedUnit,
+                        ),
+                        style: GoogleFonts.montserrat(fontSize: 14),
+                        decoration: _inputDecoration(
+                          'e.g., 20',
+                          suffix: Padding(
+                            padding: const EdgeInsets.only(right: 14),
+                            child: Text(
+                              _currentUnit,
+                              style: GoogleFonts.montserrat(
+                                fontSize: 12.5,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    _fieldError(_wholesaleMinKey),
+                    const SizedBox(height: 12),
+                  ],
+
+                  // ---- Description ----
+                  _label('Description'),
+                  // Multi-line, so a softer corner than the single-line pills.
+                  _GlowPlate(
+                    radius: 22,
+                    child: TextField(
+                      controller: _descriptionController,
+                      maxLines: 3,
+                      style: GoogleFonts.montserrat(fontSize: 14),
+                      decoration: _inputDecoration(
+                        'Tell buyers about how it was raised or grown...',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // ---- Fulfillment ----
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Delivery Available',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    activeThumbColor: _darkGreen,
+                    value: _deliveryAvailable,
+                    onChanged: (v) => setState(() => _deliveryAvailable = v),
+                  ),
+                  if (_deliveryAvailable) _deliverySetup(),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(
+                      'Pick-up Available',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Buyers can collect the order from you.',
+                      style: GoogleFonts.montserrat(
+                        fontSize: 11.5,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    activeThumbColor: _darkGreen,
+                    value: _pickupOnly,
+                    onChanged: (v) => setState(() => _pickupOnly = v),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // ---- Post ----
+                  // Greyed out (disabled look) until every required field is
+                  // valid. It still responds to a tap, though: instead of
+                  // posting, that tap highlights the first missing/invalid field
+                  // and scrolls to it — a fully dead button would leave the
+                  // farmer hunting through the long form for what's missing.
+                  // A price outside the AI range never greys it out.
+                  if (!_isArchived && !formComplete && !_loading) ...[
+                    Text(
+                      'Complete the required fields to post.',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.montserrat(
+                        fontSize: 11.5,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  if (!_isArchived)
+                    ElevatedButton(
+                      onPressed: _loading ? null : _save,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: formComplete
+                            ? _darkGreen
+                            : Colors.grey.shade400,
+                        disabledBackgroundColor: Colors.grey.shade400,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(
+                                color: Colors.white,
+                                strokeWidth: 2,
+                              ),
+                            )
+                          : Text(
+                              _isEditing ? 'Update' : 'Post',
+                              style: GoogleFonts.montserrat(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                    ),
+                  const SizedBox(height: 12),
                 ],
               ),
-              _fieldError(_stockKey),
-              const SizedBox(height: 18),
-
-              // ---- Harvest date (produce only) ----
-              if (categoryHasHarvestDate(_category)) ...[
-                _harvestDateField(),
-                const SizedBox(height: 18),
-              ],
-
-              // ---- AI price recommendation (by product name) ----
-              _priceRecommendation(),
-              const SizedBox(height: 18),
-
-              // ---- Retail Price ----
-              _label('Retail Price', key: _priceKey),
-              _GlowPlate(
-                error: _hasIssue(_priceKey),
-                child: TextField(
-                  controller: _priceController,
-                  focusNode: _priceFocusNode,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  style: GoogleFonts.montserrat(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  decoration: _inputDecoration(
-                    '0.00',
-                    prefix: Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: Text(
-                        '₱',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: _darkGreen,
-                        ),
-                      ),
-                    ),
-                    suffix: Padding(
-                      padding: const EdgeInsets.only(right: 14),
-                      child: Text(
-                        '/ $_currentUnit',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 13,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              _fieldError(_priceKey),
-              _priceWarningBanner(wholesale: false),
-              const SizedBox(height: 12),
-
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  'Offer Wholesale',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                subtitle: Text(
-                  'Set a lower bulk price once the buyer reaches your minimum quantity.',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 11.5,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                activeThumbColor: _darkGreen,
-                value: _wholesaleEnabled,
-                onChanged: (value) => setState(() {
-                  _wholesaleEnabled = value;
-                  if (!value) _wholesalePriceController.clear();
-                }),
-              ),
-              if (_wholesaleEnabled) ...[
-                const SizedBox(height: 4),
-                _label('Wholesale Price', key: _wholesalePriceKey),
-                _GlowPlate(
-                  error: _hasIssue(_wholesalePriceKey),
-                  child: TextField(
-                    controller: _wholesalePriceController,
-                    focusNode: _wholesalePriceFocusNode,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    style: GoogleFonts.montserrat(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    decoration: _inputDecoration(
-                      '0.00',
-                      prefix: Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: Text(
-                          '₱',
-                          style: GoogleFonts.montserrat(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: _darkGreen,
-                          ),
-                        ),
-                      ),
-                      suffix: Padding(
-                        padding: const EdgeInsets.only(right: 14),
-                        child: Text(
-                          '/ $_currentUnit',
-                          style: GoogleFonts.montserrat(
-                            fontSize: 13,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                _fieldError(_wholesalePriceKey),
-                _priceWarningBanner(wholesale: true),
-                const SizedBox(height: 12),
-                _label('Minimum Wholesale Quantity', key: _wholesaleMinKey),
-                _GlowPlate(
-                  error: _hasIssue(_wholesaleMinKey),
-                  child: TextField(
-                    controller: _wholesaleMinimumController,
-                    focusNode: _wholesaleMinFocusNode,
-                    keyboardType: TextInputType.numberWithOptions(
-                      decimal: !_isCountBasedUnit,
-                    ),
-                    style: GoogleFonts.montserrat(fontSize: 14),
-                    decoration: _inputDecoration(
-                      'e.g., 20',
-                      suffix: Padding(
-                        padding: const EdgeInsets.only(right: 14),
-                        child: Text(
-                          _currentUnit,
-                          style: GoogleFonts.montserrat(
-                            fontSize: 12.5,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                _fieldError(_wholesaleMinKey),
-                const SizedBox(height: 12),
-              ],
-
-              // ---- Description ----
-              _label('Description'),
-              // Multi-line, so a softer corner than the single-line pills.
-              _GlowPlate(
-                radius: 22,
-                child: TextField(
-                  controller: _descriptionController,
-                  maxLines: 3,
-                  style: GoogleFonts.montserrat(fontSize: 14),
-                  decoration: _inputDecoration(
-                    'Tell buyers about how it was raised or grown...',
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-
-              // ---- Fulfillment ----
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  'Delivery Available',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                activeThumbColor: _darkGreen,
-                value: _deliveryAvailable,
-                onChanged: (v) => setState(() => _deliveryAvailable = v),
-              ),
-              if (_deliveryAvailable) _deliverySetup(),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  'Pick-up Available',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                subtitle: Text(
-                  'Buyers can collect the order from you.',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 11.5,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                activeThumbColor: _darkGreen,
-                value: _pickupOnly,
-                onChanged: (v) => setState(() => _pickupOnly = v),
-              ),
-              const SizedBox(height: 16),
-
-              // ---- Post ----
-              // Greyed out (disabled look) until every required field is
-              // valid. It still responds to a tap, though: instead of
-              // posting, that tap highlights the first missing/invalid field
-              // and scrolls to it — a fully dead button would leave the
-              // farmer hunting through the long form for what's missing.
-              // A price outside the AI range never greys it out.
-              if (!formComplete && !_loading) ...[
-                Text(
-                  'Complete the required fields to post.',
-                  textAlign: TextAlign.center,
-                  style: GoogleFonts.montserrat(
-                    fontSize: 11.5,
-                    color: Colors.grey[600],
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
-              ElevatedButton(
-                onPressed: _loading ? null : _save,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: formComplete
-                      ? _darkGreen
-                      : Colors.grey.shade400,
-                  disabledBackgroundColor: Colors.grey.shade400,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                  elevation: 0,
-                ),
-                child: _loading
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
-                      )
-                    : Text(
-                        _isEditing ? 'Update' : 'Post',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-              ),
-              const SizedBox(height: 12),
-            ],
+            ),
           ),
         ),
       ),

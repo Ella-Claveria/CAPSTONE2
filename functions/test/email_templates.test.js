@@ -32,7 +32,16 @@ test("password reset email carries the reset link", () => {
   assert.ok(mail.html.includes("Reset Password"));
 });
 
-test("new-device email shows the sign-in details and escapes them", () => {
+test("a Google-only account is told how to log in and gets no link", () => {
+  const mail = templates.googleSignInEmail({ name: "Ana" });
+  assert.match(mail.subject, /log in to your AgriTrade\+ account/);
+  assert.ok(mail.text.includes("Continue with Google"));
+  assert.ok(mail.html.includes("Continue with Google"));
+  assert.ok(!mail.text.includes("http"));
+  assert.ok(!/oobCode|href=/.test(mail.html));
+});
+
+test("new-device email shows the login details and escapes them", () => {
   const mail = templates.newDeviceEmail({
     name: "<b>Ana</b>",
     deviceName: "samsung SM-A166P <script>",

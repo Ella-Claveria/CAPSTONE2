@@ -76,6 +76,13 @@ class DeviceTrustService {
     return id;
   }
 
+  /// This installation's id as it appears in the device list (the hash,
+  /// never the raw id) — so the list can mark "This device".
+  Future<String> currentDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return hashInstallId(await _installId(prefs));
+  }
+
   Future<void> _recordDevice(String uid) async {
     final prefs = await SharedPreferences.getInstance();
     final deviceId = hashInstallId(await _installId(prefs));

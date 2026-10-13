@@ -375,7 +375,7 @@ class _FarmerVerificationFieldState extends State<FarmerVerificationField> {
                 Text(
                   'Upang mapanatili ang integridad ng marketplace, '
                   'sinusuri ang lahat ng rehistrasyon ng isang '
-                  'opisyal ng Department of Agriculture. Karaniwang '
+                  'opisyal ng Agricultural Office ng Laurel, Batangas. Karaniwang '
                   'tumatagal ng 24 hanggang 48 oras.',
                   style: AppTheme.body(size: 11.5),
                 ),

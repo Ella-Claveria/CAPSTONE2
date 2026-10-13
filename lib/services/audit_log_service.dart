@@ -1,5 +1,7 @@
 import 'package:cloud_functions/cloud_functions.dart';
 
+import 'admin_device_location.dart';
+
 /// Every action the Admin Portal's Audit Log can record. Kept in sync with
 /// PRE_AUTH_ACTIONS/AUTHENTICATED_ACTIONS in functions/index.js — the
 /// Cloud Function is the real source of truth (it's what actually decides
@@ -9,6 +11,11 @@ abstract final class AuditAction {
   static const loginSuccess = 'LOGIN_SUCCESS';
   static const loginFailed = 'LOGIN_FAILED';
   static const logout = 'LOGOUT';
+  // The Admin Portal's single active session (see AdminSessionService).
+  // The first two are written by the adminSession Cloud Function.
+  static const newDeviceLogin = 'NEW_DEVICE_LOGIN';
+  static const sessionReplaced = 'SESSION_REPLACED';
+  static const sessionForcedLogout = 'SESSION_FORCED_LOGOUT';
   static const passwordResetRequested = 'PASSWORD_RESET_REQUESTED';
   static const approveFarmer = 'APPROVE_FARMER';
   static const rejectFarmer = 'REJECT_FARMER';
@@ -21,11 +28,27 @@ abstract final class AuditAction {
   static const suspendFarmer = 'SUSPEND_FARMER';
   static const banFarmer = 'BAN_FARMER';
   static const exportReport = 'EXPORT_REPORT';
+  static const sendAnnouncement = 'SEND_ANNOUNCEMENT';
+  static const removeReview = 'REMOVE_REVIEW';
+  static const dismissReport = 'DISMISS_REPORT';
+  static const reactivateFarmer = 'REACTIVATE_FARMER';
+  static const restoreListing = 'RESTORE_LISTING';
+  // The report workflow, and account actions on any marketplace account
+  // (the *Farmer actions above are kept for farmers).
+  static const startReportReview = 'START_REPORT_REVIEW';
+  static const resolveReport = 'RESOLVE_REPORT';
+  static const confirmViolation = 'CONFIRM_VIOLATION';
+  static const suspendAccount = 'SUSPEND_ACCOUNT';
+  static const banAccount = 'BAN_ACCOUNT';
+  static const reactivateAccount = 'REACTIVATE_ACCOUNT';
 
   static const all = [
     loginSuccess,
     loginFailed,
     logout,
+    newDeviceLogin,
+    sessionReplaced,
+    sessionForcedLogout,
     passwordResetRequested,
     approveFarmer,
     rejectFarmer,
@@ -38,6 +61,17 @@ abstract final class AuditAction {
     suspendFarmer,
     banFarmer,
     exportReport,
+    sendAnnouncement,
+    removeReview,
+    dismissReport,
+    reactivateFarmer,
+    restoreListing,
+    startReportReview,
+    resolveReport,
+    confirmViolation,
+    suspendAccount,
+    banAccount,
+    reactivateAccount,
   ];
 
   /// The two actions that can happen before anyone is signed in — a failed
@@ -62,18 +96,30 @@ abstract final class AuditAction {
 /// fails (offline, function cold-start timeout, etc), so every call here
 /// is fire-and-forget with its own try/catch.
 class AuditLogService {
-  static final _functions = FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+  static final _functions = FirebaseFunctions.instanceFor(
+    region: 'asia-southeast1',
+  );
 
   /// Logs an authenticated admin action (everything except a failed login
   /// or a password-reset request — see [logPreAuth] for those). [details]
   /// should be a short, human-readable summary, e.g. "Rice: ₱45.00 →
   /// ₱48.00" or "Approved farmer Juan Dela Cruz" — it's shown as-is in the
   /// Audit Log table's Details column.
-  static Future<void> log(String action, String details) async {
+  ///
+  /// [locationWait] is how long the entry may wait for the device's
+  /// location; a logout passes zero, and uses the one already known.
+  static Future<void> log(
+    String action,
+    String details, {
+    Duration locationWait = const Duration(seconds: 4),
+  }) async {
     try {
       await _functions.httpsCallable('logAuditEvent').call({
         'action': action,
         'details': details,
+        // Where this device is (see AdminDeviceLocation); left out when
+        // it is not known.
+        'location': ?await AdminDeviceLocation.current(wait: locationWait),
       });
     } catch (_) {
       // Best-effort — never let a logging failure surface to the admin or
@@ -84,12 +130,17 @@ class AuditLogService {
   /// Logs a failed login attempt or a password-reset request — the two
   /// actions that can happen before anyone is signed in, so there's an
   /// attempted email instead of a verified admin identity.
-  static Future<void> logPreAuth(String action, {required String email, String? details}) async {
+  static Future<void> logPreAuth(
+    String action, {
+    required String email,
+    String? details,
+  }) async {
     try {
       await _functions.httpsCallable('logAuditEvent').call({
         'action': action,
         'email': email,
         'details': ?details,
+        'location': ?await AdminDeviceLocation.current(),
       });
     } catch (_) {
       // Best-effort, same reasoning as log() above.

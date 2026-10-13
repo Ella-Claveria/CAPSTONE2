@@ -1,6 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 
 const String _adminEmailWithoutVerification = 'admin@agritrade.com';
 
@@ -71,14 +71,13 @@ class AuthRoutingService {
           .doc(uid)
           .get();
       if (!doc.exists) {
-        return const AuthRouteResult(
-          decision: AuthRouteDecision.missingProfile,
-          message:
-              'We could not find your account details. Please contact support.',
-        );
+        debugPrint('[Auth] role check — uid: $uid has no users/{uid} document');
       }
       data = doc.data();
-    } catch (_) {
+    } catch (e) {
+      // A failed read is "unknown", never "not an admin" — callers must not
+      // treat this as unauthorized (see AuthRouteDecision.error handling).
+      debugPrint('[Auth] role check — uid: $uid, Firestore read FAILED: $e');
       return const AuthRouteResult(
         decision: AuthRouteDecision.error,
         message:
@@ -88,11 +87,31 @@ class AuthRoutingService {
     final currentUser = FirebaseAuth.instance.currentUser;
     final isCurrentUser = currentUser?.uid == uid;
     final emailVerified = isCurrentUser && currentUser!.emailVerified;
-    return decideFromData(
+    final result = decideFromData(
       data,
       emailVerified: emailVerified,
       authenticatedEmail: isCurrentUser ? currentUser!.email : null,
     );
+    debugPrint(
+      '[Auth] role check — uid: $uid, email: ${currentUser?.email}, '
+      'emailVerified: $emailVerified, Firestore role: ${data?['role']}, '
+      'accountStatus: ${data?['accountStatus'] ?? 'active'} '
+      '→ ${result.decision.name}',
+    );
+    return result;
+  }
+
+  /// Why an account whose `users/{uid}` document is [data] may no longer
+  /// be on the Admin Dashboard, or null while it still may. Used for the
+  /// live check while the dashboard is open (see AdminDashboardScreen): a
+  /// role or status change must end the session without waiting for the
+  /// next page load.
+  static String? adminAccessLostReason(Map<String, dynamic>? data) {
+    if (data == null) return 'account record no longer exists';
+    final status = (data['accountStatus'] ?? 'active').toString();
+    if (status != 'active') return 'account is $status';
+    if (data['role'] != 'admin') return 'role is ${data['role']}, not admin';
+    return null;
   }
 
   /// Pure decision logic — no Firestore I/O — given a user document's data
@@ -181,8 +200,7 @@ class AuthRoutingService {
       return AuthRouteResult(
         decision: AuthRouteDecision.blockedNonAdminOnWeb,
         role: role,
-        message:
-            'This account is not authorized to access the Admin Dashboard.',
+        message: 'This account does not have administrator access.',
       );
     }
 

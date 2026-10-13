@@ -32,6 +32,7 @@ class SessionTimeoutService extends WidgetsBindingObserver {
 
   GlobalKey<NavigatorState>? _navigatorKey;
   Timer? _idleTimer;
+  DateTime? _lastActivity;
 
   /// Call once from main(), before runApp — [navigatorKey] is used to force
   /// the app back to the login flow if the timeout fires while the app is
@@ -49,13 +50,44 @@ class SessionTimeoutService extends WidgetsBindingObserver {
       _idleTimer = null;
       return;
     }
+    _lastActivity = DateTime.now();
+    // One pending check is enough — it re-reads _lastActivity when it
+    // fires, so there's no need to restart it on every pointer event.
+    if (_idleTimer?.isActive ?? false) return;
+    _scheduleIdleCheck(kInactivityTimeout);
+  }
+
+  // NEVER hand the full [kInactivityTimeout] to a single Timer. On the web
+  // a Timer is a JavaScript setTimeout, whose delay is a signed 32-bit
+  // millisecond count (max ~24.8 days): 30 days overflows it and the
+  // callback fires IMMEDIATELY. That signed the Admin out a moment after
+  // every successful login. Waiting in chunks well under that limit, and
+  // re-checking the real elapsed time each time, behaves the same on every
+  // platform.
+  static const _maxTimerChunk = Duration(hours: 6);
+
+  void _scheduleIdleCheck(Duration remaining) {
     _idleTimer?.cancel();
-    _idleTimer = Timer(kInactivityTimeout, _expireActiveSession);
+    final wait = remaining > _maxTimerChunk ? _maxTimerChunk : remaining;
+    _idleTimer = Timer(wait, () {
+      _idleTimer = null;
+      final last = _lastActivity;
+      if (last == null || FirebaseAuth.instance.currentUser == null) return;
+      final left = kInactivityTimeout - DateTime.now().difference(last);
+      if (left > Duration.zero) {
+        _scheduleIdleCheck(left);
+      } else {
+        unawaited(_expireActiveSession());
+      }
+    });
   }
 
   Future<void> _expireActiveSession() async {
     if (FirebaseAuth.instance.currentUser == null) return;
-    await AuthService().signOut();
+    await AuthService().signOut(
+      reason:
+          'inactivity timeout: no activity for ${kInactivityTimeout.inDays} days',
+    );
     final navState = _navigatorKey?.currentState;
     if (navState == null) return;
     navState.pushAndRemoveUntil(
@@ -124,7 +156,10 @@ class SessionTimeoutService extends WidgetsBindingObserver {
         return false;
       }
 
-      await AuthService().signOut();
+      await AuthService().signOut(
+        reason:
+            'inactivity timeout: app was in the background since $backgroundedAt',
+      );
       return true;
     } catch (_) {
       return false;

@@ -34,7 +34,7 @@
   "password": "Password",
   "forgotPassword": "Nakalimutan ang Password?",
   "loginButton": "Mag-login",
-  "loginSubtitle": "Mag-sign in sa iyong AgriTrade+ account",
+  "loginSubtitle": "Mag-log in sa iyong AgriTrade+ account",
   "noAccountSignUp": "Wala ka pang account? ",
   "signUp": "Mag-sign up",
   "createOne": "Gumawa ng Isa.",
@@ -55,7 +55,21 @@
   "navMarket": "Market",
 
   "selectLanguage": "Piliin ang Wika",
-  "english": "Ingles",
-  "tagalog": "Tagalog",
-  "languageChanged": "Naka-set na sa {language} ang wika."
+  "english": "English",
+  "tagalog": "Filipino",
+  "language": "Wika",
+  "languageHintTitle": "Piliin ang iyong wika",
+  "languageHintMessage": "Pindutin ang E para sa English o F para sa Filipino. Maaari mo itong palitan dito anumang oras, o sa Settings.",
+  "coachGotIt": "Sige",
+  "languageChanged": "Naka-set na sa {language} ang wika.",
+
+  "onboardingSkip": "Laktawan",
+  "onboardingNext": "Susunod",
+  "onboardingGetStarted": "Magsimula",
+  "onboardingTitle1": "Sariwang Produkto, Direktang Kalakalan",
+  "onboardingDescription1": "Bumili at magbenta ng mga piling produktong pang-agrikultura nang direkta sa AgriTrade+.",
+  "onboardingTitle2": "Matalino at Maginhawang Pamilihan",
+  "onboardingDescription2": "Tumuklas ng mga produkto, makipag-ugnayan sa mga magsasaka at mamimili, at pamahalaan ang iyong mga transaksyon sa iisang lugar.",
+  "onboardingTitle3": "Manatiling Konektado",
+  "onboardingDescription3": "Pamahalaan ang mga order, mensahe, at mahahalagang update sa transaksyon sa AgriTrade+."
 }

@@ -13,10 +13,11 @@ import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
 import 'farmer_edit_profile_screen.dart';
 import 'account_settings_screen.dart';
+import 'manage_account_screen.dart';
 import 'farmer_reviews_screen.dart';
 import '../widgets/page_header.dart';
 import '../widgets/agri_dialog.dart';
-import '../widgets/change_password_dialog.dart';
+import '../widgets/update_stock_dialog.dart';
 import '../widgets/shimmer.dart';
 import '../widgets/skeleton_loaders.dart';
 import '../widgets/retry_message.dart';
@@ -64,34 +65,58 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  void _showComingSoon(BuildContext context, String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor: _dark,
-        content: Text('$feature — coming soon.'),
+  // ---- Three-dot menu beside the Profile title ----
+  // Manage Account, Help & Support, then Log Out last and in red.
+  Widget _profileMenu(BuildContext context) {
+    // Compact rows: a small icon, then small text.
+    PopupMenuItem<String> item(
+      String value,
+      IconData icon,
+      String label, {
+      Color color = Colors.black87,
+    }) => PopupMenuItem(
+      value: value,
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 10),
+          Text(
+            label,
+            style: GoogleFonts.montserrat(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
-  }
 
-  Widget _menuButton(BuildContext context) {
     return PopupMenuButton<String>(
-      icon: const Icon(Icons.menu_rounded, size: 24, color: _dark),
+      tooltip: 'Account menu',
+      icon: const Icon(Icons.more_vert, color: PageHeader.titleColor),
+      // A small floating panel that opens just below the icon.
+      position: PopupMenuPosition.under,
+      offset: const Offset(0, 4),
+      color: const Color(0xFFFCFCFA),
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shadowColor: Colors.black.withValues(alpha: 0.25),
+      menuPadding: const EdgeInsets.symmetric(vertical: 6),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       onSelected: (value) {
         switch (value) {
-          case 'settings':
+          case 'manage':
             Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const AccountSettingsScreen()),
+              MaterialPageRoute(builder: (_) => const ManageAccountScreen()),
             );
             break;
-          case 'password':
-            showChangePasswordDialog(context);
-            break;
           case 'help':
-            _showComingSoon(context, 'Help & Support');
+            AccountSettingsScreen.showHelp(context);
             break;
           case 'logout':
             _handleLogout(context);
@@ -99,55 +124,9 @@ class _ProfileTabState extends State<ProfileTab> {
         }
       },
       itemBuilder: (context) => [
-        const PopupMenuItem(
-          value: 'settings',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.settings_outlined, color: _dark),
-            title: Text(
-              'Account Settings',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'password',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.lock_outline, color: _dark),
-            title: Text(
-              'Change Password',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'help',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.help_outline, color: _dark),
-            title: Text(
-              'Help & Support',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-            ),
-          ),
-        ),
-        const PopupMenuDivider(height: 8),
-        const PopupMenuItem(
-          value: 'logout',
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.logout, color: Colors.redAccent),
-            title: Text(
-              'Log Out',
-              style: TextStyle(
-                fontSize: 14.5,
-                fontWeight: FontWeight.w500,
-                color: Colors.redAccent,
-              ),
-            ),
-          ),
-        ),
+        item('manage', Icons.settings_outlined, 'Manage Account'),
+        item('help', Icons.help_outline, 'Help & Support'),
+        item('logout', Icons.logout, 'Log Out', color: const Color(0xFFD32F2F)),
       ],
     );
   }
@@ -504,84 +483,22 @@ class _ProfileTabState extends State<ProfileTab> {
                   ],
                 )
               : null,
-          trailing: PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert, color: Colors.grey[500]),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
+          // The same compact menu Messages uses (showAgriPopupMenu),
+          // dropped from this product's own ⋮ button.
+          trailing: Builder(
+            builder: (buttonContext) => IconButton(
+              tooltip: 'Product actions',
+              icon: Icon(Icons.more_vert, color: Colors.grey[500]),
+              onPressed: () => _openProductMenu(
+                buttonContext,
+                id: id,
+                data: data,
+                name: name,
+                quantity: quantity,
+                unit: unit,
+                isArchived: isArchived,
+              ),
             ),
-            onSelected: (value) {
-              switch (value) {
-                case 'edit':
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          AddProductScreen(productId: id, existingData: data),
-                    ),
-                  );
-                  break;
-                case 'quantity':
-                  _showUpdateQuantityDialog(context, id, name, quantity, unit);
-                  break;
-                case 'archive':
-                  _setArchived(context, id, !isArchived);
-                  break;
-                case 'share':
-                  ProductShareService.share(context, id, data);
-                  break;
-              }
-            },
-            itemBuilder: (context) => [
-              // An archived listing is hidden from buyers, so there is
-              // nothing to share.
-              if (!isArchived)
-                const PopupMenuItem(
-                  value: 'share',
-                  child: ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.share_outlined, color: _dark),
-                    title: Text(
-                      'Share Product',
-                      style: TextStyle(fontSize: 14),
-                    ),
-                  ),
-                ),
-              const PopupMenuItem(
-                value: 'edit',
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.edit_outlined, color: _dark),
-                  title: Text('Edit Product', style: TextStyle(fontSize: 14)),
-                ),
-              ),
-              const PopupMenuItem(
-                value: 'quantity',
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.inventory_2_outlined, color: _dark),
-                  title: Text(
-                    'Update Quantity',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-              ),
-              PopupMenuItem(
-                value: 'archive',
-                child: ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    isArchived
-                        ? Icons.unarchive_outlined
-                        : Icons.archive_outlined,
-                    color: isArchived ? _dark : Colors.orange[800],
-                  ),
-                  title: Text(
-                    isArchived ? 'Restore Listing' : 'Archive Listing',
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ),
-              ),
-            ],
           ),
           onTap: () => Navigator.push(
             context,
@@ -605,6 +522,75 @@ class _ProfileTabState extends State<ProfileTab> {
         content: Text(message),
       ),
     );
+  }
+
+  // Active listing: Share, Edit, Update Quantity, Archive. An archived
+  // one is hidden from buyers and read-only, so it only offers its
+  // details and Restore — nothing to share, edit or restock until then.
+  Future<void> _openProductMenu(
+    BuildContext buttonContext, {
+    required String id,
+    required Map<String, dynamic> data,
+    required String name,
+    required dynamic quantity,
+    required String unit,
+    required bool isArchived,
+  }) async {
+    final action = await showAgriPopupMenu<String>(
+      anchorContext: buttonContext,
+      items: isArchived
+          ? const [
+              AgriMenuItem(
+                value: 'view',
+                icon: Icons.visibility_outlined,
+                label: 'View Details',
+              ),
+              AgriMenuItem(
+                value: 'archive',
+                icon: Icons.unarchive_outlined,
+                label: 'Restore Listing',
+              ),
+            ]
+          : const [
+              AgriMenuItem(
+                value: 'share',
+                icon: Icons.share_outlined,
+                label: 'Share Product',
+              ),
+              AgriMenuItem(
+                value: 'edit',
+                icon: Icons.edit_outlined,
+                label: 'Edit Product',
+              ),
+              AgriMenuItem(
+                value: 'quantity',
+                icon: Icons.inventory_2_outlined,
+                label: 'Update Quantity',
+              ),
+              AgriMenuItem(
+                value: 'archive',
+                icon: Icons.archive_outlined,
+                label: 'Archive Listing',
+              ),
+            ],
+    );
+    if (action == null || !buttonContext.mounted) return;
+    switch (action) {
+      case 'view':
+      case 'edit':
+        Navigator.push(
+          buttonContext,
+          MaterialPageRoute(
+            builder: (_) => AddProductScreen(productId: id, existingData: data),
+          ),
+        );
+      case 'quantity':
+        _showUpdateQuantityDialog(buttonContext, id, name, quantity, unit);
+      case 'archive':
+        _setArchived(buttonContext, id, !isArchived);
+      case 'share':
+        ProductShareService.share(buttonContext, id, data);
+    }
   }
 
   Future<void> _setArchived(
@@ -656,67 +642,19 @@ class _ProfileTabState extends State<ProfileTab> {
     dynamic currentQuantity,
     String unit,
   ) async {
-    final countBased = isCountBasedUnit(unit);
     final current = currentQuantity is num
         ? currentQuantity
         : num.tryParse(currentQuantity?.toString() ?? '') ?? 0;
-    final controller = TextEditingController(
-      text: countBased ? current.toStringAsFixed(0) : current.toString(),
+    // The dialog owns its own text controller (see UpdateStockDialog) —
+    // it must outlive this call returning, since the dialog is still
+    // closing at that point. Null means cancelled: nothing is saved.
+    final newQuantity = await showUpdateStockDialog(
+      context,
+      name: name,
+      currentQuantity: current,
+      unit: unit,
+      onInvalid: _snack,
     );
-    final newQuantity = await showAgriDialog<num?>(
-      context: context,
-      builder: (dialogContext) => AgriDialog(
-        title: const Text('Update Available Stock'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 14),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              keyboardType: TextInputType.numberWithOptions(
-                decimal: !countBased,
-              ),
-              decoration: InputDecoration(
-                labelText: 'Available Stock ($unit)',
-                border: const OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          AgriDialogButton(
-            label: 'Cancel',
-            onPressed: () => Navigator.of(dialogContext).pop<num?>(null),
-          ),
-          AgriDialogButton(
-            label: 'Save',
-            kind: AgriButtonKind.primary,
-            onPressed: () {
-              final parsed = num.tryParse(controller.text.trim());
-              if (parsed == null || parsed < 0) {
-                _snack(
-                  dialogContext,
-                  'Please enter a valid, non-negative quantity.',
-                );
-                return;
-              }
-              if (countBased && parsed != parsed.roundToDouble()) {
-                _snack(
-                  dialogContext,
-                  'Available Stock for $unit must be a whole number.',
-                );
-                return;
-              }
-              Navigator.of(dialogContext).pop<num?>(parsed);
-            },
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
     if (!context.mounted || newQuantity == null) return;
     final error = await _productService.updateQuantity(id, newQuantity);
     if (!context.mounted) return;
@@ -880,8 +818,9 @@ class _ProfileTabState extends State<ProfileTab> {
         padding: const EdgeInsets.only(bottom: 90),
         child: Column(
           children: [
-            // ---- Page title, with the menu on the same row ----
-            PageHeader(title: 'Profile', trailing: _menuButton(context)),
+            // ---- Page title, with the account menu beside it ----
+            // The menu sits on the title's own row, opposite it.
+            PageHeader(title: 'Profile', titleTrailing: _profileMenu(context)),
 
             // ---- Avatar with edit badge ----
             _avatarWithEditBadge(context),
@@ -935,7 +874,6 @@ class _ProfileTabState extends State<ProfileTab> {
 
             // ---- My Products ----
             _myProductsSection(context),
-            const SizedBox(height: 24),
           ],
         ),
       ),

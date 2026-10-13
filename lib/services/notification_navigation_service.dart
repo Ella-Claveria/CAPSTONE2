@@ -11,6 +11,7 @@ import '../screen/order_details_screen.dart';
 import '../screen/pending_approval_screen.dart';
 import 'connectivity_service.dart';
 import 'order_format.dart';
+import '../screen/sign_in_activity_screen.dart';
 
 /// Where a notification of a given `type` should take the user. Used by
 /// three entry points that must never drift out of sync on this decision:
@@ -75,6 +76,39 @@ class NotificationNavigationService {
           context,
           reportId: reportId,
           productId: productId,
+        );
+        return;
+
+      case 'announcement':
+        // A message from the Admin (or a maintenance notice): the whole
+        // text, which a notification row can only show the start of.
+        await showAgriDialog<void>(
+          context: context,
+          builder: (dialogContext) => AgriDialog(
+            icon: data['kind'] == 'maintenance'
+                ? Icons.build_circle_outlined
+                : Icons.campaign_outlined,
+            title: Text(data['title']?.toString() ?? 'Announcement'),
+            content: Text(data['body']?.toString() ?? ''),
+            actions: [
+              AgriDialogButton(
+                label: 'OK',
+                onPressed: () => Navigator.of(dialogContext).pop(),
+              ),
+            ],
+          ),
+        );
+        return;
+
+      case 'security_new_device':
+        // An alert about a sign-in that already happened — opens the
+        // account's own device list, with that device pointed out.
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SignInActivityScreen(
+              highlightDeviceId: data['deviceId']?.toString(),
+            ),
+          ),
         );
         return;
 

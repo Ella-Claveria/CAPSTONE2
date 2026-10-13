@@ -52,7 +52,7 @@
                  https://agritrade-bef87.web.app/product/<id> opens the app
                  on that product. Android only hands https links straight to
                  the app once the domain is verified, which needs
-                 web/.well-known/assetlinks.json (with this app's signing
+                 web/assetlinks.json (with this app's signing
                  certificate fingerprint) deployed to Firebase Hosting;
                  until then the link opens the web app in the browser. -->
             <intent-filter android:autoVerify="true">

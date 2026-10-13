@@ -4,11 +4,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'dart:convert'; // Decodes Base64-embedded verification document images
 
+import '../services/rsba_number.dart';
+import 'admin_filter_controls.dart';
 import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
-import '../services/dashboard_analytics_service.dart';
 import '../services/dashboard_data_service.dart';
-import '../services/market_price_helpers.dart';
 import 'admin_dashboard_screen.dart' show AdminThemeScope;
 
 /// Pending Farmer applications only — role == 'farmer' && approvalStatus ==
@@ -24,26 +24,11 @@ class VerificationQueueView extends StatelessWidget {
     final c = AdminThemeScope.of(context).palette;
 
     return Padding(
-      padding: const EdgeInsets.all(28.0),
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Verification Queue',
-            style: TextStyle(
-              fontSize: 30,
-              height: 1.15,
-              letterSpacing: -0.6,
-              fontWeight: FontWeight.w800,
-              color: c.textPrimary,
-            ),
-          ),
-          Text(
-            'Review and approve agricultural credentials for new farmers.',
-            style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.5),
-          ),
-          const SizedBox(height: 24),
-
+          // The title is in the utility bar above.
           Expanded(
             // Sourced from DashboardDataService's shared `users` stream (see
             // its class doc) instead of a separate getPendingFarmers()
@@ -62,9 +47,7 @@ class VerificationQueueView extends StatelessWidget {
                   stream: DashboardDataService.instance.verificationDocsStream,
                   builder: (context, verifSnap) {
                     if (usersSnap.connectionState == ConnectionState.waiting) {
-                      return Center(
-                        child: CircularProgressIndicator(color: c.green),
-                      );
+                      return const Center(child: AdminLoadingBar());
                     }
 
                     if (usersSnap.hasError) {
@@ -87,6 +70,18 @@ class VerificationQueueView extends StatelessWidget {
                       for (final d in verifSnap.data?.docs ?? const [])
                         d.id: d.data(),
                     };
+                    // Every farmer account by Farmer ID, to point out a
+                    // number that is already on another account.
+                    final namesByFarmerId = <String, Map<String, String>>{};
+                    for (final d in usersSnap.data?.docs ?? const []) {
+                      final data = d.data();
+                      if (data['role'] != 'farmer') continue;
+                      final id = farmerIdOf(data, verifByUid[d.id]);
+                      if (id == null) continue;
+                      (namesByFarmerId[id] ??= {})[d.id] =
+                          _firstNonEmpty([data['fullName'], data['name']]) ??
+                          'Unknown Farmer';
+                    }
 
                     if (docs.isEmpty) {
                       return Center(
@@ -105,11 +100,18 @@ class VerificationQueueView extends StatelessWidget {
                       itemBuilder: (context, index) {
                         final uid = docs[index].id;
                         final profile = docs[index].data();
+                        final farmerId = farmerIdOf(profile, verifByUid[uid]);
                         return _farmerApplicationCard(
                           context,
                           uid,
                           profile,
                           verifByUid[uid],
+                          sameFarmerId: [
+                            for (final other
+                                in (namesByFarmerId[farmerId] ?? const {})
+                                    .entries)
+                              if (other.key != uid) other.value,
+                          ],
                         );
                       },
                     );
@@ -127,8 +129,9 @@ class VerificationQueueView extends StatelessWidget {
     BuildContext context,
     String uid,
     Map<String, dynamic> profile,
-    Map<String, dynamic>? verif,
-  ) {
+    Map<String, dynamic>? verif, {
+    List<String> sameFarmerId = const [],
+  }) {
     // verif (from DashboardDataService's shared verificationDocsStream, see
     // caller) is supplementary only — submission date and the document
     // image live on verificationDocs, but the row (and the Approve/Reject
@@ -150,7 +153,12 @@ class VerificationQueueView extends StatelessWidget {
         ? DateFormat('MMM d, y').format(submittedAt.toDate())
         : '—';
     final document = (verif?['document'] ?? '').toString();
-    final farmerId = uid.length > 8 ? uid.substring(0, 8) : uid;
+    // The Farmer ID is the RSBA number typed at registration. It is what
+    // the Admin checks against the registry before approving — the app
+    // itself does not verify it.
+    final farmerId = farmerIdOf(profile, verif);
+    // Nothing to check an application against: no number and no document.
+    final nothingToCheck = farmerId == null && document.isEmpty;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
@@ -165,8 +173,40 @@ class VerificationQueueView extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
         isThreeLine: true,
-        subtitle: Text(
-          'ID: $farmerId  •  $email\nBarangay: $barangay  •  Submitted: $dateSubmitted',
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 4),
+            Text.rich(
+              TextSpan(
+                text: 'RSBA No.: ',
+                children: [
+                  TextSpan(
+                    text: farmerId ?? kNoFarmerId,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      color: farmerId == null ? Colors.red[700] : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Text(
+              '$email  •  Barangay: $barangay  •  Submitted: $dateSubmitted',
+            ),
+            if (sameFarmerId.isNotEmpty)
+              Text(
+                'This RSBA No. is also on another farmer account: '
+                '${sameFarmerId.join(', ')}.',
+                style: TextStyle(color: Colors.red[700], fontSize: 12.5),
+              ),
+            if (nothingToCheck)
+              Text(
+                'No RSBA No. was submitted, so there is nothing to check '
+                'this application against.',
+                style: TextStyle(color: Colors.red[700], fontSize: 12.5),
+              ),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
@@ -176,22 +216,22 @@ class VerificationQueueView extends StatelessWidget {
               icon: Icon(Icons.visibility_outlined, color: Colors.grey[700]),
               onPressed: () => showFarmerVerificationDetails(context, uid: uid),
             ),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.image_search, color: Colors.blue),
-              label: const Text('View Doc'),
-              onPressed: document.isEmpty
-                  ? null
-                  : () => _showDocumentDialog(context, document),
-            ),
-            const SizedBox(width: 8),
+            // Only an older application has a document; the RSBA number
+            // took its place on the registration form.
+            if (document.isNotEmpty) ...[
+              OutlinedButton.icon(
+                icon: const Icon(Icons.image_search),
+                label: const Text('View Doc'),
+                onPressed: () => _showDocumentDialog(context, document),
+              ),
+              const SizedBox(width: 8),
+            ],
             ElevatedButton.icon(
               icon: const Icon(Icons.check),
               label: const Text('Approve'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-              ),
-              onPressed: () => approveFarmerAccount(context, uid, fullName),
+              onPressed: nothingToCheck
+                  ? null
+                  : () => approveFarmerAccount(context, uid, fullName),
             ),
             const SizedBox(width: 8),
             OutlinedButton.icon(
@@ -291,13 +331,13 @@ Future<void> _confirmAndRun(
               Text(message),
               if (withReason) ...[
                 const SizedBox(height: 14),
-                TextField(
-                  controller: reasonController,
+                AdminField(
+                  controller: reasonController!,
                   maxLines: 2,
                   enabled: !loading,
-                  decoration: const InputDecoration(
+                  decoration: adminMultilineDecoration(
+                    dialogContext,
                     hintText: 'Reason for rejection (optional)',
-                    border: OutlineInputBorder(),
                   ),
                 ),
               ],
@@ -355,7 +395,7 @@ Future<void> approveFarmerAccount(
     message:
         'This farmer will be verified and able to list products and sell on AgriTrade+.',
     confirmLabel: 'Approve',
-    confirmColor: Colors.green,
+    confirmColor: adminActionOf(context),
     action: (_) => _setFarmerApproval(
       context,
       uid,
@@ -446,10 +486,11 @@ Future<void> _setFarmerApproval(
       'isVerified': approved,
     };
     if (approved) userUpdate['verifiedAt'] = FieldValue.serverTimestamp();
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .update(userUpdate);
+    final batch = FirebaseFirestore.instance.batch();
+    batch.update(
+      FirebaseFirestore.instance.collection('users').doc(uid),
+      userUpdate,
+    );
 
     final docUpdate = <String, dynamic>{
       'status': status,
@@ -459,10 +500,13 @@ Future<void> _setFarmerApproval(
     if (!approved && reason != null && reason.isNotEmpty) {
       docUpdate['rejectionReason'] = reason;
     }
-    await FirebaseFirestore.instance
-        .collection('verificationDocs')
-        .doc(uid)
-        .set(docUpdate, SetOptions(merge: true));
+    if (approved) docUpdate['rejectionReason'] = FieldValue.delete();
+    batch.set(
+      FirebaseFirestore.instance.collection('verificationDocs').doc(uid),
+      docUpdate,
+      SetOptions(merge: true),
+    );
+    await batch.commit();
 
     AuditLogService.log(
       approved ? AuditAction.approveFarmer : AuditAction.rejectFarmer,
@@ -487,61 +531,6 @@ Future<void> _setFarmerApproval(
   }
 }
 
-/// One-shot (not real-time — this backs a transient dialog, not a live
-/// list) snapshot of a single farmer's marketplace activity, used only by
-/// this screen's own verification detail dialog.
-class _MarketplaceSummary {
-  final int activeProducts;
-  final int archivedProducts;
-  final int completedOrders;
-  final num totalSales;
-  const _MarketplaceSummary({
-    required this.activeProducts,
-    required this.archivedProducts,
-    required this.completedOrders,
-    required this.totalSales,
-  });
-}
-
-Future<_MarketplaceSummary> _loadMarketplaceSummary(String uid) async {
-  final products = await FirebaseFirestore.instance
-      .collection('products')
-      .where('farmerId', isEqualTo: uid)
-      .get();
-  var active = 0, archived = 0;
-  for (final p in products.docs) {
-    if ((p.data()['isArchived'] ?? false) == true) {
-      archived++;
-    } else {
-      active++;
-    }
-  }
-
-  final orders = await FirebaseFirestore.instance
-      .collection('orders')
-      .where('sellerId', isEqualTo: uid)
-      .get();
-  final completedCount = orders.docs
-      .where(
-        (o) =>
-            (o.data()['status'] ?? '').toString().toLowerCase() == 'completed',
-      )
-      .length;
-  // TOTAL TRANSACTION VALUE — same definition/formula as the platform-
-  // wide KPI tile (DashboardAnalyticsService.platformTransactionTotal),
-  // just scoped to this one farmer's own orders.
-  final totalSales = DashboardAnalyticsService.platformTransactionTotal(
-    orders.docs,
-  );
-
-  return _MarketplaceSummary(
-    activeProducts: active,
-    archivedProducts: archived,
-    completedOrders: completedCount,
-    totalSales: totalSales,
-  );
-}
-
 /// Opens the full verification/profile detail dialog for one farmer — used
 /// by the Verification Queue's pending list and the Home dashboard's
 /// "Recent Verification Requests" table, so both stay backed by the same
@@ -557,23 +546,37 @@ Future<void> showFarmerVerificationDetails(
   );
 }
 
-class _FarmerVerificationDetailDialog extends StatelessWidget {
+class _FarmerVerificationDetailDialog extends StatefulWidget {
   final String uid;
   const _FarmerVerificationDetailDialog({required this.uid});
 
   @override
+  State<_FarmerVerificationDetailDialog> createState() =>
+      _FarmerVerificationDetailDialogState();
+}
+
+class _FarmerVerificationDetailDialogState
+    extends State<_FarmerVerificationDetailDialog>
+    with AdminReadOnce {
+  String get uid => widget.uid;
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .snapshots(),
+      stream: watchOnce(
+        'user',
+        () =>
+            FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      ),
       builder: (context, userSnap) {
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: FirebaseFirestore.instance
-              .collection('verificationDocs')
-              .doc(uid)
-              .snapshots(),
+          stream: watchOnce(
+            'verification',
+            () => FirebaseFirestore.instance
+                .collection('verificationDocs')
+                .doc(uid)
+                .snapshots(),
+          ),
           builder: (context, verifSnap) {
             if (userSnap.hasError || verifSnap.hasError) {
               return AlertDialog(
@@ -593,7 +596,7 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
               return const AlertDialog(
                 content: SizedBox(
                   height: 120,
-                  child: Center(child: CircularProgressIndicator()),
+                  child: Center(child: AdminLoadingBar()),
                 ),
               );
             }
@@ -624,8 +627,16 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                 'Unknown Farmer';
             final email = (user['email'] ?? '—').toString();
             final barangay = _firstNonEmpty([user['barangay']]) ?? '—';
-            final municipality = _firstNonEmpty([user['municipality']]) ?? '—';
-            final phone = _firstNonEmpty([user['phone']]) ?? '—';
+            final municipality = _firstNonEmpty([user['municipality']]);
+            // The number given at registration, read live from the account: a
+            // change the farmer makes in the app shows here by itself.
+            final phone =
+                _firstNonEmpty([
+                  user['mobileNumber'],
+                  user['phoneNumber'],
+                  user['phone'],
+                ]) ??
+                '—';
             final approvalStatus = (user['approvalStatus'] ?? 'pending')
                 .toString();
             final statusLabel = approvalStatus.isEmpty
@@ -640,17 +651,18 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                 ? DateFormat('MMM d, y – h:mm a').format(reviewedAt.toDate())
                 : '—';
             final reviewedByUid = _firstNonEmpty([user['reviewedBy']]);
-            final reviewedBy = reviewedByUid == null
-                ? '—'
-                : (reviewedByUid.length > 8
-                      ? reviewedByUid.substring(0, 8)
-                      : reviewedByUid);
-            final document = (verif?['document'] ?? '').toString();
+            // Verified by the app's own email code, a verified email link,
+            // or a Google sign-in (the same reading as User Accounts).
+            final emailVerified =
+                user['emailOtpVerified'] == true ||
+                user['emailVerified'] == true ||
+                (user['authProvider'] ?? '').toString() == 'google';
+            final province = _firstNonEmpty([user['province']]);
             final rejectionReason = (verif?['rejectionReason'] ?? '')
                 .toString();
 
             return AlertDialog(
-              title: Text(fullName),
+              title: const Text('Farmer Application and Verification Record'),
               content: SizedBox(
                 width: 500,
                 child: SingleChildScrollView(
@@ -658,93 +670,90 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _sectionLabel('Profile'),
-                      _detailRow('Farmer ID', uid),
+                      // The farmer's CURRENT profile photo, read live from
+                      // their own account record (the one the mobile app
+                      // updates) — nothing is copied onto the application.
+                      // A new farmer usually has none yet: their initials
+                      // are shown instead, and it is not needed to approve.
+                      Row(
+                        children: [
+                          AdminAvatar(
+                            name: fullName,
+                            photoUrl: user['photoUrl']?.toString(),
+                            radius: 28,
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                              fullName,
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      _sectionLabel('Farmer Information'),
+                      _detailRow('Full Name', fullName),
+                      _detailRow(
+                        'RSBA No.',
+                        farmerIdOf(user, verif) ?? kNoFarmerId,
+                      ),
                       _detailRow('Email', email),
-                      _detailRow('Barangay', barangay),
-                      _detailRow('Municipality', municipality),
                       _detailRow('Phone Number', phone),
+                      _detailRow('Barangay', barangay),
+                      _detailRow(
+                        'Municipality / City',
+                        [municipality, province].whereType<String>().isEmpty
+                            ? '—'
+                            : [
+                                municipality,
+                                province,
+                              ].whereType<String>().join(', '),
+                      ),
                       const SizedBox(height: 10),
-                      _sectionLabel('Verification'),
-                      _detailRow('Status', statusLabel),
+                      _sectionLabel('Application Details'),
+                      _detailRow(
+                        'Email Verification Status',
+                        emailVerified ? 'Verified' : 'Not verified',
+                      ),
+                      _detailRow('Application Status', statusLabel),
                       _detailRow('Date Submitted', dateSubmitted),
                       _detailRow('Reviewed At', dateReviewed),
-                      _detailRow('Reviewed By', reviewedBy),
-                      if (approvalStatus == 'rejected' &&
-                          rejectionReason.isNotEmpty)
-                        _detailRow('Rejection Reason', rejectionReason),
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        icon: const Icon(
-                          Icons.image_search,
-                          color: Colors.blue,
-                        ),
-                        label: const Text('View Submitted Document'),
-                        onPressed: document.isEmpty
+                      // The officer's name, not their account code.
+                      FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                        future: reviewedByUid == null
                             ? null
-                            : () => _showDocumentDialog(context, document),
-                      ),
-                      if (document.isEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'No verification document was submitted for this account.',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      FutureBuilder<_MarketplaceSummary>(
-                        future: _loadMarketplaceSummary(uid),
-                        builder: (context, activitySnap) {
-                          if (activitySnap.connectionState !=
-                              ConnectionState.done) {
-                            return const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 12),
-                              child: SizedBox(
-                                height: 18,
-                                width: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+                            : readOnce(
+                                'officer/$reviewedByUid',
+                                () => FirebaseFirestore.instance
+                                    .collection('users')
+                                    .doc(reviewedByUid)
+                                    .get(),
                               ),
-                            );
-                          }
-                          if (activitySnap.hasError || !activitySnap.hasData) {
-                            return Text(
-                              'Could not load marketplace activity.',
-                              style: TextStyle(
-                                color: Colors.grey[600],
-                                fontSize: 12,
-                              ),
-                            );
-                          }
-                          final a = activitySnap.data!;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _sectionLabel('Marketplace Summary'),
-                              _detailRow(
-                                'Active Products',
-                                '${a.activeProducts}',
-                              ),
-                              _detailRow(
-                                'Archived Products',
-                                '${a.archivedProducts}',
-                              ),
-                              _detailRow(
-                                'Completed Orders',
-                                '${a.completedOrders}',
-                              ),
-                              _detailRow(
-                                'Total Sales',
-                                formatPeso(a.totalSales),
-                              ),
-                            ],
+                        builder: (context, officerSnap) {
+                          final officer = officerSnap.data?.data();
+                          return _detailRow(
+                            'Reviewed By',
+                            reviewedByUid == null
+                                ? '—'
+                                : _firstNonEmpty([
+                                        officer?['fullName'],
+                                        officer?['name'],
+                                        officer?['email'],
+                                      ]) ??
+                                      (officerSnap.connectionState ==
+                                              ConnectionState.done
+                                          ? 'Administrator'
+                                          : '…'),
                           );
                         },
                       ),
+                      if (approvalStatus == 'rejected' &&
+                          rejectionReason.isNotEmpty)
+                        _detailRow('Rejection Reason', rejectionReason),
                     ],
                   ),
                 ),
@@ -766,10 +775,6 @@ class _FarmerVerificationDetailDialog extends StatelessWidget {
                     child: const Text('Reject'),
                   ),
                   ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      foregroundColor: Colors.white,
-                    ),
                     onPressed: () {
                       Navigator.of(context).pop();
                       approveFarmerAccount(context, uid, fullName);

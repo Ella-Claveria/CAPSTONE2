@@ -9,6 +9,7 @@ import '../widgets/page_header.dart';
 import '../widgets/retry_message.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/agri_refresh_indicator.dart';
+import '../widgets/app_search_bar.dart';
 import '../widgets/online_dot.dart';
 import '../widgets/profile_avatar.dart';
 import '../widgets/report_user_dialog.dart';
@@ -16,6 +17,7 @@ import 'archived_conversations_screen.dart';
 import 'message_management_screens.dart';
 import 'chat_navigation.dart';
 import 'message_search_screen.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// Which conversations a [ChatListScreen] shows.
 enum ChatListMode {
@@ -47,7 +49,6 @@ class ChatListScreen extends StatefulWidget {
 
 class _ChatListScreenState extends State<ChatListScreen> {
   static const Color _dark = AppTheme.dark;
-  static const Color _accent = Color(0xFFDCEDC8);
 
   final MessageService _messageService = MessageService();
   String _filter = 'all';
@@ -289,7 +290,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
   // "Messages" title (same style as the Orders tab heading) with the
   // message-management menu on the right — same for Farmer and Buyer.
   Widget _header() {
-    return PageHeader(title: 'Messages', trailing: _menuButton());
+    // The menu sits on the title's own row, opposite it.
+    return PageHeader(title: 'Messages', titleTrailing: _menuButton());
   }
 
   Widget _searchBar() {
@@ -300,43 +302,16 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Widget _searchField() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.78),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF8EB99A).withValues(alpha: 0.12),
-            blurRadius: 12,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      // Not an editable field — tapping it opens the dedicated search
-      // screen (recent searches + results), same for Farmer and Buyer.
-      child: Semantics(
-        button: true,
-        label: 'Search conversations',
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const MessageSearchScreen()),
-          ),
-          child: Container(
-            constraints: const BoxConstraints(minHeight: 44),
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                Icon(Icons.search_rounded, color: Colors.grey[500], size: 21),
-                const SizedBox(width: 10),
-                Text(
-                  'Search conversations...',
-                  style: TextStyle(color: Colors.grey[500], fontSize: 14),
-                ),
-              ],
-            ),
-          ),
+    // Not an editable field — tapping it opens the dedicated search
+    // screen (recent searches + results), same for Farmer and Buyer.
+    return Semantics(
+      button: true,
+      label: 'Search conversations',
+      child: AppSearchBar(
+        hint: 'Search conversations...',
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const MessageSearchScreen()),
         ),
       ),
     );
@@ -363,7 +338,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
     return Builder(
       builder: (buttonContext) => IconButton(
         tooltip: 'Manage messages',
-        icon: const Icon(Icons.menu_rounded, size: 24, color: _dark),
+        icon: const Icon(
+          Icons.menu_rounded,
+          size: 24,
+          color: PageHeader.titleColor,
+        ),
         onPressed: () => _openManageMenu(buttonContext),
       ),
     );
@@ -401,24 +380,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   Widget _folderEmptyState(IconData icon, String title, String subtitle) {
     return Center(
-      child: Padding(
+      child: AgriEmptyState(
+        icon: icon,
+        title: title,
+        subtitle: subtitle,
         padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 44, color: Colors.grey[400]),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              style: TextStyle(fontSize: 14, color: Colors.grey[700]),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: TextStyle(fontSize: 12.5, color: Colors.grey[500]),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -448,24 +414,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 
   Widget _noResultsState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.mark_email_read_outlined,
-              size: 44,
-              color: Colors.grey[400],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'No unread messages',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-            ),
-          ],
-        ),
+    return const Center(
+      child: AgriEmptyState(
+        icon: Icons.mark_email_read_outlined,
+        title: 'No unread messages',
+        padding: EdgeInsets.all(32),
       ),
     );
   }
@@ -860,42 +813,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
       builder: (context, snapshot) {
         final isFarmer = snapshot.data?.data()?['role'] == 'farmer';
         return Center(
-          child: Padding(
+          child: AgriEmptyState(
+            icon: Icons.mail_outline,
+            title: 'No conversations yet',
+            subtitle: isFarmer
+                ? 'Messages from buyers will appear here.'
+                : 'Messages from farmers will appear here.',
             padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: const BoxDecoration(
-                    color: _accent,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.mail_outline, size: 54, color: _dark),
-                ),
-                const SizedBox(height: 20),
-                const Text(
-                  'No conversations yet',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  isFarmer
-                      ? 'Messages from buyers will appear here.'
-                      : 'Messages from farmers will appear here.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Colors.grey[600],
-                    fontSize: 14,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
           ),
         );
       },

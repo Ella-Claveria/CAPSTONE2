@@ -1,3 +1,4 @@
+import '../services/connectivity_service.dart';
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 
@@ -20,6 +21,11 @@ class NoInternetScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // This screen also appears when the app could not confirm an account
+    // with Firebase. If the internet itself is known to be working, that
+    // is a server problem, not the user being offline — so it says so
+    // instead of telling them to check their Wi-Fi.
+    final serverIssue = ConnectivityService.instance.lastKnownOnline == true;
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -36,12 +42,33 @@ class NoInternetScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  message,
+                  serverIssue ? 'Can\'t connect right now' : 'You\'re offline',
+                  textAlign: TextAlign.center,
+                  style: AppTheme.heading(20),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  serverIssue
+                      ? 'Your internet is working, but AgriTrade+ could not '
+                            'be reached.'
+                      : message,
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     fontSize: 15,
                     height: 1.4,
                     color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  serverIssue
+                      ? 'Please try again in a moment.'
+                      : 'Check your Wi-Fi or mobile data, then try again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: Colors.grey[600],
                   ),
                 ),
                 const SizedBox(height: 28),
@@ -59,7 +86,7 @@ class NoInternetScreen extends StatelessWidget {
                             ),
                           )
                         : const Icon(Icons.refresh_rounded),
-                    label: Text(checking ? 'Checking…' : 'Retry'),
+                    label: Text(checking ? 'Checking…' : 'Try Again'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.dark,
                       foregroundColor: Colors.white,

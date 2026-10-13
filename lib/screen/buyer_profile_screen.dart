@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../widgets/page_header.dart';
 import '../widgets/profile_avatar.dart';
+import '../widgets/profile_menu.dart';
 import 'farmer_edit_profile_screen.dart';
 import 'buyer_my_reviews_screen.dart';
 import 'buyer_saved_products_screen.dart';
@@ -183,58 +184,41 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
                 children: [
-                  _profileLinkTile(
+                  ProfileLinkTile(
                     icon: Icons.rate_review_outlined,
                     label: 'My Reviews',
                     onTap: () => _open(const BuyerMyReviewsScreen()),
                   ),
                   const SizedBox(height: 10),
-                  _profileLinkTile(
+                  ProfileLinkTile(
                     icon: Icons.favorite_border_rounded,
                     label: 'Liked Products',
                     onTap: () => _open(const BuyerSavedProductsScreen()),
                   ),
                   const SizedBox(height: 10),
-                  _profileLinkTile(
+                  ProfileLinkTile(
                     icon: Icons.local_shipping_outlined,
                     label: 'Delivery & Pickup Preferences',
                     onTap: () =>
                         _open(const BuyerFulfillmentPreferencesScreen()),
                   ),
                   const SizedBox(height: 10),
-                  _profileLinkTile(
+                  ProfileLinkTile(
                     icon: Icons.notifications_none_rounded,
                     label: 'Notifications',
                     onTap: () => _open(const NotificationsScreen()),
                   ),
                   const SizedBox(height: 10),
-                  _profileLinkTile(
+                  ProfileLinkTile(
                     icon: Icons.settings_outlined,
                     label: 'Account Settings',
                     onTap: () => _open(const BuyerSettingsScreen()),
                   ),
                   const SizedBox(height: 18),
-                  Divider(height: 1, color: Colors.grey[300]),
-                  const SizedBox(height: 6),
                   // Always the last thing on the page, and kept apart from
                   // the settings above. onLogout asks for confirmation
                   // before signing out (see BuyerMarketplaceScreen._logout).
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                    leading: const Icon(Icons.logout, color: Colors.redAccent),
-                    title: const Text(
-                      'Log Out',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.redAccent,
-                      ),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    onTap: widget.onLogout,
-                  ),
+                  ProfileFooter(onLogout: widget.onLogout),
                 ],
               ),
             ),
@@ -312,31 +296,6 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-
-  Widget _profileLinkTile({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.white,
-      elevation: 2,
-      shadowColor: Colors.black.withValues(alpha: 0.25),
-      borderRadius: BorderRadius.circular(14),
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        leading: Icon(icon, color: _dark),
-        title: Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
-        ),
-        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-        onTap: onTap,
       ),
     );
   }

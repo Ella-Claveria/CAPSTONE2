@@ -189,23 +189,116 @@ class PhLocationsService {
     return list;
   }
 
-  // Google's reverse-geocode (used by the "Use my current location" mode)
-  // returns a province name but no region — PSGC is the single source of
-  // truth for region names here too, so this cross-references the
-  // already-cached province lists instead of hand-maintaining a separate
-  // province->region table that could drift from the dropdown data.
-  Future<String?> regionNameForProvinceName(String provinceName) async {
-    final needle = _normalize(provinceName);
+  List<PhProvince>? _allProvinces;
+
+  Future<List<PhProvince>> _fetchAllProvinces() async {
+    if (_allProvinces != null) return _allProvinces!;
+    final raw = await _getJsonList('/provinces/');
+    _allProvinces = raw
+        .map(
+          (e) => PhProvince(
+            code: e['code'] as String,
+            name: e['name'] as String,
+            regionCode: e['regionCode'] as String,
+          ),
+        )
+        .toList();
+    return _allProvinces!;
+  }
+
+  /// Maps a reverse-geocoded address ("Use My Current Location") onto this
+  /// dataset's own Region -> Province -> City/Municipality entries, so the
+  /// picker can open straight at that city's barangay list. PSGC stays the
+  /// single source of truth for the names: the geocoder's are only used to
+  /// find the matching entry. Returns null when the province/region or the
+  /// city can't be matched — the caller then falls back to the manual list.
+  /// `province` is null in the result for a region with no province level
+  /// (NCR). Throws if the PSGC lists can't be loaded.
+  Future<({PhRegion region, PhProvince? province, PhCityMunicipality city})?>
+  matchDetectedLocation({
+    required String city,
+    String? province,
+    String? region,
+  }) async {
     final regions = await fetchRegions();
-    for (final region in regions) {
-      final provinces = await fetchProvinces(region.code);
-      for (final province in provinces) {
-        if (_normalize(province.name) == needle) return region.name;
+    final cityKey = phPlaceKey(city);
+    if (cityKey.isEmpty) return null;
+
+    PhCityMunicipality? findCity(List<PhCityMunicipality> cities) {
+      final matches = cities
+          .where((c) => phPlaceKey(c.name) == cityKey)
+          .toList();
+      return matches.length == 1 ? matches.first : null;
+    }
+
+    if (province != null) {
+      final provinceKey = phPlaceKey(province);
+      for (final p in await _fetchAllProvinces()) {
+        if (phPlaceKey(p.name) != provinceKey) continue;
+        final parent = regions.where((r) => r.code == p.regionCode).toList();
+        if (parent.isEmpty) return null;
+        final match = findCity(
+          await fetchCitiesMunicipalities(provinceCode: p.code),
+        );
+        if (match == null) return null;
+        return (region: parent.first, province: p, city: match);
+      }
+    }
+
+    // No such province: a region whose cities hang directly off it. The
+    // geocoder reports Metro Manila as the "province" there.
+    for (final name in [province, region]) {
+      if (name == null) continue;
+      final regionKey = _regionKey(name);
+      for (final r in regions) {
+        if (_regionKey(r.name) != regionKey) continue;
+        if ((await fetchProvinces(r.code)).isNotEmpty) return null;
+        final match = findCity(
+          await fetchCitiesMunicipalities(regionCode: r.code),
+        );
+        if (match == null) return null;
+        return (region: r, province: null, city: match);
       }
     }
     return null;
   }
 
-  String _normalize(String s) =>
-      s.trim().toLowerCase().replaceAll(RegExp(r'^city of\s+'), '');
+  /// The entry of [barangays] a reverse-geocoded barangay name refers to,
+  /// or null unless exactly one matches.
+  PhBarangay? matchBarangay(List<PhBarangay> barangays, String name) {
+    final key = phPlaceKey(name);
+    if (key.isEmpty) return null;
+    final matches = barangays.where((b) => phPlaceKey(b.name) == key).toList();
+    return matches.length == 1 ? matches.first : null;
+  }
+
+  static const _regionAliases = {
+    'metro manila': 'ncr',
+    'national capital': 'ncr',
+    'cordillera administrative': 'car',
+    'bangsamoro': 'barmm',
+    'bangsamoro autonomous region in muslim mindanao': 'barmm',
+  };
+
+  String _regionKey(String name) {
+    final key = phPlaceKey(name).replaceAll(RegExp(r' region$'), '');
+    return _regionAliases[key] ?? key;
+  }
+}
+
+/// A place name reduced to what identifies it, for matching a geocoder's
+/// spelling against PSGC's: "City of Tanauan" and "Tanauan City" both give
+/// "tanauan", "Sto. Niño (Pob.)" and "Santo Nino" both give "santo nino".
+String phPlaceKey(String name) {
+  var key = name.toLowerCase().replaceAll('ñ', 'n');
+  key = key.replaceAll(RegExp(r'\(.*?\)'), ' ');
+  key = key
+      .replaceAll(RegExp(r'\bsto\b\.?'), 'santo')
+      .replaceAll(RegExp(r'\bsta\b\.?'), 'santa');
+  key = key.replaceAll(RegExp(r'[^a-z0-9 ]'), ' ');
+  key = key.replaceAll(
+    RegExp(r'\b(city of|municipality of|city|barangay|brgy)\b'),
+    ' ',
+  );
+  return key.replaceAll(RegExp(r'\s+'), ' ').trim();
 }

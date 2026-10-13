@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -15,12 +16,13 @@ import '../services/product_share_service.dart';
 import '../services/public_farm_location.dart';
 import '../services/harvest_info.dart';
 import '../services/market_price_helpers.dart';
-import '../widgets/agri_dialog.dart';
 import '../widgets/agri_refresh_indicator.dart';
+import '../widgets/app_back_button.dart';
 import '../widgets/save_product_button.dart';
 import '../data/commodity_master_list.dart';
 import 'message_order_screen.dart';
 import 'place_order_screen.dart';
+import 'product_reviews_screen.dart';
 import 'buyer_market_view.dart';
 import 'farmer_storefront_screen.dart';
 import '../widgets/profile_avatar.dart';
@@ -65,7 +67,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           .where('productId', isEqualTo: widget.productId)
           .snapshots();
   final ValueNotifier<int> _galleryPage = ValueNotifier(0);
-  bool _showAllReviews = false;
   bool _productUnavailable = false;
   bool _productLoadError = false;
 
@@ -147,76 +148,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       return DateFormat('MMM d, y - h:mm a').format(ts.toDate());
     }
     return null;
-  }
-
-  Future<void> _reportReview(
-    String reviewId,
-    Map<String, dynamic> review,
-    String productName,
-  ) async {
-    final reporter = FirebaseAuth.instance.currentUser;
-    final sellerId = _currentData['farmerId']?.toString() ?? '';
-    final reviewedBuyerId = review['buyerId']?.toString() ?? '';
-    if (reporter == null || sellerId.isEmpty || reviewedBuyerId.isEmpty) return;
-
-    final controller = TextEditingController();
-    final confirmed = await showAgriDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AgriDialog(
-        icon: Icons.flag_outlined,
-        tone: AgriTone.warning,
-        title: const Text('Report this review?'),
-        content: TextField(
-          controller: controller,
-          minLines: 2,
-          maxLines: 4,
-          decoration: const InputDecoration(
-            hintText: 'Tell us what is wrong with this review.',
-          ),
-        ),
-        actions: [
-          AgriDialogButton(
-            label: 'Cancel',
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-          ),
-          AgriDialogButton(
-            label: 'Report',
-            kind: AgriButtonKind.primary,
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-          ),
-        ],
-      ),
-    );
-    final description = controller.text.trim();
-    controller.dispose();
-    if (confirmed != true || description.isEmpty || !mounted) return;
-
-    try {
-      await FirebaseFirestore.instance.collection('reports').add({
-        'issueType': 'Review Report',
-        'description': description,
-        'reporterId': reporter.uid,
-        'reporterName': reporter.displayName ?? 'User',
-        'reportedUserId': reviewedBuyerId,
-        'reportedUserName': (review['buyerName'] ?? 'Buyer').toString(),
-        'targetType': 'review',
-        'farmerId': sellerId,
-        'productId': widget.productId,
-        'productName': productName,
-        'reviewId': reviewId,
-        'status': 'pending',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Review reported for admin review.')),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not report this review.')),
-      );
-    }
   }
 
   Widget _productImage() {
@@ -359,13 +290,24 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           children: [
             Text(
               'Farm area: ${location.area}',
-              style: TextStyle(color: Colors.grey[700], fontSize: 12),
+              style: const TextStyle(
+                color: Colors.black87,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 2),
+            Text(
+              distanceKm == null
+                  ? 'Distance unavailable. Add a saved location to see an estimate.'
+                  : 'Approx. ${distanceKm.toStringAsFixed(1)} km away',
+              style: TextStyle(color: Colors.grey[700], fontSize: 12.5),
+            ),
+            const SizedBox(height: 10),
             SizedBox(
               height: 190,
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(16),
                 child: GoogleMap(
                   initialCameraPosition: CameraPosition(
                     target: center,
@@ -408,10 +350,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              distanceKm == null
-                  ? 'Distance unavailable. Add a saved location to see an estimate.'
-                  : 'About ${distanceKm.toStringAsFixed(1)} km away (approximate)',
-              style: TextStyle(color: Colors.grey[700], fontSize: 12),
+              'The marker shows the general barangay area, not the exact '
+              'farm.',
+              style: TextStyle(color: Colors.grey[600], fontSize: 11.5),
             ),
           ],
         );
@@ -469,9 +410,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               onPageChanged: (page) => _galleryPage.value = page,
               itemBuilder: (context, index) => _networkImage(urls[index]),
             ),
+          // The content panel's rounded top edge, drawn over the foot of
+          // the image so the photo curves into the white panel below.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: -1,
+            height: 27,
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+              ),
+            ),
+          ),
           if (!single)
             Positioned(
-              bottom: 12,
+              bottom: 38,
               left: 0,
               right: 0,
               child: ValueListenableBuilder<int>(
@@ -505,10 +460,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Row(
                   children: [
-                    circleButton(
-                      Icons.arrow_back,
-                      () => Navigator.of(context).maybePop(),
-                    ),
+                    // Back is not in this row: it floats above the whole
+                    // page (see build) so it stays put while this scrolls.
                     const Spacer(),
                     // The heart — buyers only (it draws nothing otherwise).
                     SaveProductButton(productId: widget.productId),
@@ -533,26 +486,30 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     );
   }
 
-  Widget _section({required Widget child}) => Container(
-    width: double.infinity,
-    margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-    padding: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: Colors.grey.shade200),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.04),
-          blurRadius: 10,
-          offset: const Offset(0, 3),
-        ),
-      ],
-    ),
-    child: child,
+  // The thin rule between sections of the content panel.
+  Widget _divider({double top = 18, double bottom = 18}) => Padding(
+    padding: EdgeInsets.only(top: top, bottom: bottom),
+    child: Divider(height: 1, thickness: 1, color: Colors.grey[200]),
   );
 
-  Widget _sectionTitle(String text) => Text(text, style: AppTheme.heading(16));
+  // One line of the product summary: icon, text, optional trailing note.
+  Widget _infoRow(IconData icon, String text, {Widget? trailing}) => Row(
+    children: [
+      Icon(icon, size: 16, color: Colors.grey[600]),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(
+          text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(fontSize: 13.5, color: Colors.grey[800]),
+        ),
+      ),
+      ?trailing,
+    ],
+  );
+
+  Widget _sectionTitle(String text) => Text(text, style: AppTheme.heading(17));
 
   // Compact farmer row — opens that farmer's public profile. Photo and
   // Verified status come from the public profile, never assumed.
@@ -565,9 +522,11 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         final displayName =
             (farmer?['name'] ?? farmer?['fullName'] ?? farmerName).toString();
 
+        // A plain row between two dividers, not a card: the whole row is
+        // the tap target.
         return Material(
-          color: const Color(0xFFF4F7F4),
-          borderRadius: BorderRadius.circular(14),
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             onTap: farmerId == null || farmerId.isEmpty
@@ -580,13 +539,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     ),
                   ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 10),
               child: Row(
                 children: [
                   ProfileAvatar(
                     photoUrl: farmer?['photoUrl']?.toString(),
                     name: displayName,
-                    radius: 21,
+                    radius: 23,
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -656,29 +615,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
             .join(', ');
         if (area.isEmpty) return const SizedBox.shrink();
         return Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Row(
-            children: [
-              Icon(Icons.place_outlined, size: 16, color: Colors.grey[600]),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  area,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, color: Colors.grey[700]),
-                ),
-              ),
-            ],
-          ),
+          padding: const EdgeInsets.only(top: 8),
+          child: _infoRow(Icons.place_outlined, area),
         );
       },
     );
   }
 
-  static const int _reviewsShownAtFirst = 3;
+  static const int _reviewsPreviewed = 6;
 
-  // Reviews for this exact product, newest first.
+  // A short preview of this exact product's reviews, newest first: the
+  // rating summary, "View All", then a row of compact cards to swipe
+  // through. The full text, photos and replies are on ProductReviewsScreen.
   Widget _reviewsSection(String productName, String? farmerId) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _reviews,
@@ -701,278 +649,230 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               const SizedBox(height: 8),
               Text(
                 'Could not load reviews.',
-                style: TextStyle(color: Colors.grey[600], fontSize: 13.5),
+                style: TextStyle(color: Colors.grey[700], fontSize: 13.5),
               ),
             ],
           );
         }
 
-        final docs =
-            (snapshot.data?.docs ?? const [])
-                .where((doc) => doc.data()['moderationStatus'] != 'removed')
-                .toList()
-              ..sort((a, b) {
-                final at = a.data()['createdAt'] as Timestamp?;
-                final bt = b.data()['createdAt'] as Timestamp?;
-                return (bt?.millisecondsSinceEpoch ?? 0).compareTo(
-                  at?.millisecondsSinceEpoch ?? 0,
-                );
-              });
+        final docs = visibleProductReviews(snapshot.data);
 
+        // No rating summary at all — a "0.0" would read as a bad score.
         if (docs.isEmpty) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _sectionTitle('Buyer Reviews'),
-              const SizedBox(height: 14),
-              Center(
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.rate_review_outlined,
-                      size: 34,
-                      color: Colors.grey[350],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'No reviews yet',
-                      style: TextStyle(
-                        color: Colors.grey[700],
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+              const SizedBox(height: 10),
+              const Text(
+                'No reviews yet',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black87,
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 3),
+              Text(
+                'Be the first to review this product after completing an '
+                'order.',
+                style: TextStyle(
+                  color: Colors.grey[700],
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
             ],
           );
         }
 
-        final average =
-            docs
-                .map((d) => (d.data()['rating'] as num?)?.toDouble() ?? 0)
-                .reduce((a, b) => a + b) /
-            docs.length;
-        final shown = _showAllReviews
-            ? docs
-            : docs.take(_reviewsShownAtFirst).toList();
+        final average = averageReviewRating(docs);
+        final shown = docs.take(_reviewsPreviewed).toList();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
-                  child: _sectionTitle('Buyer Reviews (${docs.length})'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _sectionTitle('Buyer Reviews'),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.star_rounded,
+                            size: 20,
+                            color: Colors.amber,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            average.toStringAsFixed(1),
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            docs.length == 1
+                                ? '(1 review)'
+                                : '(${docs.length} reviews)',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[700],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-                const Icon(Icons.star_rounded, size: 18, color: Colors.amber),
-                const SizedBox(width: 3),
-                Text(
-                  average.toStringAsFixed(1),
-                  style: const TextStyle(
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w700,
+                TextButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ProductReviewsScreen(
+                        productId: widget.productId,
+                        productName: productName,
+                        farmerId: farmerId,
+                      ),
+                    ),
+                  ),
+                  style: TextButton.styleFrom(
+                    foregroundColor: _dark,
+                    padding: const EdgeInsets.only(left: 8),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'View All (${docs.length})',
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right, size: 18),
+                    ],
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            for (var i = 0; i < shown.length; i++) ...[
-              if (i > 0) Divider(height: 22, color: Colors.grey[200]),
-              _reviewCard(shown[i], productName, farmerId),
-            ],
-            if (docs.length > _reviewsShownAtFirst)
-              Align(
-                alignment: Alignment.center,
-                child: TextButton(
-                  onPressed: () =>
-                      setState(() => _showAllReviews = !_showAllReviews),
-                  style: TextButton.styleFrom(foregroundColor: _dark),
-                  child: Text(
-                    _showAllReviews ? 'Show Less' : 'View All (${docs.length})',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+            // Bleeds to both screen edges so cards slide under the page
+            // padding instead of being cut off at it.
+            SizedBox(
+              height: 148,
+              child: OverflowBox(
+                maxWidth: MediaQuery.sizeOf(context).width,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: shown.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 10),
+                  itemBuilder: (context, index) =>
+                      _reviewPreviewCard(shown[index].data()),
                 ),
               ),
+            ),
           ],
         );
       },
     );
   }
 
-  Widget _reviewCard(
-    QueryDocumentSnapshot<Map<String, dynamic>> doc,
-    String productName,
-    String? farmerId,
-  ) {
-    final review = doc.data();
+  // Compact on purpose: name, stars, date and a few lines of the text. No
+  // photos here — those are on the full reviews screen.
+  Widget _reviewPreviewCard(Map<String, dynamic> review) {
     final reviewer = review['buyerName']?.toString() ?? 'Buyer';
-    final reviewerId = review['buyerId']?.toString() ?? '';
-    final reviewText = review['comment']?.toString() ?? '';
-    final reviewRating = (review['rating'] as num?)?.toDouble() ?? 0;
-    final reviewImage = review['imageUrl']?.toString() ?? '';
+    final text = review['comment']?.toString() ?? '';
+    final rating = (review['rating'] as num?)?.toDouble() ?? 0;
     final created = (review['createdAt'] as Timestamp?)?.toDate();
-    final viewerId = FirebaseAuth.instance.currentUser?.uid;
-    final canReport = viewerId != reviewerId && viewerId != farmerId;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Initials only — a review shows the buyer's name, not their
-            // profile.
-            ProfileAvatar(photoUrl: null, name: reviewer, radius: 17),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    reviewer,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    children: [
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: List.generate(
-                          5,
-                          (index) => Icon(
-                            reviewRating >= index + 1
-                                ? Icons.star_rounded
-                                : reviewRating >= index + 0.5
-                                ? Icons.star_half_rounded
-                                : Icons.star_border_rounded,
-                            size: 14,
-                            color: reviewRating >= index + 0.5
-                                ? Colors.amber
-                                : Colors.grey[400],
-                          ),
-                        ),
-                      ),
-                      if (created != null)
-                        Text(
-                          DateFormat('MMM d, y').format(created),
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            color: Colors.grey[600],
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            if (canReport)
-              IconButton(
-                tooltip: 'Report review',
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _reportReview(doc.id, review, productName),
-                icon: Icon(
-                  Icons.flag_outlined,
-                  size: 18,
-                  color: Colors.grey[600],
-                ),
-              ),
-          ],
-        ),
-        // Every review is tied to the buyer's own completed order (see
-        // firestore.rules).
-        if ((review['orderId'] ?? '').toString().isNotEmpty) ...[
-          const SizedBox(height: 6),
-          const Row(
+    return Container(
+      width: 250,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F8F5),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Icon(Icons.verified_outlined, size: 13, color: _dark),
-              SizedBox(width: 4),
-              Text(
-                'Verified Purchase',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: _dark,
+              // Initials only — a review shows the buyer's name, not their
+              // profile.
+              ProfileAvatar(photoUrl: null, name: reviewer, radius: 16),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      reviewer,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        ReviewStars(rating: rating, size: 13),
+                        if (created != null) ...[
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              DateFormat('MMM d, y').format(created),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-        ],
-        if (reviewText.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Text(
-            reviewText,
-            style: const TextStyle(
-              color: Colors.black87,
-              fontSize: 13.5,
-              height: 1.45,
-            ),
-          ),
-        ],
-        if (reviewImage.isNotEmpty) ...[
           const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: Image.network(
-              reviewImage,
-              height: 160,
-              width: double.infinity,
-              fit: BoxFit.cover,
-              errorBuilder: (_, _, _) => Container(
-                height: 100,
-                color: _accent,
-                alignment: Alignment.center,
-                child: const Icon(Icons.broken_image, color: _dark),
+          Expanded(
+            child: Text(
+              text.isEmpty ? 'No written review.' : text,
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.4,
+                color: text.isEmpty ? Colors.grey[600] : Colors.black87,
               ),
             ),
           ),
         ],
-      ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final data = _currentData;
-    final name = data['name']?.toString() ?? 'Unnamed';
-    final category = data['category']?.toString() ?? '';
-    final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
-    final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
-    final wholesaleMinimum = (data['wholesaleMinimumQuantity'] as num?) ?? 1;
-    final wholesaleEnabled =
-        data['wholesaleEnabled'] == true ||
-        (data['wholesaleEnabled'] == null &&
-            wholesalePrice != null &&
-            wholesalePrice > 0);
-    final available = (data['quantity'] as num?) ?? 0;
-    final unit = (data['unit'] as String?) ?? unitForProductName(name);
-    final description = data['description']?.toString() ?? '';
-    final farmerName = data['farmerName']?.toString() ?? 'Farmer';
-    final farmerId = data['farmerId']?.toString();
-    final delivery = data['deliveryAvailable'] == true;
-    final pickup = data['pickupOnly'] == true;
-    final rating = (data['rating'] as num?)?.toDouble();
-    final reviewCount = (data['reviewCount'] as num?)?.toInt() ?? 0;
-    final postedOn = _formatDate(data['createdAt']);
-    final updatedOn = _formatDate(data['updatedAt']);
-    final harvested = harvestDateOf(data);
-    final canContact = farmerId != null && farmerId.isNotEmpty;
 
     if (_productLoadError || _productUnavailable) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Product Details')),
+        appBar: const AgriAppBar(title: 'Product Details'),
         body: Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
@@ -1000,112 +900,164 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F9F6),
-      body: AgriRefreshIndicator(
-        color: _dark,
-        onRefresh: _refreshData,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _gallery(data),
-              const SizedBox(height: 14),
+      backgroundColor: Colors.white,
+      body: Stack(
+        children: [
+          Positioned.fill(child: _content(context, data)),
+          // Stays at the upper-left however far the page is scrolled.
+          const Positioned(
+            top: 0,
+            left: 12,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: EdgeInsets.only(top: 8),
+                // Over the product photo, so the circle stays on.
+                child: AppBackButton(overImage: true),
+              ),
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: _bottomBar(data),
+    );
+  }
 
-              // ---- Name, price, stock, location, wholesale ----
-              _section(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (category.isNotEmpty) ...[
-                      Text(
-                        category.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.6,
-                          color: Colors.grey[600],
+  Widget _content(BuildContext context, Map<String, dynamic> data) {
+    final name = data['name']?.toString() ?? 'Unnamed';
+    final category = data['category']?.toString() ?? '';
+    final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
+    final wholesalePrice = (data['wholesalePrice'] as num?)?.toDouble();
+    final wholesaleMinimum = (data['wholesaleMinimumQuantity'] as num?) ?? 1;
+    final wholesaleEnabled =
+        data['wholesaleEnabled'] == true ||
+        (data['wholesaleEnabled'] == null &&
+            wholesalePrice != null &&
+            wholesalePrice > 0);
+    final hasWholesale =
+        wholesaleEnabled && wholesalePrice != null && wholesalePrice > 0;
+    final available = (data['quantity'] as num?) ?? 0;
+    final unit = (data['unit'] as String?) ?? unitForProductName(name);
+    final description = data['description']?.toString() ?? '';
+    final farmerName = data['farmerName']?.toString() ?? 'Farmer';
+    final farmerId = data['farmerId']?.toString();
+    final delivery = data['deliveryAvailable'] == true;
+    final pickup = data['pickupOnly'] == true;
+    final rating = (data['rating'] as num?)?.toDouble();
+    final reviewCount = (data['reviewCount'] as num?)?.toInt() ?? 0;
+    final postedOn = _formatDate(data['createdAt']);
+    final updatedOn = _formatDate(data['updatedAt']);
+    final harvested = harvestDateOf(data);
+
+    return AgriRefreshIndicator(
+      color: _dark,
+      onRefresh: _refreshData,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.only(bottom: 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _gallery(data),
+
+            // One continuous white panel under the image: sections are
+            // set apart by spacing and thin dividers, not separate cards.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ---- Name, price, stock, location, selling terms ----
+                  if (category.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F7EC),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        category,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: _dark,
                         ),
                       ),
-                      const SizedBox(height: 4),
-                    ],
-                    Text(name, style: AppTheme.heading(22)),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.end,
-                      spacing: 8,
-                      runSpacing: 2,
-                      children: [
-                        Text(
-                          formatPeso(price),
-                          style: AppTheme.heading(28).copyWith(color: _dark),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  Text(
+                    name,
+                    style: AppTheme.heading(26).copyWith(height: 1.15),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.end,
+                    spacing: 6,
+                    runSpacing: 2,
+                    children: [
+                      Text(
+                        formatPeso(price),
+                        style: AppTheme.heading(
+                          32,
+                        ).copyWith(color: _dark, height: 1.1),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(
+                          '/ $unit',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey[700],
+                          ),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Text(
-                            'per $unit',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey[600],
-                            ),
+                      ),
+                    ],
+                  ),
+                  // Only once the product actually has reviews.
+                  if (rating != null && reviewCount > 0) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.star_rounded,
+                          size: 17,
+                          color: Colors.amber,
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          rating.toStringAsFixed(1),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          reviewCount == 1
+                              ? '(1 review)'
+                              : '($reviewCount reviews)',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
                           ),
                         ),
                       ],
                     ),
-                    // Only once the product actually has reviews.
-                    if (rating != null && reviewCount > 0) ...[
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.star_rounded,
-                            size: 17,
-                            color: Colors.amber,
-                          ),
-                          const SizedBox(width: 3),
-                          Text(
-                            rating.toStringAsFixed(1),
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                          Text(
-                            reviewCount == 1
-                                ? '(1 review)'
-                                : '($reviewCount reviews)',
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 12,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.inventory_2_outlined,
-                          size: 16,
-                          color: Colors.grey[600],
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            available > 0
-                                ? '${formatStock(available, unit)} available'
-                                : 'Out of stock',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Colors.grey[700],
-                            ),
-                          ),
-                        ),
-                        if (available <= 0)
-                          Container(
+                  ],
+                  const SizedBox(height: 14),
+                  _infoRow(
+                    Icons.inventory_2_outlined,
+                    available > 0
+                        ? '${formatStock(available, unit)} available'
+                        : 'Out of stock',
+                    trailing: available > 0
+                        ? null
+                        : Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 10,
                               vertical: 4,
@@ -1124,284 +1076,289 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                               ),
                             ),
                           ),
-                      ],
+                  ),
+                  _farmerAreaLine(),
+                  const SizedBox(height: 8),
+                  _infoRow(
+                    Icons.sell_outlined,
+                    hasWholesale ? 'Retail and wholesale' : 'Retail only',
+                  ),
+                  // Fulfillment, as one plain line with the rest of the
+                  // summary rather than standalone chips.
+                  if (delivery || pickup) ...[
+                    const SizedBox(height: 8),
+                    _infoRow(
+                      Icons.local_shipping_outlined,
+                      delivery && pickup
+                          ? 'Delivery and pick-up'
+                          : delivery
+                          ? 'Delivery'
+                          : 'Pick-up',
                     ),
-                    _farmerAreaLine(),
-                    if (delivery || pickup) ...[
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          if (delivery) tag(Icons.local_shipping, 'Delivery'),
-                          if (pickup) tag(Icons.storefront, 'Pick-up'),
-                        ],
-                      ),
-                    ],
-                    if (wholesaleEnabled &&
-                        wholesalePrice != null &&
-                        wholesalePrice > 0) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Colors.green[50],
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.green[200]!),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Wholesale available',
+                  ],
+                  if (harvested != null) ...[
+                    const SizedBox(height: 8),
+                    _infoRow(
+                      Icons.eco_outlined,
+                      harvestLabel(harvested),
+                      trailing: isRecentlyHarvested(harvested)
+                          ? const Text(
+                              'Recently Harvested',
                               style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
                                 color: _dark,
                               ),
+                            )
+                          : null,
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 24, top: 2),
+                      child: Text(
+                        [
+                          if (data['updatedAt'] is Timestamp)
+                            'Last updated ${DateFormat('MMM d, y').format((data['updatedAt'] as Timestamp).toDate())}.',
+                          'Harvest information is provided and updated by the farmer.',
+                        ].join(' '),
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1.4,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                    ),
+                  ],
+
+                  // ---- Wholesale: one quiet light-green note ----
+                  if (hasWholesale) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F7EC),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Wholesale available',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: _dark,
                             ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '${formatPriceWithUnit(wholesalePrice, unit)} for orders of '
+                            '${formatStock(wholesaleMinimum, unit)} or more',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: Colors.grey[800],
+                            ),
+                          ),
+                          if (available < wholesaleMinimum) ...[
                             const SizedBox(height: 4),
                             Text(
-                              '${formatPriceWithUnit(wholesalePrice, unit)} for orders of '
-                              '${formatStock(wholesaleMinimum, unit)} or more',
+                              'Wholesale is temporarily unavailable because current stock is below the minimum.',
                               style: TextStyle(
-                                fontSize: 12.5,
-                                color: Colors.grey[700],
-                              ),
-                            ),
-                            if (available < wholesaleMinimum) ...[
-                              const SizedBox(height: 4),
-                              Text(
-                                'Wholesale is temporarily unavailable because current stock is below the minimum.',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  color: Colors.orange[800],
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                    if (harvested != null) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF4F8EF),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Harvest Information',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            const SizedBox(height: 3),
-                            Wrap(
-                              spacing: 8,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              children: [
-                                Text(
-                                  harvestLabel(harvested),
-                                  style: const TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.black87,
-                                  ),
-                                ),
-                                if (isRecentlyHarvested(harvested))
-                                  const Text(
-                                    'Recently Harvested',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: _dark,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            if (data['updatedAt'] is Timestamp)
-                              Text(
-                                'Last updated ${DateFormat('MMM d, y').format((data['updatedAt'] as Timestamp).toDate())}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey[600],
-                                ),
-                              ),
-                            const SizedBox(height: 3),
-                            Text(
-                              'Harvest information is provided and updated by the farmer.',
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                color: Colors.grey[500],
+                                fontSize: 11.5,
+                                color: Colors.orange[800],
                               ),
                             ),
                           ],
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    _farmerRow(farmerId, farmerName),
-                  ],
-                ),
-              ),
-
-              // ---- Description ----
-              _section(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _sectionTitle('Description'),
-                    const SizedBox(height: 8),
-                    Text(
-                      description.isEmpty
-                          ? 'No description provided.'
-                          : description,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        height: 1.5,
-                        color: Colors.black87,
+                        ],
                       ),
                     ),
-                    if (postedOn != null || updatedOn != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        [
-                          if (postedOn != null) 'Posted on $postedOn',
-                          if (updatedOn != null) 'Updated on $updatedOn',
-                        ].join('\n'),
-                        style: TextStyle(
-                          color: Colors.grey[600],
-                          fontSize: 11.5,
-                          height: 1.5,
-                        ),
-                      ),
-                    ],
                   ],
-                ),
-              ),
 
-              // ---- Reviews for this product ----
-              _section(child: _reviewsSection(name, farmerId)),
+                  // ---- Farmer ----
+                  _divider(top: 18, bottom: 4),
+                  _farmerRow(farmerId, farmerName),
+                  _divider(top: 4),
 
-              // ---- Approximate farm area (never the exact pin) ----
-              _section(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _sectionTitle('Farm Location'),
-                    const SizedBox(height: 8),
-                    _approximateFarmerMap(farmerId),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      // ---- Order Now (primary) + Message + Map ----
-      bottomNavigationBar: SafeArea(
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 8,
-                offset: const Offset(0, -2),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              _outlinedAction(
-                icon: Icons.message_outlined,
-                tooltip: 'Message',
-                onTap: available <= 0 || !canContact
-                    ? null
-                    : () => _messageFarmer(farmerId, farmerName, name),
-              ),
-              const SizedBox(width: 10),
-              _outlinedAction(
-                icon: Icons.map_outlined,
-                tooltip: 'Map',
-                onTap: !canContact
-                    ? null
-                    : () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => BuyerMapView(
-                            farmerId: farmerId,
-                            farmerName: farmerName,
-                          ),
-                        ),
-                      ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: available <= 0 || !canContact
-                      ? null
-                      : () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => PlaceOrderScreen(
-                              sellerId: farmerId,
-                              sellerName: farmerName,
-                              productId: widget.productId,
-                              productName: name,
-                              productPrice: formatPriceWithUnit(price, unit),
-                              productImage: _imageUrl ?? '',
-                              deliveryAvailable: delivery,
-                              pickupAvailable: pickup,
-                              unit: unit,
-                            ),
-                          ),
-                        ),
-                  icon: Icon(
-                    available > 0 ? Icons.shopping_bag_outlined : Icons.block,
-                    size: 18,
-                  ),
-                  label: Text(
-                    available > 0 ? 'Order Now' : 'Out of Stock',
+                  // ---- Description ----
+                  _sectionTitle('Description'),
+                  const SizedBox(height: 8),
+                  Text(
+                    description.isEmpty
+                        ? 'No description provided.'
+                        : description,
                     style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                      height: 1.55,
+                      color: Colors.black87,
                     ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _dark,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: Colors.grey[300],
-                    disabledForegroundColor: Colors.grey[600],
-                    elevation: 0,
-                    minimumSize: const Size.fromHeight(50),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                  if (postedOn != null || updatedOn != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      [
+                        if (postedOn != null) 'Posted on $postedOn',
+                        if (updatedOn != null) 'Updated on $updatedOn',
+                      ].join('\n'),
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 11.5,
+                        height: 1.5,
+                      ),
                     ),
+                  ],
+
+                  // ---- Reviews for this product ----
+                  _divider(),
+                  _reviewsSection(name, farmerId),
+
+                  // ---- Approximate farm area (never the exact pin) ----
+                  _divider(),
+                  Row(
+                    children: [
+                      Expanded(child: _sectionTitle('Farm Location')),
+                      // The approximate-area map, full screen.
+                      if (farmerId != null && farmerId.isNotEmpty)
+                        TextButton(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => BuyerMapView(
+                                farmerId: farmerId,
+                                farmerName: farmerName,
+                              ),
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            foregroundColor: _dark,
+                            padding: const EdgeInsets.only(left: 8),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Open Map',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Icon(Icons.chevron_right, size: 18),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  _approximateFarmerMap(farmerId),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _outlinedAction({
+  // ---- Message to Order (primary) | Order Now ----
+  // No Map here: the Farm Location section above has Open Map.
+  // Sticky: it is the Scaffold's bottom bar, so it never scrolls away.
+  Widget _bottomBar(Map<String, dynamic> data) {
+    final name = data['name']?.toString() ?? 'Unnamed';
+    final price = (data['retailPrice'] as num?) ?? (data['price'] as num?) ?? 0;
+    final available = (data['quantity'] as num?) ?? 0;
+    final unit = (data['unit'] as String?) ?? unitForProductName(name);
+    final farmerName = data['farmerName']?.toString() ?? 'Farmer';
+    final farmerId = data['farmerId']?.toString();
+    final delivery = data['deliveryAvailable'] == true;
+    final pickup = data['pickupOnly'] == true;
+    final canContact = farmerId != null && farmerId.isNotEmpty;
+    final canOrder = available > 0 && canContact;
+
+    return SafeArea(
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 8,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: canOrder
+                    ? () => _messageFarmer(farmerId, farmerName, name)
+                    : null,
+                icon: Icon(
+                  available > 0 ? Icons.chat_bubble_outline : Icons.block,
+                  size: 18,
+                ),
+                label: Text(
+                  available > 0 ? 'Message to Order' : 'Out of Stock',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _dark,
+                  foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.grey[300],
+                  disabledForegroundColor: Colors.grey[600],
+                  elevation: 0,
+                  minimumSize: const Size.fromHeight(_actionHeight),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_actionHeight / 2),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            _iconAction(
+              icon: Icons.shopping_bag_outlined,
+              tooltip: 'Order Now',
+              onTap: !canOrder
+                  ? null
+                  : () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => PlaceOrderScreen(
+                          sellerId: farmerId,
+                          sellerName: farmerName,
+                          productId: widget.productId,
+                          productName: name,
+                          productPrice: formatPriceWithUnit(price, unit),
+                          productImage: _imageUrl ?? '',
+                          deliveryAvailable: delivery,
+                          pickupAvailable: pickup,
+                          unit: unit,
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // One height for every action on this screen; the buttons are pills and
+  // circles of it.
+  static const double _actionHeight = 50;
+
+  // A small icon-only action: light green fill, thin green outline.
+  Widget _iconAction({
     required IconData icon,
     required String tooltip,
     required VoidCallback? onTap,
@@ -1413,12 +1370,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         onPressed: onTap,
         style: OutlinedButton.styleFrom(
           foregroundColor: _dark,
-          side: BorderSide(color: enabled ? _dark : Colors.grey.shade300),
-          minimumSize: const Size(50, 50),
-          padding: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+          backgroundColor: enabled
+              ? const Color(0xFFF1F7EC)
+              : Colors.grey.shade100,
+          side: BorderSide(
+            color: enabled
+                ? _dark.withValues(alpha: 0.35)
+                : Colors.grey.shade300,
           ),
+          minimumSize: const Size(_actionHeight, _actionHeight),
+          padding: EdgeInsets.zero,
+          shape: const CircleBorder(),
         ),
         child: Icon(icon, size: 22),
       ),
@@ -1498,31 +1460,6 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               (widget.data['unit'] as String?) ??
               unitForProductName(productName),
         ),
-      ),
-    );
-  }
-
-  Widget tag(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: _dark,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: Colors.white),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -22,12 +23,32 @@ class PushNotificationService {
       FlutterLocalNotificationsPlugin();
   static bool _messageHandlingReady = false;
 
-  static const AndroidNotificationChannel _transactionsChannel = AndroidNotificationChannel(
-    'agritrade_transactions',
-    'AgriTrade+ Transactions',
-    description: 'Order, verification, and message updates',
-    importance: Importance.high,
-  );
+  static const AndroidNotificationChannel _transactionsChannel =
+      AndroidNotificationChannel(
+        'agritrade_transactions',
+        'AgriTrade+ Transactions',
+        description: 'Order, verification, and message updates',
+        importance: Importance.high,
+      );
+
+  // Account security alerts (a sign-in on a new device) get their own
+  // channel, apart from orders and messages. The id must match
+  // CHANNELS.security in functions/push_payload.js.
+  static const AndroidNotificationChannel _securityChannel =
+      AndroidNotificationChannel(
+        'agritrade_security',
+        'AgriTrade+ Security Alerts',
+        description: 'Logins to your account from a new device',
+        importance: Importance.high,
+      );
+
+  /// The notification type of a new-device sign-in alert (NEW_DEVICE_TYPE
+  /// in functions/push_payload.js).
+  static const String newDeviceType = 'security_new_device';
+
+  // One listener for the app's whole run, however many times setupFCM is
+  // called (it is, on every route into Home and from Notifications).
+  static StreamSubscription<String>? _tokenRefreshSub;
 
   // Set by getInitialMessage() at cold start, before the app has finished
   // routing to Home — consumePendingNavigation() replays it once Home has
@@ -49,7 +70,16 @@ class PushNotificationService {
         if (token != null) {
           await _saveTokenToFirestore(token);
         }
-        _fcm.onTokenRefresh.listen(_saveTokenToFirestore);
+        _tokenRefreshSub ??= _fcm.onTokenRefresh.listen(
+          _saveTokenToFirestore,
+          onError: (_) {},
+        );
+      } else {
+        // Why no push will reach this phone, said in the console.
+        debugPrint(
+          '[FCM] token NOT saved — notification permission is '
+          '${settings.authorizationStatus.name}',
+        );
       }
       // Denied/notDetermined: fall through without blocking anything — the
       // in-app Notifications screen still works off Firestore either way.
@@ -70,6 +100,7 @@ class PushNotificationService {
       'fcmTokens': FieldValue.arrayUnion([token]),
       'lastTokenUpdate': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    debugPrint('[FCM] token saved for account $userId');
   }
 
   /// Call on logout, before FirebaseAuth.signOut() — removes this device's
@@ -89,6 +120,7 @@ class PushNotificationService {
       await _db.collection('users').doc(userId).set({
         'fcmTokens': FieldValue.arrayRemove([token]),
       }, SetOptions(merge: true));
+      debugPrint('[FCM] token removed from account $userId (sign-out)');
     } catch (_) {
       // Non-fatal — must never block sign-out.
     }
@@ -148,8 +180,15 @@ class PushNotificationService {
       },
     );
     await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(_transactionsChannel);
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(_securityChannel);
   }
 
   void _handleForegroundMessage(RemoteMessage message) {
@@ -161,7 +200,11 @@ class PushNotificationService {
     // means several notifications arriving in a row each get their own
     // tray entry instead of silently overwriting one another — while a
     // genuine retry of the exact same message never posts a second one.
-    final id = message.messageId?.hashCode ?? DateTime.now().millisecondsSinceEpoch;
+    final id =
+        message.messageId?.hashCode ?? DateTime.now().millisecondsSinceEpoch;
+    final channel = message.data['type'] == newDeviceType
+        ? _securityChannel
+        : _transactionsChannel;
 
     _localNotifications.show(
       id: id,
@@ -169,9 +212,9 @@ class PushNotificationService {
       body: notification.body,
       notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          _transactionsChannel.id,
-          _transactionsChannel.name,
-          channelDescription: _transactionsChannel.description,
+          channel.id,
+          channel.name,
+          channelDescription: channel.description,
           importance: Importance.high,
           priority: Priority.high,
         ),

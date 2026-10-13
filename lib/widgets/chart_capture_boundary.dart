@@ -33,6 +33,25 @@ class ChartCaptureBoundary extends StatelessWidget {
     return byteData?.buffer.asUint8List();
   }
 
+  /// The chart's pixels as they are (RGBA), for a PDF. Skipping the PNG
+  /// step matters: encoding a chart to PNG here and decoding it again
+  /// inside the PDF builder was most of the time an export took.
+  static Future<({Uint8List rgba, int width, int height})?> captureRawFrom(
+    GlobalKey key, {
+    double pixelRatio = 1.25,
+  }) async {
+    final boundary = key.currentContext?.findRenderObject();
+    if (boundary is! RenderRepaintBoundary) return null;
+    final image = await boundary.toImage(pixelRatio: pixelRatio);
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (byteData == null) return null;
+    return (
+      rgba: byteData.buffer.asUint8List(),
+      width: image.width,
+      height: image.height,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(key: captureKey, child: child);

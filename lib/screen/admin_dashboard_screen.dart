@@ -1,10 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart' hide Border, BorderStyle;
-import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, debugPrint, ValueListenable;
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart' show HitTestResult;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey, KeyDownEvent;
 import 'package:google_fonts/google_fonts.dart';
@@ -12,27 +14,46 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../data/commodity_master_list.dart';
+import '../theme/app_theme.dart';
 import 'verification_queue_view.dart';
 import 'farmer_list_view.dart';
 import 'moderation_queue_view.dart';
-import '../widgets/agritrade_text.dart';
 import '../data/laurel_barangays.dart';
 import '../services/connectivity_service.dart';
 import '../services/market_price_helpers.dart';
-import '../services/farmer_revenue_service.dart';
-import '../services/market_trend_service.dart';
-import '../widgets/change_password_dialog.dart';
+import '../widgets/admin_sidebar.dart';
+import '../widgets/agri_dialog.dart' show agriBarrierColor;
 import '../services/pdf_report_service.dart';
+import '../services/admin_perf.dart';
+import '../services/admin_session_service.dart';
 import '../services/audit_log_service.dart';
 import '../services/dashboard_analytics_service.dart';
 import '../services/dashboard_data_service.dart';
+import '../services/dashboard_overview_service.dart';
 import '../services/geocoding_service.dart';
+import '../services/trackpad_pan_io.dart'
+    if (dart.library.js_interop) '../services/trackpad_pan_web.dart';
 import '../widgets/chart_capture_boundary.dart';
-import 'admin_demand_forecast_view.dart';
+import 'admin_filter_controls.dart';
+import 'admin_suspend_accounts_dialog.dart';
+import 'admin_global_search.dart';
+import 'admin_market_trends_card.dart';
+import 'admin_notifications.dart';
+import 'admin_account_views.dart';
 import 'admin_analytics_widgets.dart';
+import 'admin_demand_widgets.dart';
+import 'admin_listings_view.dart';
+import 'admin_overview_widgets.dart';
+import 'admin_transactions_view.dart';
+import 'admin_user_accounts_view.dart';
+import 'admin_sub_nav.dart';
 import 'audit_log_view.dart';
 import 'export_options_dialog.dart';
+import 'login_screen.dart';
+import 'admin_session_gate.dart';
+import '../services/auth_routing_service.dart';
 
 // ============================================================
 // THEME — a small self-contained palette system (dark + light)
@@ -132,6 +153,10 @@ class AdminRadii {
   AdminRadii._();
   static const double card = 12;
   static const double control = 8;
+
+  /// Buttons, toggles and chips are pill-shaped everywhere in the portal
+  /// except the sidebar, whose items are tabs.
+  static const double pill = 999;
 }
 
 /// Provides the current [AdminPalette] + a theme-toggle callback to the
@@ -178,26 +203,31 @@ const List<_NavItem> _navItems = [
     'Analytics Dashboard',
   ),
   _NavItem(Icons.map_outlined, Icons.map_rounded, 'Demand Heatmap'),
-  _NavItem(Icons.insights_outlined, Icons.insights_rounded, 'Demand Forecast'),
   _NavItem(
     Icons.verified_user_outlined,
     Icons.verified_user_rounded,
     'Verification Queue',
   ),
   _NavItem(Icons.groups_outlined, Icons.groups_rounded, 'Farmer List'),
-  _NavItem(Icons.gavel_outlined, Icons.gavel_rounded, 'Moderation Queue'),
   _NavItem(
     Icons.price_change_outlined,
     Icons.price_change_rounded,
     'Price Management',
   ),
+  _NavItem(
+    Icons.receipt_long_outlined,
+    Icons.receipt_long_rounded,
+    'Transactions',
+  ),
+  _NavItem(
+    Icons.inventory_2_outlined,
+    Icons.inventory_2_rounded,
+    'Product Listings',
+  ),
+  _NavItem(Icons.gavel_outlined, Icons.gavel_rounded, 'Moderation Queue'),
+  _NavItem(Icons.report_outlined, Icons.report_rounded, 'Violations'),
   _NavItem(Icons.fact_check_outlined, Icons.fact_check_rounded, 'Audit Log'),
 ];
-
-// Index (into _navItems/_pages) of the first item in the "System" group —
-// rendered with a small section label above it when the sidebar is
-// expanded. Everything before this index is ungrouped.
-const int _systemGroupStart = 7;
 
 // ============================================================
 // ROOT SCREEN
@@ -210,8 +240,6 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  int _selectedIndex = 0;
-  bool _railExpanded = true;
   bool _isDark =
       false; // Match the AgriTrade+ light admin reference by default.
 
@@ -219,38 +247,197 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   // restarts, and/or seed it from the platform brightness on first launch.
   void _toggleTheme() => setState(() => _isDark = !_isDark);
 
-  void _goTo(int index) => setState(() => _selectedIndex = index);
-  void _toggleRail() => setState(() => _railExpanded = !_railExpanded);
+  // ---- Access is re-checked for as long as the dashboard is open ----
+  // The check at the door (AdminSessionGate / login) only covers the
+  // moment of entry. These two listeners cover everything after it: the
+  // session ending somewhere else (Logout in another tab, a revoked or
+  // expired session), and the account losing its Admin role or being
+  // suspended. Either one closes the dashboard and returns to login.
+  // Firestore rules already refuse the data in those cases; this makes
+  // the screen follow.
+  StreamSubscription<User?>? _authSub;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _accountSub;
+  bool _leaving = false;
 
-  Future<void> _logout() async {
-    try {
-      // Must log while still signed in — the Cloud Function needs an
-      // authenticated caller to attribute this entry to the right admin.
-      await AuditLogService.log(
-        AuditAction.logout,
-        'Logged out of the Admin Portal.',
-      );
-      await FirebaseAuth.instance.signOut();
-      if (mounted) {
-        Navigator.of(context).pop();
+  // One active Admin session per account (see AdminSessionService): the
+  // moment this browser's session stops being the active one — the
+  // account signed in on another device — the dashboard closes, without
+  // waiting for a refresh. The timer says the session is still in use.
+  StreamSubscription<void>? _sessionSub;
+  Timer? _sessionHeartbeat;
+
+  @override
+  void initState() {
+    super.initState();
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user == null) {
+        _leave('Your session has ended. Please log in again.');
+      } else if (user.uid != uid) {
+        // Another account signed in from another tab of this browser: it
+        // has to pass the door check itself.
+        _leaveToGate();
       }
+    });
+    if (uid == null) return;
+    _sessionSub = AdminSessionService.watchEnded(
+      uid,
+    ).listen((_) => _leaveSessionEnded(uid), onError: (_) {});
+    AdminSessionService.touch(uid);
+    _sessionHeartbeat = Timer.periodic(
+      AdminSessionService.heartbeat,
+      (_) => AdminSessionService.touch(uid),
+    );
+    _accountSub = FirebaseFirestore.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .listen((snap) async {
+          // Only the server's word counts — a cached copy may be stale.
+          if (snap.metadata.isFromCache) return;
+          final lost = AuthRoutingService.adminAccessLostReason(
+            snap.exists ? snap.data() : null,
+          );
+          if (lost == null || _leaving) return;
+          _leaving = true;
+          debugPrint(
+            '[Auth] signOut() called — reason: admin access lost '
+            '($lost, uid: $uid)',
+          );
+          try {
+            await FirebaseAuth.instance.signOut();
+          } catch (_) {}
+          _leaving = false;
+          _leave('This account no longer has administrator access.');
+        }, onError: (_) {});
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    _accountSub?.cancel();
+    _sessionSub?.cancel();
+    _sessionHeartbeat?.cancel();
+    super.dispose();
+  }
+
+  // The account signed in on another device: this one is signed out and
+  // returned to login, where a popup says why.
+  Future<void> _leaveSessionEnded(String uid) async {
+    if (_leaving) return;
+    _leaving = true;
+    _authSub?.cancel();
+    _authSub = null;
+    _accountSub?.cancel();
+    _accountSub = null;
+    _sessionSub?.cancel();
+    _sessionSub = null;
+    _sessionHeartbeat?.cancel();
+    // Logged while still signed in, and never allowed to hold the
+    // sign-out back.
+    try {
+      await AuditLogService.log(
+        AuditAction.sessionForcedLogout,
+        'This Admin session was ended because the account logged in on '
+        'another device.',
+      ).timeout(const Duration(seconds: 4));
+    } catch (_) {}
+    await AdminSessionService.clearLocal(uid);
+    debugPrint(
+      '[Auth] signOut() called — reason: Admin session replaced on another '
+      'device (uid: $uid)',
+    );
+    try {
+      await FirebaseAuth.instance.signOut();
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) =>
+            const LoginScreen(role: 'admin', adminSessionEnded: true),
+      ),
+      (route) => false,
+    );
+  }
+
+  // Replaces the dashboard (the only route on the stack) with the admin
+  // login page, so browser Back has nothing protected to return to.
+  void _leave(String? message) {
+    if (_leaving || !mounted) return;
+    _leaving = true;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => LoginScreen(role: 'admin', flashMessage: message),
+      ),
+      (route) => false,
+    );
+  }
+
+  void _leaveToGate() {
+    if (_leaving || !mounted) return;
+    _leaving = true;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AdminSessionGate()),
+      (route) => false,
+    );
+  }
+
+  // True once the portal has gone back to the login page.
+  Future<bool> _logout() async {
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      // Both must happen while still signed in — the Cloud Functions need
+      // an authenticated caller: the Audit Log entry, and the end of this
+      // browser's session (so the next login has nothing to replace).
+      // Together, best-effort and bounded: a slow or failing call must
+      // never keep the admin signed in, or the Logout button waiting.
+      try {
+        await Future.wait([
+          AuditLogService.log(
+            AuditAction.logout,
+            'Logged out of the Admin Portal.',
+            locationWait: Duration.zero,
+          ),
+          if (uid != null) AdminSessionService.end(uid),
+        ]).timeout(const Duration(seconds: 3));
+      } catch (_) {}
+      debugPrint(
+        '[Auth] signOut() called — reason: admin tapped Logout '
+        '(uid: ${FirebaseAuth.instance.currentUser?.uid})',
+      );
+      // Signing out fires the auth listener above, which would show the
+      // "session has ended" notice — this is a plain logout, so go to the
+      // login page without one.
+      _authSub?.cancel();
+      _authSub = null;
+      _accountSub?.cancel();
+      _accountSub = null;
+      _sessionSub?.cancel();
+      _sessionSub = null;
+      _sessionHeartbeat?.cancel();
+      await FirebaseAuth.instance.signOut();
+      _leave(null);
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error logging out: ${e.toString()}')),
         );
       }
+      return false;
     }
   }
 
   late final List<Widget> _pages = [
     const _AnalyticsDashboardView(),
     const _DemandHeatmapView(),
-    const AdminDemandForecastView(),
-    const VerificationQueueView(),
+    const _VerificationPage(),
     const FarmerListView(),
-    const ModerationQueueView(),
     const _PriceManagementView(),
+    const AdminTransactionsView(),
+    const AdminListingsView(),
+    const ModerationQueueView(),
+    const ModerationQueueView(violations: true),
     const AuditLogView(),
   ];
 
@@ -270,6 +457,65 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             onSurface: palette.textPrimary,
           ),
           scaffoldBackgroundColor: palette.bg,
+          // Montserrat with its real weights (see kAdminFontFamily), so
+          // that bold text is bold in a browser too.
+          textTheme: Theme.of(
+            context,
+          ).textTheme.apply(fontFamily: kAdminFontFamily),
+          primaryTextTheme: Theme.of(
+            context,
+          ).primaryTextTheme.apply(fontFamily: kAdminFontFamily),
+          // Every button in the portal is pill-shaped (the sidebar's items
+          // are tabs, not buttons). Elevated buttons already are, from the
+          // app's own theme; this covers the rest, dialogs included.
+          // …and, in every dialog, the same colours and font: the main
+          // button dark green with white text, the others dark green text.
+          outlinedButtonTheme: OutlinedButtonThemeData(
+            style: OutlinedButton.styleFrom(
+              shape: const StadiumBorder(),
+              foregroundColor: adminActionColor(palette),
+              side: BorderSide(color: palette.border),
+              textStyle: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          textButtonTheme: TextButtonThemeData(
+            style: TextButton.styleFrom(
+              shape: const StadiumBorder(),
+              foregroundColor: adminActionColor(palette),
+              textStyle: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+              shape: const StadiumBorder(),
+              backgroundColor: adminActionColor(palette),
+              foregroundColor: adminOnActionColor(palette),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
+              textStyle: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          elevatedButtonTheme: ElevatedButtonThemeData(
+            style: ElevatedButton.styleFrom(
+              shape: const StadiumBorder(),
+              elevation: 0,
+              backgroundColor: adminActionColor(palette),
+              foregroundColor: adminOnActionColor(palette),
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
+              textStyle: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
           cardTheme: CardThemeData(
             color: palette.surface,
             elevation: 0,
@@ -286,50 +532,344 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               horizontal: 14,
               vertical: 13,
             ),
+            // Pill-shaped, like the buttons. A field tall enough for
+            // several lines keeps a rounded corner instead (see
+            // adminMultilineBorder), where a pill would crowd the text.
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(AdminRadii.pill),
               borderSide: BorderSide(color: palette.border),
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(AdminRadii.pill),
               borderSide: BorderSide(color: palette.border),
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(AdminRadii.pill),
               borderSide: BorderSide(color: palette.green, width: 1.5),
+            ),
+          ),
+          // Tick boxes (a table's row selection): dark green when ticked.
+          checkboxTheme: CheckboxThemeData(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(5),
+            ),
+            // A ticked box keeps an outline in the tick's colour, so the
+            // select-all box still shows on the dark green table header.
+            side: WidgetStateBorderSide.resolveWith(
+              (states) => BorderSide(
+                color: states.contains(WidgetState.selected)
+                    ? adminOnActionColor(palette)
+                    : palette.textMuted,
+                width: 1.4,
+              ),
+            ),
+            fillColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.selected)
+                  ? adminActionColor(palette)
+                  : Colors.transparent,
+            ),
+            checkColor: WidgetStatePropertyAll(adminOnActionColor(palette)),
+          ),
+          // Any other progress sign in the portal: the same dark green.
+          progressIndicatorTheme: ProgressIndicatorThemeData(
+            color: adminActionColor(palette),
+            linearTrackColor: palette.surfaceAlt,
+            circularTrackColor: Colors.transparent,
+          ),
+          // Menus and dialogs: the mobile app's popup card — rounded,
+          // thin border, soft shadow, over a lightly dimmed page.
+          popupMenuTheme: PopupMenuThemeData(
+            color: palette.surface,
+            surfaceTintColor: Colors.transparent,
+            elevation: 10,
+            shadowColor: Colors.black.withValues(alpha: 0.25),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(kAdminPopupRadius),
+              side: BorderSide(color: palette.border),
+            ),
+            textStyle: GoogleFonts.montserrat(
+              color: palette.textPrimary,
+              fontSize: 13,
+            ),
+          ),
+          dialogTheme: DialogThemeData(
+            backgroundColor: palette.surface,
+            surfaceTintColor: Colors.transparent,
+            elevation: 12,
+            shadowColor: Colors.black.withValues(alpha: 0.25),
+            barrierColor: agriBarrierColor,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(kAdminPopupRadius),
+              side: BorderSide(color: palette.border),
+            ),
+            titleTextStyle: GoogleFonts.montserrat(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              color: palette.isDark ? palette.textPrimary : AppTheme.dark,
+            ),
+            contentTextStyle: GoogleFonts.montserrat(
+              fontSize: 13,
+              height: 1.45,
+              color: palette.textPrimary,
             ),
           ),
         ),
         child: Scaffold(
           backgroundColor: palette.bg,
+          body: _AdminShell(pages: _pages, onLogout: _logout),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// SHELL — the sidebar, the utility bar and the content area.
+//
+// Tab selection lives here, in two ValueNotifiers, rather than in
+// AdminDashboardScreen's setState: a click must not rebuild the theme,
+// the Scaffold or anything else around the two.
+//
+//  * [_selected] drives ONLY the sidebar's active item. It changes
+//    synchronously on click, so the highlight is on screen in the very
+//    next frame, before the destination page has done any work.
+//  * [_shown] drives ONLY the content area. It follows one frame later,
+//    so a heavy page build (charts, tables, the map) can never hold the
+//    highlight back.
+//
+// Pages are built the first time their tab is opened and then kept
+// mounted in an IndexedStack: going back to one is a single cheap frame,
+// with its Firestore listeners, loaded data, scroll position and filters
+// intact — nothing is torn down, re-subscribed or re-fetched. Each page
+// shows its own loading state while its data arrives.
+// ============================================================
+class _AdminShell extends StatefulWidget {
+  final List<Widget> pages;
+  final Future<bool> Function() onLogout;
+  const _AdminShell({required this.pages, required this.onLogout});
+
+  @override
+  State<_AdminShell> createState() => _AdminShellState();
+}
+
+class _AdminShellState extends State<_AdminShell> {
+  final ValueNotifier<int> _selected = ValueNotifier<int>(0);
+  final ValueNotifier<int> _shown = ValueNotifier<int>(0);
+  final Set<int> _visited = {0};
+
+  // Pages that read DashboardDataService's cached analytics fetch
+  // (Analytics Dashboard, Demand Heatmap, Farmer List, Price Management,
+  // Transactions).
+  static const Set<int> _cachedDataPages = {0, 1, 3, 4, 5, 6};
+
+  // Switching between light and dark repaints every page that is being
+  // kept alive in the background, not just the one on screen — tables,
+  // charts and the map all at once, which made the switch slow. So the
+  // background pages are let go when the theme changes: only the open
+  // page is redrawn now, and each of the others is built again, in the
+  // new theme, the next time it is opened (its data is already cached).
+  bool? _wasDark;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final isDark = AdminThemeScope.of(context).palette.isDark;
+    if (_wasDark != null && _wasDark != isDark) {
+      _visited
+        ..clear()
+        ..add(_shown.value);
+    }
+    _wasDark = isDark;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    adminOpenPageRequest.addListener(_openRequestedPage);
+  }
+
+  @override
+  void dispose() {
+    adminOpenPageRequest.removeListener(_openRequestedPage);
+    _selected.dispose();
+    _shown.dispose();
+    super.dispose();
+  }
+
+  // A notification was clicked: open the page it is about.
+  void _openRequestedPage() {
+    final target = adminOpenPageRequest.value;
+    if (target == null) return;
+    adminOpenPageRequest.value = null;
+    _goTo(switch (target) {
+      AdminNotificationTarget.heatmap => _heatmapPage,
+      AdminNotificationTarget.verification => _verificationPage,
+      AdminNotificationTarget.farmers => _farmersPage,
+      AdminNotificationTarget.moderation => _moderationPage,
+      AdminNotificationTarget.transactions => _transactionsPage,
+      AdminNotificationTarget.listings => _listingsPage,
+      AdminNotificationTarget.auditLog => _auditLogPage,
+    });
+  }
+
+  void _goTo(int index) {
+    if (index == _selected.value) return;
+    final label = _navItems[index].label;
+    final watch = Stopwatch()..start();
+    debugPrint('[AdminNav] click → $label');
+
+    // 1. Active tab highlight — immediately, nothing else.
+    _selected.value = index;
+
+    // 2. Content — one frame later, once the highlight has been drawn.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      debugPrint(
+        '[AdminNav] $label: tab highlight drawn in '
+        '${watch.elapsedMilliseconds} ms',
+      );
+      // Clicked on to another tab in the meantime — that click has its own
+      // callback.
+      if (!mounted || _selected.value != index) return;
+      final firstVisit = _visited.add(index);
+      // A kept-alive page doesn't rebuild on return, so its own
+      // ensureLoaded() no longer runs — keep the 5-minute cache refresh it
+      // used to get. No Firestore read while the cache is still fresh.
+      if (!firstVisit && _cachedDataPages.contains(index)) {
+        DashboardDataService.instance.ensureLoaded();
+      }
+      final buildWatch = Stopwatch()..start();
+      _shown.value = index;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // A slow FIRST visit is that page building itself; a slow REPEAT
+        // visit would mean something is rebuilding that shouldn't be.
+        // Firestore timings are logged separately ([AdminData]/[Overview]).
+        debugPrint(
+          '[AdminNav] $label: page on screen in '
+          '${buildWatch.elapsedMilliseconds} ms '
+          '(${firstVisit ? 'first visit — page built' : 'kept alive — not rebuilt'}), '
+          '${watch.elapsedMilliseconds} ms since click',
+        );
+      });
+    });
+    // Make sure that next frame actually happens.
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  // Window widths the navigation changes shape at: the full sidebar from
+  // [_sidebarFrom] up, the icon-only rail from [_railFrom], and below that
+  // a drawer opened from the utility bar.
+  static const double _sidebarFrom = 1100;
+  static const double _railFrom = 700;
+
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // The sidebar in any of its three shapes. Only this rebuilds when the
+  // active page changes.
+  Widget _sidebar({required bool collapsed, bool inDrawer = false}) {
+    return RepaintBoundary(
+      // Also rebuilt when a page changes its own section (a Moderation tab
+      // clicked in the page), so the submenu's highlight follows.
+      child: ListenableBuilder(
+        listenable: Listenable.merge([
+          _selected,
+          AdminSubNav.verification,
+          AdminSubNav.moderation,
+          AdminSubNav.violations,
+          AdminSubNav.audit,
+        ]),
+        builder: (context, _) => AdminSidebar(
+          entries: _sidebarEntries,
+          selectedIndex: _selected.value,
+          // No footer: Logout and the Admin account are on the avatar in
+          // the header.
+          selectedChildIndex: switch (_selected.value) {
+            _verificationPage => AdminSubNav.verification.value.index,
+            _moderationPage => AdminSubNav.moderation.value.index,
+            _violationsPage => AdminSubNav.violations.value.index,
+            _auditLogPage => AdminSubNav.audit.value.index,
+            _ => null,
+          },
+          collapsed: collapsed,
+          onSelect: (index) {
+            if (inDrawer) _scaffoldKey.currentState?.closeDrawer();
+            _goTo(index);
+          },
+          onSelectChild: (index, child) {
+            if (inDrawer) _scaffoldKey.currentState?.closeDrawer();
+            switch (index) {
+              case _verificationPage:
+                AdminSubNav.verification.value =
+                    VerificationSection.values[child];
+              case _moderationPage:
+                AdminSubNav.moderation.value = ModerationSection.values[child];
+              case _violationsPage:
+                AdminSubNav.violations.value = ViolationSection.values[child];
+              case _auditLogPage:
+                AdminSubNav.audit.value = AuditSection.values[child];
+            }
+            _goTo(index);
+          },
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final useDrawer = width < _railFrom;
+        // One Scaffold in every shape, and the content keyed, so resizing
+        // the window never rebuilds the pages.
+        return Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: Colors.transparent,
+          drawer: useDrawer
+              ? Drawer(
+                  width: AdminSidebar.expandedWidth,
+                  backgroundColor: AdminSidebar.background,
+                  shape: const RoundedRectangleBorder(),
+                  child: _sidebar(collapsed: false, inDrawer: true),
+                )
+              : null,
           body: Row(
             children: [
-              _AdminSidebar(
-                expanded: _railExpanded,
-                selectedIndex: _selectedIndex,
-                onToggleExpand: _toggleRail,
-                onDestinationSelected: _goTo,
-                onLogout: _logout,
-              ),
-              Container(width: 1, color: palette.border),
+              // Fixed: only the content to its right changes or scrolls.
+              if (!useDrawer) _sidebar(collapsed: width < _sidebarFrom),
               Expanded(
+                key: const ValueKey('admin-content'),
                 child: Column(
                   children: [
-                    const _AdminTopHeader(),
-                    Container(height: 1, color: palette.border),
+                    _AdminUtilityBar(
+                      selected: _selected,
+                      onLogout: widget.onLogout,
+                      onGoHome: () => _goTo(0),
+                      showBrand: width < _sidebarFrom,
+                      onOpenMenu: useDrawer
+                          ? () => _scaffoldKey.currentState?.openDrawer()
+                          : null,
+                    ),
                     Expanded(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 300),
-                        transitionBuilder:
-                            (Widget child, Animation<double> animation) {
-                              return FadeTransition(
-                                opacity: animation,
-                                child: child,
-                              );
-                            },
-                        child: KeyedSubtree(
-                          key: ValueKey<int>(_selectedIndex),
-                          child: _pages[_selectedIndex],
+                      child: RepaintBoundary(
+                        child: ValueListenableBuilder<int>(
+                          valueListenable: _shown,
+                          builder: (context, shown, _) => IndexedStack(
+                            index: shown,
+                            sizing: StackFit.expand,
+                            children: [
+                              for (var i = 0; i < widget.pages.length; i++)
+                                // Not opened yet: an empty placeholder, so
+                                // nothing loads until its page is opened.
+                                // Hidden pages have their animations paused.
+                                _visited.contains(i)
+                                    ? TickerMode(
+                                        enabled: i == shown,
+                                        child: widget.pages[i],
+                                      )
+                                    : const SizedBox.shrink(),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -338,669 +878,696 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               ),
             ],
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
 
+// The notification bell and its feed are in admin_notifications.dart.
+
 // ============================================================
-// TOP HEADER — notification bell only. Search moved into the sidebar's
-// own page-search field; theme toggle and account/logout moved to the
-// sidebar footer (see _AdminSidebar) so the header stays minimal.
+// The Dashboard's welcome banner: the greeting, today's date, and the
+// banner picture on the right.
 // ============================================================
-class _AdminTopHeader extends StatelessWidget {
-  const _AdminTopHeader();
+
+/// The banner picture. Until the file is added to the project (and listed
+/// under assets in pubspec.yaml) the banner simply shows without it.
+const String kAdminDashboardBanner = 'assets/images/admin_dashboard_banner.png';
+
+class _DashboardWelcome extends StatefulWidget {
+  const _DashboardWelcome();
+
+  @override
+  State<_DashboardWelcome> createState() => _DashboardWelcomeState();
+}
+
+class _DashboardWelcomeState extends State<_DashboardWelcome> {
+  // Ticks the clock in the banner once a second.
+  late final Timer _clock = Timer.periodic(
+    const Duration(seconds: 1),
+    (_) => setState(() => _now = DateTime.now()),
+  );
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _clock; // Starts it.
+  }
+
+  @override
+  void dispose() {
+    _clock.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    return Container(
-      color: c.surface,
-      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
-      child: const Row(children: [Spacer(), _NotificationBell()]),
-    );
-  }
-}
+    final today = _now;
 
-/// Sun / moon toggle that flips the whole admin shell between the
-/// dark and light [AdminPalette].
-class _ThemeToggleButton extends StatelessWidget {
-  const _ThemeToggleButton();
-
-  @override
-  Widget build(BuildContext context) {
-    final scope = AdminThemeScope.of(context);
-    final c = scope.palette;
-    return Container(
-      decoration: BoxDecoration(shape: BoxShape.circle, color: c.surfaceAlt),
-      child: IconButton(
-        tooltip: c.isDark ? 'Switch to light mode' : 'Switch to dark mode',
-        icon: Icon(
-          c.isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-          color: c.textSecondary,
-        ),
-        onPressed: scope.onToggleTheme,
-      ),
-    );
-  }
-}
-
-// ============================================================
-// NOTIFICATIONS — bell with unread badge + dropdown panel.
-// Data is empty for now; the read/unread + rendering logic is
-// fully wired so it lights up the moment real data streams in.
-// ============================================================
-class _AdminNotification {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final String time;
-  final bool read;
-  const _AdminNotification({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.time,
-  }) : read = false;
-}
-
-class _NotificationBell extends StatelessWidget {
-  const _NotificationBell();
-
-  // TODO: replace with a live stream from an `admin_notifications`
-  // Firestore collection (e.g. new verification requests, new reports).
-  static const List<_AdminNotification> _notifications = [];
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    final unreadCount = _notifications.where((n) => !n.read).length;
-
-    return PopupMenuButton<void>(
-      tooltip: 'Notifications',
-      color: c.surface,
-      elevation: 6,
-      offset: const Offset(0, 44),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(color: c.border),
-      ),
-      itemBuilder: (context) => [
-        PopupMenuItem<void>(
-          enabled: false,
-          padding: EdgeInsets.zero,
-          child: SizedBox(
-            width: 320,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Notifications',
-                        style: TextStyle(
-                          color: c.textPrimary,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                      if (unreadCount > 0)
-                        Text(
-                          '$unreadCount new',
-                          style: TextStyle(
-                            color: c.green,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                Divider(height: 1, color: c.border),
-                if (_notifications.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      vertical: 30,
-                      horizontal: 24,
-                    ),
-                    child: Column(
-                      children: [
-                        Icon(
-                          Icons.notifications_none_rounded,
-                          size: 30,
-                          color: c.textMuted,
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          'No notifications yet',
-                          style: TextStyle(
-                            color: c.textSecondary,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          "You'll see verification requests, flagged\nreports, and system alerts here.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: c.textMuted,
-                            fontSize: 11.5,
-                            height: 1.4,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 320),
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      padding: EdgeInsets.zero,
-                      itemCount: _notifications.length,
-                      separatorBuilder: (_, _) =>
-                          Divider(height: 1, color: c.border),
-                      itemBuilder: (context, index) {
-                        final n = _notifications[index];
-                        return ListTile(
-                          dense: true,
-                          leading: Icon(
-                            n.icon,
-                            size: 20,
-                            color: n.read ? c.textMuted : c.green,
-                          ),
-                          title: Text(
-                            n.title,
-                            style: TextStyle(
-                              color: c.textPrimary,
-                              fontSize: 13,
-                              fontWeight: n.read
-                                  ? FontWeight.w500
-                                  : FontWeight.w700,
-                            ),
-                          ),
-                          subtitle: Text(
-                            n.subtitle,
-                            style: TextStyle(
-                              color: c.textSecondary,
-                              fontSize: 12,
-                            ),
-                          ),
-                          trailing: Text(
-                            n.time,
-                            style: TextStyle(color: c.textMuted, fontSize: 11),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-              ],
+    final date = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: c.greenBg,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            '${today.day}',
+            style: TextStyle(
+              color: c.green,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ),
-      ],
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(shape: BoxShape.circle, color: c.surfaceAlt),
-        child: Stack(
-          clipBehavior: Clip.none,
+        const SizedBox(width: 10),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.notifications_outlined,
-              color: c.textSecondary,
-              size: 22,
+            Text(
+              DateFormat('MMM y').format(today),
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-            if (unreadCount > 0)
-              Positioned(
-                right: -2,
-                top: -2,
-                child: Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: c.red,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: c.surfaceAlt, width: 1.5),
+            Text(
+              DateFormat('EEE').format(today),
+              style: TextStyle(color: c.textSecondary, fontSize: 12),
+            ),
+          ],
+        ),
+        Container(
+          width: 1,
+          height: 30,
+          margin: const EdgeInsets.symmetric(horizontal: 14),
+          color: c.border,
+        ),
+        // Fixed-width digits, so the time does not shift as it ticks.
+        Text(
+          DateFormat('h:mm:ss a').format(today),
+          style: TextStyle(
+            color: c.textPrimary,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
+
+    final greeting = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          'ADMIN DASHBOARD',
+          style: TextStyle(
+            color: c.green,
+            fontSize: 11.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.8,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                'Welcome back, Admin!',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: c.textPrimary,
+                  fontSize: 27,
+                  height: 1.15,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "Here's what's happening with AgriTrade+ today.",
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: c.textSecondary, fontSize: 13),
+        ),
+      ],
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 860;
+        return Container(
+          height: wide ? 118 : null,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: c.surface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: c.border),
+          ),
+          child: wide
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const SizedBox(width: 22),
+                    Expanded(flex: 5, child: greeting),
+                    const SizedBox(width: 20),
+                    // The picture, shown exactly as supplied: scaled to the
+                    // banner's height.
+                    Expanded(
+                      flex: 6,
+                      child: Image.asset(
+                        kAdminDashboardBanner,
+                        fit: BoxFit.cover,
+                        alignment: Alignment.centerRight,
+                        errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                      ),
+                    ),
+                    // Today's date and the time, in the right corner.
+                    const SizedBox(width: 20),
+                    Center(child: date),
+                    const SizedBox(width: 22),
+                  ],
+                )
+              : Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [greeting, const SizedBox(height: 14), date],
+                  ),
+                ),
+        );
+      },
+    );
+  }
+}
+
+// ============================================================
+// NAVIGATION — the pages are listed in the dark green sidebar on the left
+// (AdminSidebar: full on a desktop window, an icon rail on a tablet-sized
+// one, a drawer on a phone-sized one). Above the content, on every page,
+// sits the same curved header with the open page's title and the
+// notification bell — no page links of its own. The Admin account is at
+// the bottom of the sidebar.
+// ============================================================
+
+// Short captions for the sidebar, by index into _navItems (whose own
+// labels stay the full page names used in logs).
+const List<String> _topNavLabels = [
+  'Dashboard',
+  'Demand Heatmap',
+  'Verification',
+  'Farmers',
+  'Price Management',
+  'Transactions',
+  'Listings',
+  'Moderation',
+  'Violations',
+  'Audit Log',
+];
+
+// Each page's title, by index into _navItems, shown in the utility bar
+// above the page rather than inside it.
+const List<String> _pageTitles = [
+  'Analytics Dashboard',
+  'Demand Heatmap',
+  'Verification Queue',
+  'Farmer List',
+  'Commodity Price Management',
+  'Transactions',
+  'Product Listings',
+  'Moderation Queue',
+  'Violations',
+  'Audit Log',
+];
+
+// Pages with several views of their own, by index into _navItems: the
+// sidebar lists those views as a submenu. Only views that exist — a
+// Moderation tab, an Audit Log section (see AdminSubNav).
+const int _verificationPage = 2;
+const int _moderationPage = 7;
+const int _violationsPage = 8;
+const int _auditLogPage = 9;
+const int _heatmapPage = 1;
+const int _farmersPage = 3;
+const int _transactionsPage = 5;
+const int _listingsPage = 6;
+
+final List<AdminSidebarEntry> _sidebarEntries = [
+  for (var i = 0; i < _navItems.length; i++)
+    AdminSidebarEntry(
+      _navItems[i].icon,
+      _topNavLabels[i],
+      children: switch (i) {
+        _verificationPage => [
+          for (final section in VerificationSection.values) section.label,
+        ],
+        _moderationPage => [
+          for (final section in ModerationSection.values) section.label,
+        ],
+        _violationsPage => [
+          for (final section in ViolationSection.values) section.label,
+        ],
+        _auditLogPage => [
+          for (final section in AuditSection.values) section.label,
+        ],
+        _ => const [],
+      },
+    ),
+];
+
+class _AdminUtilityBar extends StatelessWidget {
+  /// Non-null on a phone-sized window, where the sidebar is a drawer:
+  /// shows the menu button that opens it.
+  final VoidCallback? onOpenMenu;
+
+  /// The page whose title the bar shows.
+  final ValueListenable<int> selected;
+
+  /// The sidebar is not showing the AgriTrade+ wordmark (icon rail or
+  /// drawer), so the header carries it instead.
+  final bool showBrand;
+
+  final Future<bool> Function() onLogout;
+
+  /// "Dashboard" in the breadcrumb was clicked.
+  final VoidCallback onGoHome;
+
+  const _AdminUtilityBar({
+    required this.selected,
+    required this.onLogout,
+    required this.onGoHome,
+    this.onOpenMenu,
+    this.showBrand = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+    // Only this rebuilds when the page, or the section open in it, changes.
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        selected,
+        AdminSubNav.verification,
+        AdminSubNav.moderation,
+        AdminSubNav.violations,
+        AdminSubNav.audit,
+      ]),
+      // The Dashboard greets the Admin in its own banner, so there is no
+      // title under the bar there.
+      builder: (context, _) {
+        final index = selected.value;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _header(c, index),
+            if (index != 0)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 2, 24, 10),
+                child: Text(
+                  _pageTitles[index],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: c.textPrimary,
                   ),
                 ),
               ),
           ],
-        ),
-      ),
+        );
+      },
     );
   }
-}
 
-// ============================================================
-// SIDEBAR — collapsible AgriTrade panel with branded navigation,
-// quick page search, and an AgriTrade photo panel at the bottom.
-// ============================================================
-class _AdminSidebar extends StatelessWidget {
-  final bool expanded;
-  final int selectedIndex;
-  final VoidCallback onToggleExpand;
-  final ValueChanged<int> onDestinationSelected;
-  final VoidCallback onLogout;
-
-  const _AdminSidebar({
-    required this.expanded,
-    required this.selectedIndex,
-    required this.onToggleExpand,
-    required this.onDestinationSelected,
-    required this.onLogout,
-  });
-
-  static const double _collapsedWidth = 76;
-  static const double _expandedWidth = 258;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    // Docked, not floating: no margin/rounding/shadow — flush against the
-    // window edge, same flat-panel language as the rest of the redesign.
-    // The 1px divider between sidebar and content (drawn by the parent Row)
-    // is what separates it visually, not a card border.
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeInOut,
-      width: expanded ? _expandedWidth : _collapsedWidth,
-      color: c.sidebarBg,
-      child: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: expanded ? 12 : 8,
-            vertical: 12,
-          ),
-          child: Column(
-            children: [
-              _SidebarBrandToggle(expanded: expanded, onToggle: onToggleExpand),
-              if (expanded) ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 40,
-                  child: TextField(
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (query) {
-                      final normalized = query.trim().toLowerCase();
-                      if (normalized.isEmpty) return;
-                      final index = _navItems.indexWhere(
-                        (item) => item.label.toLowerCase().contains(normalized),
-                      );
-                      if (index >= 0) onDestinationSelected(index);
-                    },
-                    style: TextStyle(color: c.textPrimary, fontSize: 12),
-                    decoration: InputDecoration(
-                      hintText: 'Search pages...',
-                      hintStyle: TextStyle(
-                        color: c.textSecondary,
-                        fontSize: 12,
-                      ),
-                      isDense: true,
-                      prefixIcon: Icon(
-                        Icons.search_rounded,
-                        size: 18,
-                        color: c.textSecondary,
-                      ),
-                      prefixIconConstraints: const BoxConstraints(
-                        minWidth: 36,
-                        minHeight: 36,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                      filled: true,
-                      fillColor: c.surfaceAlt,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide.none,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide(color: c.green, width: 1.2),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ] else
-                const SizedBox(height: 10),
-              Expanded(
-                child: ListView.builder(
-                  padding: EdgeInsets.zero,
-                  itemCount: _navItems.length,
-                  itemBuilder: (context, index) {
-                    final item = _navItems[index];
-                    final selected = index == selectedIndex;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (index == _systemGroupStart)
-                            _SidebarSectionLabel(
-                              expanded: expanded,
-                              label: 'System',
-                            ),
-                          _SidebarNavTile(
-                            icon: selected ? item.selectedIcon : item.icon,
-                            label: item.label,
-                            selected: selected,
-                            expanded: expanded,
-                            onTap: () => onDestinationSelected(index),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+  // Where the Admin is: Dashboard › the page › the section open in it.
+  // "Dashboard" goes back there; the last one is where they are now.
+  Widget _breadcrumb(AdminPalette c, int page) {
+    final section = switch (page) {
+      _verificationPage => AdminSubNav.verification.value.label,
+      _moderationPage => AdminSubNav.moderation.value.label,
+      _violationsPage => AdminSubNav.violations.value.label,
+      _auditLogPage => AdminSubNav.audit.value.label,
+      _ => null,
+    };
+    final trail = [
+      _topNavLabels[0],
+      if (page != 0) _topNavLabels[page],
+      // A section named like its page ("Violations") is not said twice.
+      if (section != null && section != _topNavLabels[page]) section,
+    ];
+    TextStyle style(bool current) => TextStyle(
+      fontSize: 13,
+      fontWeight: current ? FontWeight.w700 : FontWeight.w500,
+      color: current ? c.textPrimary : c.textSecondary,
+    );
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < trail.length; i++) ...[
+            if (i > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 16,
+                  color: c.textMuted,
                 ),
               ),
-              const SizedBox(height: 8),
-              Divider(height: 1, color: c.border),
-              const SizedBox(height: 8),
-              if (expanded)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const _ThemeToggleButton(),
-                    _AdminAccountMenu(onLogout: onLogout),
-                  ],
-                )
-              else
-                Column(
-                  children: [
-                    const _ThemeToggleButton(),
-                    const SizedBox(height: 8),
-                    _AdminAccountMenu(onLogout: onLogout),
-                  ],
+            if (i == 0 && trail.length > 1)
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: onGoHome,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 2,
+                    vertical: 4,
+                  ),
+                  child: Text(trail[i], style: style(false)),
                 ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The sidebar's brand mark and expand/collapse control combined into one
-/// hoverable area, instead of a logo+wordmark row plus a separate chevron
-/// button — expanded shows just the "AgriTrade+" wordmark, collapsed shows
-/// just the logo; hovering either swaps it for a chevron so the control
-/// still visibly invites a click.
-class _SidebarBrandToggle extends StatefulWidget {
-  final bool expanded;
-  final VoidCallback onToggle;
-  const _SidebarBrandToggle({required this.expanded, required this.onToggle});
-
-  @override
-  State<_SidebarBrandToggle> createState() => _SidebarBrandToggleState();
-}
-
-class _SidebarBrandToggleState extends State<_SidebarBrandToggle> {
-  bool _hovering = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-
-    Widget logo(double size) => Image.asset(
-      'assets/images/logo.png',
-      width: size,
-      height: size,
-      fit: BoxFit.contain,
-      errorBuilder: (_, _, _) =>
-          Icon(Icons.agriculture_rounded, color: c.green, size: size - 4),
-    );
-
-    final Widget content;
-    if (widget.expanded) {
-      content = _hovering
-          ? Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Opacity(
-                  opacity: 0.5,
-                  child: AgriTradeText(fontSize: 19, light: c.isDark),
-                ),
-                Icon(Icons.chevron_left_rounded, color: c.textSecondary),
-              ],
-            )
-          : Align(
-              alignment: Alignment.centerLeft,
-              child: AgriTradeText(fontSize: 19, light: c.isDark),
-            );
-    } else {
-      content = Center(
-        child: _hovering
-            ? Icon(
-                Icons.chevron_right_rounded,
-                color: c.textSecondary,
-                size: 28,
               )
-            : logo(34),
-      );
-    }
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovering = true),
-      onExit: (_) => setState(() => _hovering = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onToggle,
-        child: SizedBox(
-          height: 40,
-          child: Tooltip(
-            message: widget.expanded ? 'Collapse sidebar' : 'Expand sidebar',
-            child: content,
-          ),
-        ),
+            else
+              Text(trail[i], style: style(i == trail.length - 1)),
+          ],
+        ],
       ),
     );
   }
-}
 
-/// Small "SYSTEM" caption above the Audit Log entry — collapsed to a thin
-/// divider when the rail is icon-only, since there's no room for a label.
-class _SidebarSectionLabel extends StatelessWidget {
-  final bool expanded;
-  final String label;
-  const _SidebarSectionLabel({required this.expanded, required this.label});
+  Widget? _menuButton(AdminPalette c) => onOpenMenu == null
+      ? null
+      : IconButton(
+          tooltip: 'Menu',
+          onPressed: onOpenMenu,
+          icon: Icon(Icons.menu_rounded, color: c.textPrimary),
+        );
 
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    if (!expanded) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-        child: Divider(color: c.border, height: 1),
-      );
-    }
+  // The same bar on every page: where the Admin is on the left, then the
+  // search, the notification bell and the Admin account on the right. The
+  // page's title is on its own line under it.
+  Widget _header(AdminPalette c, int page) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 14, 12, 6),
-      child: Text(
-        label.toUpperCase(),
-        style: GoogleFonts.montserrat(
-          color: c.textMuted,
-          fontSize: 10.5,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.6,
-        ),
-      ),
-    );
-  }
-}
-
-class _SidebarNavTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool selected;
-  final bool expanded;
-  final VoidCallback onTap;
-
-  const _SidebarNavTile({
-    required this.icon,
-    required this.label,
-    required this.selected,
-    required this.expanded,
-    required this.onTap,
-  });
-
-  // Compact rows; the selected item gets a subtle tinted background plus a
-  // left accent bar — never a full color fill — matching the rest of the
-  // redesign's "borders/accents, not blocks of color" language.
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    final iconColor = selected ? c.green : c.textSecondary;
-
-    final tile = Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AdminRadii.control),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          height: 44,
-          padding: EdgeInsets.symmetric(horizontal: expanded ? 11 : 0),
-          decoration: BoxDecoration(
-            color: selected ? c.greenBg : Colors.transparent,
-            borderRadius: BorderRadius.circular(AdminRadii.control),
-            border: Border(
-              left: BorderSide(
-                color: selected ? c.green : Colors.transparent,
-                width: 3,
+      padding: EdgeInsets.fromLTRB(onOpenMenu == null ? 24 : 10, 14, 24, 8),
+      child: Row(
+        children: [
+          ?_menuButton(c),
+          if (showBrand) ...[
+            Image.asset(
+              'assets/images/logo.png',
+              height: 34,
+              fit: BoxFit.contain,
+              errorBuilder: (_, _, _) =>
+                  Icon(Icons.agriculture_rounded, color: c.green, size: 26),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              'AgriTrade+',
+              style: AppTheme.brandText(fontSize: 19).copyWith(
+                // The wordmark's own dark green would not show on the dark
+                // theme's surface.
+                color: c.isDark ? c.textPrimary : null,
               ),
             ),
+            const SizedBox(width: 16),
+          ],
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _breadcrumb(c, page),
+            ),
           ),
-          alignment: expanded ? Alignment.centerLeft : Alignment.center,
-          child: expanded
-              ? Row(
-                  children: [
-                    Icon(icon, color: iconColor, size: 22),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        label,
-                        overflow: TextOverflow.ellipsis,
-                        style: GoogleFonts.montserrat(
-                          color: selected ? c.green : c.textPrimary,
-                          fontWeight: selected
-                              ? FontWeight.w600
-                              : FontWeight.w500,
-                          fontSize: 13.5,
-                        ),
-                      ),
-                    ),
-                  ],
-                )
-              : Icon(icon, color: iconColor, size: 22),
-        ),
+          const SizedBox(width: 16),
+          Flexible(
+            flex: 2,
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(width: 360, child: AdminGlobalSearch(page: page)),
+            ),
+          ),
+          const SizedBox(width: 12),
+          const AdminAnnounceButton(),
+          const SizedBox(width: 8),
+          const AdminNotificationBell(),
+          const SizedBox(width: 8),
+          const _AdminThemeToggle(),
+          const SizedBox(width: 8),
+          _AdminAccountMenu(onLogout: onLogout),
+        ],
       ),
     );
-
-    if (expanded) return tile;
-    return Tooltip(message: label, child: tile);
   }
 }
 
-class _AdminAccountMenu extends StatelessWidget {
-  final VoidCallback onLogout;
-  const _AdminAccountMenu({required this.onLogout});
+/// The light/dark switch in the header: a sun while the portal is light,
+/// a moon while it is dark. One click changes the whole portal.
+class _AdminThemeToggle extends StatelessWidget {
+  const _AdminThemeToggle();
 
   @override
   Widget build(BuildContext context) {
     final scope = AdminThemeScope.of(context);
     final c = scope.palette;
+    return Tooltip(
+      message: c.isDark ? 'Switch to light mode' : 'Switch to dark mode',
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: scope.onToggleTheme,
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: c.surfaceAlt,
+          ),
+          child: Icon(
+            c.isDark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
+            color: c.textSecondary,
+            size: 22,
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-    // TODO: replace initials/name with the authenticated admin's real profile
-    // data (e.g. FirebaseAuth.instance.currentUser / a Firestore admins doc).
-    const initials = 'AD';
+/// The Admin account in the header — avatar, "Admin" and a chevron — and
+/// its menu: who is signed in, Manage Account and Logout.
+/// Account settings themselves are in Manage Account; the theme is the
+/// sun/moon beside this.
+class _AdminAccountMenu extends StatelessWidget {
+  final Future<bool> Function() onLogout;
+  const _AdminAccountMenu({required this.onLogout});
 
-    final avatar = CircleAvatar(
-      radius: 16,
-      backgroundColor: c.green,
-      child: const Text(
-        initials,
+  // Asks first; then keeps a "Logging out…" notice up while the logout is
+  // recorded and the session ended, so the click is seen to have worked.
+  Future<void> _confirmLogout(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const SizedBox(
+          width: 360,
+          child: Text('You will need to log in again to use the Admin Portal.'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Logout'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final navigator = Navigator.of(context, rootNavigator: true);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: AlertDialog(
+          content: SizedBox(
+            width: 260,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(height: 6),
+                Text('Logging out…'),
+                SizedBox(height: 16),
+                AdminLoadingBar(),
+                SizedBox(height: 6),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    // Going back to the login page takes the notice with it; it is only
+    // closed here when the logout did not go through.
+    final left = await onLogout();
+    if (!left && navigator.mounted) navigator.pop();
+  }
+
+  // TODO: replace with the authenticated admin's real initials.
+  static const String _initials = 'AD';
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+    final email = FirebaseAuth.instance.currentUser?.email ?? '';
+
+    Widget avatar(double radius) => CircleAvatar(
+      radius: radius,
+      backgroundColor: c.greenBg,
+      child: Text(
+        _initials,
         style: TextStyle(
-          color: Colors.black,
+          color: c.green,
           fontWeight: FontWeight.bold,
-          fontSize: 12,
+          fontSize: radius * 0.66,
         ),
       ),
     );
 
+    PopupMenuItem<String> item(
+      String value,
+      IconData icon,
+      String label, {
+      Color? color,
+    }) {
+      return PopupMenuItem<String>(
+        value: value,
+        height: 42,
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: color ?? c.iconInactive),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: GoogleFonts.montserrat(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: color ?? c.textPrimary,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return PopupMenuButton<String>(
-      color: c.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: c.border),
-      ),
       tooltip: 'Account',
-      offset: const Offset(0, 44),
+      position: PopupMenuPosition.under,
+      offset: const Offset(0, 8),
+      constraints: const BoxConstraints(minWidth: 250, maxWidth: 290),
       onSelected: (value) {
-        if (value == 'logout') onLogout();
-        if (value == 'theme') scope.onToggleTheme();
-        if (value == 'password') showChangePasswordDialog(context);
+        switch (value) {
+          case 'manage':
+            showAdminManageAccount(context);
+          case 'suspend':
+            showAdminSuspendAccounts(context);
+          case 'logout':
+            _confirmLogout(context);
+        }
       },
       itemBuilder: (context) => [
         PopupMenuItem<String>(
           enabled: false,
-          child: Text(
-            'Signed in as Admin',
-            style: TextStyle(color: c.textSecondary, fontSize: 12),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Row(
+            children: [
+              avatar(21),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Admin',
+                      style: GoogleFonts.montserrat(
+                        color: c.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Text(
+                      'Administrator',
+                      style: GoogleFonts.montserrat(
+                        color: c.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                    if (email.isNotEmpty)
+                      Text(
+                        email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.montserrat(
+                          color: c.textMuted,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
         const PopupMenuDivider(),
-        PopupMenuItem<String>(
-          value: 'password',
-          child: Row(
-            children: [
-              Icon(Icons.lock_outline, size: 18, color: c.iconInactive),
-              const SizedBox(width: 10),
-              Text('Change Password', style: TextStyle(color: c.textPrimary)),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: 'theme',
-          child: Row(
-            children: [
-              Icon(
-                c.isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-                size: 18,
-                color: c.iconInactive,
-              ),
-              const SizedBox(width: 10),
-              Text(
-                c.isDark ? 'Light mode' : 'Dark mode',
-                style: TextStyle(color: c.textPrimary),
-              ),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: 'logout',
-          child: Row(
-            children: [
-              Icon(Icons.logout_rounded, size: 18, color: c.red),
-              const SizedBox(width: 10),
-              Text('Logout', style: TextStyle(color: c.red)),
-            ],
-          ),
-        ),
+        item('manage', Icons.manage_accounts_outlined, 'Manage Account'),
+        item('suspend', Icons.person_off_outlined, 'Suspend Accounts'),
+        const PopupMenuDivider(),
+        item('logout', Icons.logout_rounded, 'Logout', color: c.red),
       ],
       child: Container(
-        padding: const EdgeInsets.all(4),
-        decoration: BoxDecoration(shape: BoxShape.circle, color: c.surfaceAlt),
-        child: avatar,
+        padding: const EdgeInsets.fromLTRB(4, 4, 10, 4),
+        decoration: BoxDecoration(
+          color: c.surfaceAlt,
+          borderRadius: BorderRadius.circular(AdminRadii.pill),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            avatar(15),
+            const SizedBox(width: 8),
+            Text(
+              'Admin',
+              style: TextStyle(
+                color: c.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 18,
+              color: c.textSecondary,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1037,18 +1604,40 @@ class AdminStatCard extends StatelessWidget {
     // border carries each KPI's color identity instead, matching the
     // redesign's "subtle borders over color blocks" direction.
     final accent = isEmpty ? c.textMuted : iconColor(c);
+    // The accent is a strip painted inside a uniformly-bordered card, NOT a
+    // differently-coloured left BorderSide: Flutter refuses to paint a
+    // rounded border whose sides have different colours ("A borderRadius
+    // can only be given on borders with uniform colors"). In a debug build
+    // that assertion aborted the card's painting after its background, so
+    // every loaded card showed as an empty white box.
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 16, 16, 16),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: c.surface,
         borderRadius: BorderRadius.circular(AdminRadii.card),
-        border: Border(
-          top: BorderSide(color: c.border),
-          right: BorderSide(color: c.border),
-          bottom: BorderSide(color: c.border),
-          left: BorderSide(color: accent, width: 3),
-        ),
+        border: Border.all(color: c.border),
       ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 3,
+            child: ColoredBox(color: accent),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+            child: _content(c, accent),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _content(AdminPalette c, Color accent) {
+    return SizedBox(
+      width: double.infinity,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1134,12 +1723,17 @@ class AdminQuickActionButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool filled;
 
+  /// Shows a small chevron after the label: the button opens a choice of
+  /// options (the Export Report buttons).
+  final bool opensOptions;
+
   const AdminQuickActionButton({
     super.key,
     required this.icon,
     required this.label,
     required this.onPressed,
     this.filled = false,
+    this.opensOptions = false,
   });
 
   @override
@@ -1151,26 +1745,41 @@ class AdminQuickActionButton extends StatelessWidget {
         icon: Icon(icon, size: 18),
         label: Text(label),
         style: ElevatedButton.styleFrom(
-          backgroundColor: c.green,
-          foregroundColor: c.isDark ? Colors.black : Colors.white,
+          backgroundColor: adminActionColor(c),
+          foregroundColor: adminOnActionColor(c),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AdminRadii.control),
-          ),
+          shape: const StadiumBorder(),
           elevation: 0,
         ),
       );
     }
-    return OutlinedButton.icon(
+    return OutlinedButton(
       onPressed: onPressed,
-      icon: Icon(icon, size: 18, color: c.textPrimary),
-      label: Text(label, style: TextStyle(color: c.textPrimary)),
       style: OutlinedButton.styleFrom(
+        backgroundColor: c.surface,
+        foregroundColor: c.textPrimary,
         side: BorderSide(color: c.border),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AdminRadii.control),
-        ),
+        padding: EdgeInsets.fromLTRB(14, 12, opensOptions ? 10 : 16, 12),
+        shape: const StadiumBorder(),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 18, color: c.textPrimary),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w600),
+          ),
+          if (opensOptions) ...[
+            const SizedBox(width: 6),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 18,
+              color: c.textSecondary,
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1193,30 +1802,41 @@ class AdminEmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 36),
+      padding: const EdgeInsets.symmetric(vertical: 28),
       child: Center(
+        // The mobile app's empty state (AgriEmptyState, as on its Orders
+        // page): a small dark-green icon on a pale-green circle, a bold
+        // title and a line under it.
         child: Column(
           children: [
             Container(
-              width: 62,
-              height: 62,
+              padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(
                 color: c.greenBg,
-                borderRadius: BorderRadius.circular(AdminRadii.card),
+                shape: BoxShape.circle,
               ),
-              child: Icon(icon, size: 29, color: c.green),
+              child: Icon(icon, size: 22, color: adminActionColor(c)),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Text(
               title,
+              textAlign: TextAlign.center,
               style: TextStyle(
-                color: c.textSecondary,
+                color: c.textPrimary,
                 fontSize: 14,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 4),
-            Text(subtitle, style: TextStyle(color: c.textMuted, fontSize: 12)),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: c.textSecondary,
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
           ],
         ),
       ),
@@ -1232,20 +1852,9 @@ class AdminLoadingSpinner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 48),
-      child: Center(
-        child: Container(
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: c.surface,
-            borderRadius: BorderRadius.circular(AdminRadii.card),
-            border: Border.all(color: c.border),
-          ),
-          child: CircularProgressIndicator(color: c.green),
-        ),
-      ),
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 48),
+      child: Center(child: AdminLoadingBar()),
     );
   }
 }
@@ -1295,7 +1904,7 @@ class AdminStreamError extends StatelessWidget {
 
 /// A section's title + optional subtitle — the visual-hierarchy primitive
 /// the Analytics Dashboard uses to separate Overview / Sales Performance /
-/// Transaction Breakdown / Market Intelligence from each other, instead of
+/// Market Intelligence from each other, instead of
 /// relying on spacing alone.
 class _SectionHeader extends StatelessWidget {
   final String title;
@@ -1312,7 +1921,7 @@ class _SectionHeader extends StatelessWidget {
           title,
           style: TextStyle(
             color: c.textPrimary,
-            fontSize: 16,
+            fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -1352,107 +1961,102 @@ class _AnalyticsDashboardView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     DashboardDataService.instance.ensureLoaded();
+    DashboardOverviewService.instance.ensureLoaded();
     final c = AdminThemeScope.of(context).palette;
     return _buildBody(context, c);
   }
 
   Widget _buildBody(BuildContext context, AdminPalette c) {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ---- HEADER ----
+          // ---- WELCOME ----
+          const _DashboardWelcome(),
+
+          const SizedBox(height: 22),
+
+          // ---- 1. OVERVIEW ----
+          // On their own, outside the analytics fetch below: four small
+          // aggregate queries (see DashboardOverviewService), loaded once
+          // and then kept current by its live listeners — so the cards
+          // appear as soon as each number is back instead of waiting for
+          // every order and product document to download.
+          // No Refresh button: every figure below updates by itself from
+          // the portal's live listeners.
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Analytics Dashboard',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Real-time insights for a stronger and more connected agricultural trade community.',
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Row(
-                children: [
-                  AdminQuickActionButton(
-                    icon: Icons.refresh,
-                    label: 'Refresh',
-                    onPressed: () async {
-                      await DashboardDataService.instance.refresh();
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Analytics data refreshed.'),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  AdminQuickActionButton(
-                    icon: Icons.picture_as_pdf_outlined,
-                    label: 'Export Report',
-                    onPressed: () => _openExportDialog(context),
-                  ),
-                ],
+              const Expanded(child: _SectionHeader(title: 'Overview')),
+              AdminQuickActionButton(
+                icon: Icons.picture_as_pdf_outlined,
+                label: 'Export Report',
+                opensOptions: true,
+                onPressed: () => _openExportDialog(context),
               ),
             ],
           ),
+          const SizedBox(height: 12),
+          ListenableBuilder(
+            listenable: DashboardOverviewService.instance,
+            builder: (context, _) =>
+                _overviewStrip(DashboardOverviewService.instance),
+          ),
 
-          const SizedBox(height: 28),
+          const SizedBox(height: 16),
 
           // Everything below is fed by DashboardDataService's cached
           // orders/products/market_prices fetch (see dashboard_data_service.
           // dart) — a one-shot .get(), not a live listener, refreshed only
-          // on TTL expiry or the Refresh button above. This is deliberate:
-          // Total Transaction Value and Transaction Breakdown must always
-          // read the exact same orders snapshot or the two could show
-          // figures that don't reconcile; Sales Performance and Market
-          // Intelligence don't need millisecond freshness either. Only the
-          // Overview section's Pending Verifications / Flagged Reports stay
-          // on real live streams, scoped narrowly below.
+          // on TTL expiry or the Refresh button above. Sales Performance
+          // and Market Intelligence both read that one
+          // orders snapshot, so their figures always reconcile with each
+          // other.
           ListenableBuilder(
             listenable: DashboardDataService.instance,
             builder: (context, _) {
               final svc = DashboardDataService.instance;
-              if (!svc.hasLoadedOnce) {
+              // Both sections are built from completed orders, so they
+              // appear as soon as orders are in — not held back for the
+              // product and price lists, which fill in when they arrive.
+              // Until then each section is in place as a skeleton.
+              if (!svc.ordersReady) {
                 return svc.lastError != null
                     ? const AdminStreamError()
-                    : const AdminLoadingSpinner();
+                    : const _DashboardSectionsSkeleton();
               }
 
               final orders = svc.orders;
               final products = svc.products;
               final now = DateTime.now();
-              final totalTransactionValue =
-                  DashboardAnalyticsService.platformTransactionTotal(orders);
-              final categoryRevenue = DashboardAnalyticsService.categoryRevenue(
-                orders,
-                products,
-              );
+              // Mapped once per data load, not once per chart rebuild.
+              final orderData = [for (final d in orders) d.data()];
               final topProducts = DashboardAnalyticsService.topSellingProducts(
                 orders,
               );
-              final baselineByCommodity = <String, double>{
+              // The supported commodity list (the Admin-managed one the
+              // whole app uses), each matched by name to its baseline
+              // price where the Admin has set one.
+              final commodities = [
+                for (final commodity in CommodityRegistry.instance.all)
+                  commodity.name,
+              ];
+              final baselineByName = <String, double>{
                 for (final doc in svc.marketPrices)
-                  (doc.data()['name'] ?? doc.id).toString():
-                      ((doc.data()['baselinePrice'] as num?)?.toDouble() ?? 0),
+                  if (((doc.data()['baselinePrice'] as num?) ?? 0) > 0)
+                    (doc.data()['name'] ?? doc.id)
+                        .toString()
+                        .trim()
+                        .toLowerCase(): (doc.data()['baselinePrice'] as num)
+                        .toDouble(),
+              };
+              final baselineByCommodity = <String, double>{
+                for (final name in commodities)
+                  if (baselineByName[name.toLowerCase()] != null)
+                    name: baselineByName[name.toLowerCase()]!,
               };
               final weeklyPricesByCommodity = <String, List<double?>>{
-                for (final name in baselineByCommodity.keys)
+                for (final name in commodities)
                   name: DashboardAnalyticsService.weeklyAveragePrice(
                     orders,
                     name,
@@ -1463,91 +2067,41 @@ class _AnalyticsDashboardView extends StatelessWidget {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ---- 1. OVERVIEW KPIs ----
-                  const _SectionHeader(title: 'Overview'),
-                  const SizedBox(height: 12),
-                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: DashboardDataService.instance.usersStream,
-                    builder: (context, usersSnap) {
-                      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream:
-                            DashboardDataService.instance.pendingReportsStream,
-                        builder: (context, reportsSnap) {
-                          if (usersSnap.hasError || reportsSnap.hasError) {
-                            return const AdminStreamError();
-                          }
-                          if (!usersSnap.hasData || !reportsSnap.hasData) {
-                            return const AdminLoadingSpinner();
-                          }
-                          // Marketplace users only — Admin accounts aren't part of
-                          // the Farmer/Buyer user base this KPI reports on. Farmers
-                          // only count once an admin has approved them (same field
-                          // Verify Farmers writes to) — a pending or rejected
-                          // application isn't a real, active marketplace user yet.
-                          final userDocs = usersSnap.data!.docs;
-                          final farmerCount =
-                              DashboardAnalyticsService.farmerCount(userDocs);
-                          final buyerCount =
-                              DashboardAnalyticsService.buyerCount(userDocs);
-                          final pendingVerifications =
-                              DashboardAnalyticsService.pendingVerifications(
-                                userDocs,
-                              );
-                          final flaggedReports = reportsSnap.data!.docs.length;
-
-                          return _overviewKpiGrid(
-                            totalUsers: farmerCount + buyerCount,
-                            farmerCount: farmerCount,
-                            buyerCount: buyerCount,
-                            pendingVerifications: pendingVerifications,
-                            flaggedReports: flaggedReports,
-                            totalTransactionValue: totalTransactionValue,
-                          );
-                        },
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 28),
-
-                  // ---- 2. SALES PERFORMANCE ----
-                  const _SectionHeader(title: 'Sales Performance'),
-                  const SizedBox(height: 12),
+                  // ---- 2. SALES PERFORMANCE ---- (each card is titled)
                   _responsiveRow(
                     [
                       ChartCaptureBoundary(
                         captureKey: DashboardChartKeys.salesOverview,
-                        child: _AdminSalesChartCard(
-                          orders: orders.map((d) => d.data()).toList(),
-                        ),
+                        child: AdminSalesPerformanceCard(orders: orderData),
                       ),
                       ChartCaptureBoundary(
                         captureKey: DashboardChartKeys.salesByCategory,
                         child: AdminSalesByCategoryCard(
-                          categoryRevenue: categoryRevenue,
+                          revenueFor: (months) =>
+                              DashboardAnalyticsService.categoryRevenue(
+                                orders,
+                                products,
+                                range:
+                                    DashboardAnalyticsService.lastMonthsRange(
+                                      DateTime.now(),
+                                      months,
+                                    ),
+                              ),
                         ),
                       ),
                     ],
                     flexes: const [3, 2],
                   ),
 
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 16),
 
-                  // ---- 3. TRANSACTION BREAKDOWN ----
-                  const _SectionHeader(title: 'Transaction Breakdown'),
-                  const SizedBox(height: 12),
-                  _pricingTypeBreakdown(orders, c),
-
-                  const SizedBox(height: 28),
-
-                  // ---- 4. MARKET INTELLIGENCE ----
-                  const _SectionHeader(title: 'Market Intelligence'),
-                  const SizedBox(height: 12),
+                  // ---- 3. MARKET INTELLIGENCE ---- (each card is titled)
                   _responsiveRow(
                     [
                       ChartCaptureBoundary(
                         captureKey: DashboardChartKeys.priceTrend,
                         child: AdminPriceTrendCard(
+                          commodities: commodities,
                           baselineByCommodity: baselineByCommodity,
                           weeklyPricesByCommodity: weeklyPricesByCommodity,
                         ),
@@ -1556,6 +2110,11 @@ class _AnalyticsDashboardView extends StatelessWidget {
                     ],
                     flexes: const [3, 2],
                   ),
+
+                  const SizedBox(height: 16),
+
+                  // ---- 4. MARKET TRENDS ---- (the card is titled)
+                  const AdminMarketTrendsCard(),
                 ],
               );
             },
@@ -1565,113 +2124,165 @@ class _AnalyticsDashboardView extends StatelessWidget {
     );
   }
 
-  Widget _overviewKpiGrid({
-    required int totalUsers,
-    required int farmerCount,
-    required int buyerCount,
-    required int pendingVerifications,
-    required int flaggedReports,
-    required num totalTransactionValue,
-  }) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final columns = width >= 900 ? 4 : (width >= 560 ? 2 : 1);
-        const spacing = 16.0;
-        final cardWidth = (width - spacing * (columns - 1)) / columns;
-        final cards = [
-          AdminStatCard(
-            label: 'Total Users',
-            value: '$totalUsers',
-            delta: '$farmerCount farmers · $buyerCount buyers',
-            icon: Icons.groups_2_outlined,
-            iconColor: (c) => c.blue,
-            iconBg: (c) => c.blueBg,
-            isEmpty: totalUsers == 0,
-          ),
-          AdminStatCard(
-            label: 'Pending Verifications',
-            value: '$pendingVerifications',
-            delta: 'Awaiting admin review',
-            icon: Icons.fact_check_outlined,
-            iconColor: (c) => c.amber,
-            iconBg: (c) => c.amberBg,
-            isEmpty: pendingVerifications == 0,
-          ),
-          AdminStatCard(
-            label: 'Flagged Reports',
-            value: '$flaggedReports',
-            delta: 'Unresolved',
-            icon: Icons.flag_outlined,
-            iconColor: (c) => c.red,
-            iconBg: (c) => c.redBg,
-            isEmpty: flaggedReports == 0,
-          ),
-          AdminStatCard(
-            label: 'Total Transaction Value',
-            value: formatPeso(totalTransactionValue),
-            delta: 'From completed orders',
-            icon: Icons.receipt_long_outlined,
-            iconColor: (c) => c.green,
-            iconBg: (c) => c.greenBg,
-            isEmpty: totalTransactionValue == 0,
-          ),
-        ];
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: [
-            for (final card in cards) SizedBox(width: cardWidth, child: card),
-          ],
+  // The Overview strip. Each figure is on its own: a shimmer while it
+  // loads, the number once it has, or a dash with "could not load" if only
+  // that one failed — the other three are unaffected either way.
+  Widget _overviewStrip(DashboardOverviewService metrics) {
+    AdminOverviewItem item<T>(
+      OverviewMetric<T> metric, {
+      required String label,
+      required IconData icon,
+      required String Function(T value) value,
+      required String Function(T value) caption,
+      required VoidCallback onTap,
+      bool attention = false,
+    }) {
+      if (metric.isLoading) {
+        return AdminOverviewItem(
+          label: label,
+          icon: icon,
+          value: null,
+          caption: '',
+          attention: attention,
+          onTap: onTap,
         );
-      },
+      }
+      if (metric.hasError) {
+        return AdminOverviewItem(
+          label: label,
+          icon: icon,
+          value: '—',
+          caption: 'Could not load · reload the page',
+          failed: true,
+          attention: attention,
+          onTap: onTap,
+        );
+      }
+      final data = metric.value as T;
+      return AdminOverviewItem(
+        label: label,
+        icon: icon,
+        value: value(data),
+        caption: caption(data),
+        attention: attention,
+        onTap: onTap,
+      );
+    }
+
+    // Each card opens the page its figure comes from.
+    void open(AdminNotificationTarget page) =>
+        adminOpenPageRequest.value = page;
+
+    return AdminOverviewStrip(
+      items: [
+        // Marketplace users only: buyers plus APPROVED farmers. Pending and
+        // rejected farmer applications, and Admin accounts, are not counted.
+        item(
+          metrics.totalUsers,
+          label: 'Total Users',
+          icon: Icons.groups_2_outlined,
+          value: (v) => '${v.farmers + v.buyers}',
+          caption: (v) =>
+              '${v.farmers} approved ${v.farmers == 1 ? 'farmer' : 'farmers'}'
+              ' · ${v.buyers} ${v.buyers == 1 ? 'buyer' : 'buyers'}',
+          onTap: () {
+            AdminSubNav.verification.value = VerificationSection.accounts;
+            open(AdminNotificationTarget.verification);
+          },
+        ),
+        // Farmers who registered and are neither approved nor rejected yet.
+        item(
+          metrics.pendingVerifications,
+          label: 'Pending Verifications',
+          icon: Icons.fact_check_outlined,
+          value: (v) => '$v',
+          caption: (_) => 'Farmers awaiting admin review',
+          attention: true,
+          onTap: () {
+            AdminSubNav.verification.value = VerificationSection.applications;
+            open(AdminNotificationTarget.verification);
+          },
+        ),
+        // Reports not yet resolved or dismissed, whoever filed them.
+        item(
+          metrics.flaggedReports,
+          label: 'Flagged Reports',
+          icon: Icons.flag_outlined,
+          value: (v) => '$v',
+          caption: (_) => 'Active, unresolved cases',
+          onTap: () {
+            AdminSubNav.moderation.value = ModerationSection.pending;
+            open(AdminNotificationTarget.moderation);
+          },
+        ),
+        // Sum of completed orders only — never pending, cancelled or
+        // rejected ones.
+        item(
+          metrics.totalTransactionValue,
+          label: 'Total Transaction Value',
+          icon: Icons.payments_outlined,
+          value: (v) => formatPeso(v),
+          caption: (_) => 'Completed orders only',
+          onTap: () => open(AdminNotificationTarget.transactions),
+        ),
+      ],
     );
   }
 }
 
-// Transaction Breakdown section — Retail/Wholesale orders + revenue, all-
-// time (same scope as the Total Transaction Value KPI card). 4 compact
-// tiles matching the other sections' visual weight. See
-// DashboardAnalyticsService.pricingTypeSummary's doc comment for the math.
-Widget _pricingTypeBreakdown(
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
-  AdminPalette c,
-) {
-  final summary = DashboardAnalyticsService.pricingTypeSummary(orders);
-  Widget tile(String label, String value, Color accent) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(AdminRadii.card),
-        border: Border.all(color: c.border),
-      ),
-      child: Row(
+/// The dashboard's two chart sections before their data is in: the
+/// headings and one skeleton per card, laid out exactly like the real
+/// sections so the page is in place at once.
+class _DashboardSectionsSkeleton extends StatelessWidget {
+  const _DashboardSectionsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _SectionHeader(title: 'Sales Performance'),
+        const SizedBox(height: 12),
+        _responsiveRow(
+          const [AdminChartCardSkeleton(), AdminChartCardSkeleton()],
+          flexes: const [3, 2],
+        ),
+        const SizedBox(height: 16),
+        _responsiveRow(
+          const [
+            AdminChartCardSkeleton(bodyHeight: 288),
+            AdminChartCardSkeleton(bodyHeight: 288),
+          ],
+          flexes: const [3, 2],
+        ),
+      ],
+    );
+  }
+}
+
+/// The Verification page: farmers' applications (the Verification Queue),
+/// or every user account — chosen from the sidebar's submenu (see
+/// AdminSubNav.verification). Both stay alive, so switching back does not
+/// reload either.
+class _VerificationPage extends StatelessWidget {
+  const _VerificationPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<VerificationSection>(
+      valueListenable: AdminSubNav.verification,
+      builder: (context, section, _) => IndexedStack(
+        index: section.index,
+        sizing: StackFit.expand,
         children: [
-          Container(width: 3, height: 32, color: accent),
-          const SizedBox(width: 12),
-          Expanded(
+          const VerificationQueueView(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: c.textSecondary,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  value,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+                // The title is in the utility bar above.
+                const Expanded(child: AdminUserAccountsView()),
               ],
             ),
           ),
@@ -1679,13 +2290,6 @@ Widget _pricingTypeBreakdown(
       ),
     );
   }
-
-  return _responsiveRow([
-    tile('Retail Orders', '${summary.retailOrders}', c.blue),
-    tile('Retail Revenue', formatPeso(summary.retailRevenue), c.blue),
-    tile('Wholesale Orders', '${summary.wholesaleOrders}', c.green),
-    tile('Wholesale Revenue', formatPeso(summary.wholesaleRevenue), c.green),
-  ]);
 }
 
 // Lays [children] out as a Row of Expanded(flex: flexes[i]) above ~900px,
@@ -1719,186 +2323,16 @@ Widget _responsiveRow(List<Widget> children, {List<int>? flexes}) {
   );
 }
 
-// ---- Platform-wide live sales chart ----
-// Reuses FarmerRevenueService.revenueBars, which only ever buckets whatever
-// order list it's handed by date — it has no notion of "whose" orders they
-// are, so passing it every order on the platform (instead of one farmer's)
-// gives an honest, live, platform-wide chart for free.
-class _AdminSalesChartCard extends StatefulWidget {
-  final List<Map<String, dynamic>> orders;
-  const _AdminSalesChartCard({required this.orders});
-
-  @override
-  State<_AdminSalesChartCard> createState() => _AdminSalesChartCardState();
-}
-
-class _AdminSalesChartCardState extends State<_AdminSalesChartCard> {
-  FarmerRevenueView _view = FarmerRevenueView.weekly;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    final now = DateTime.now();
-
-    final bars = FarmerRevenueService.revenueBars(
-      orders: widget.orders,
-      view: _view,
-      now: now,
-    );
-    final maxValue = bars.isEmpty
-        ? 1.0
-        : bars
-              .map((bar) => (bar['value'] as num).toDouble())
-              .reduce((a, b) => a > b ? a : b);
-    final totalRevenue = FarmerRevenueService.totalRevenueForRange(
-      orders: widget.orders,
-      view: _view,
-      now: now,
-    );
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(AdminRadii.card),
-        border: Border.all(color: c.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Sales Overview',
-                    style: TextStyle(
-                      color: c.textPrimary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Platform-wide, from completed orders',
-                    style: TextStyle(color: c.textSecondary, fontSize: 13),
-                  ),
-                ],
-              ),
-              Container(
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: c.surfaceAlt,
-                  borderRadius: BorderRadius.circular(AdminRadii.control),
-                ),
-                child: Row(
-                  children: [
-                    _viewToggleChip(c, 'Week', FarmerRevenueView.weekly),
-                    _viewToggleChip(c, 'Month', FarmerRevenueView.monthly),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _view == FarmerRevenueView.weekly ? 'This week' : 'Last 6 months',
-            style: TextStyle(fontSize: 12, color: c.textSecondary),
-          ),
-          Text(
-            formatPeso(totalRevenue),
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 16),
-          if (totalRevenue == 0)
-            const AdminEmptyState(
-              icon: Icons.show_chart,
-              title: 'No completed sales in this period yet',
-              subtitle: 'The chart will fill in as orders complete.',
-            )
-          else
-            SizedBox(
-              height: 108,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: List.generate(bars.length, (i) {
-                  final value = (bars[i]['value'] as num).toDouble();
-                  final height = maxValue <= 0
-                      ? 0.0
-                      : ((value / maxValue) * 80.0).clamp(8.0, 80.0);
-                  return Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Container(
-                        width: 18,
-                        height: height,
-                        decoration: BoxDecoration(
-                          color: value > 0 ? c.green : c.surfaceAlt,
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(6),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        bars[i]['label'].toString(),
-                        style: TextStyle(fontSize: 10, color: c.textSecondary),
-                      ),
-                    ],
-                  );
-                }),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _viewToggleChip(
-    AdminPalette c,
-    String label,
-    FarmerRevenueView value,
-  ) {
-    final selected = _view == value;
-    return GestureDetector(
-      onTap: () => setState(() => _view = value),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected ? c.green : Colors.transparent,
-          borderRadius: BorderRadius.circular(AdminRadii.control),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : c.textSecondary,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ============================================================
 // DEMAND HEATMAP — a smooth, blended density layer (ride-hailing-app
 // style) instead of separate per-barangay circles.
 //
-// Every point is one completed order, plotted at its BUYER's own saved
-// location (the pin they set at registration — see
-// DashboardAnalyticsService._resolveBuyerArea), filtered to the currently
-// selected Month/Year. Buyers naturally cluster by proximity, so several
-// nearby (or repeat) buyers blend into visibly stronger heat with no
-// separate weighting scheme needed — see _buildDemandPoints below.
+// Completed orders only, for the selected Month/Year, by the BUYER's own
+// saved area (see DashboardAnalyticsService._resolveBuyerArea) — never the
+// farmer's, product's or seller's. Purchases are counted per area and each
+// area is one point, weighted by its count: more completed purchases means
+// stronger heat. Aggregated only — no buyer's identity or exact pin is
+// plotted. See _buildDemandPoints below.
 // ============================================================
 
 // Muted/light Google Maps style: strips POI business/attraction/worship
@@ -1924,40 +2358,38 @@ const String _mutedMapStyle = '''
 ]
 ''';
 
-// Color ramp for the custom heat overlay below: yellow (low) -> orange
-// (mid) -> red (high). Google deprecated google.maps.visualization
-// .HeatmapLayer as of Maps JavaScript API v3.65 (confirmed live, in this
-// project, on 2026-09-28 — the map tile itself rendered Google's own
-// deprecation error banner) — google_maps_flutter's Heatmap widget still
-// only targets that removed API on web, so it's unusable here now. This
-// hand-painted overlay (see _DemandHeatmapPainter) replaces it and isn't
-// tied to that deprecated library at all.
-const Color _heatLow = Color(0xFFFFEB3B); // yellow
-const Color _heatMid = Color(0xFFFF9800); // orange
-const Color _heatHigh = Color(0xFFE53935); // red = highest demand
+// The heat is drawn by the map itself, as circles at each area (see
+// _HeatmapMapState._heatCircles), in the green -> yellow -> orange -> red
+// scale of admin_demand_widgets.dart — not with a heatmap layer:
+// Google deprecated google.maps.visualization.HeatmapLayer as of Maps
+// JavaScript API v3.65 (confirmed live, in this project, on 2026-09-28 —
+// the map tile itself rendered Google's own deprecation error banner) —
+// google_maps_flutter's Heatmap widget still only targets that removed API
+// on web, so it's unusable here now.
 
-Color _heatColorForIntensity(double t) {
-  final clamped = t.clamp(0.0, 1.0);
-  return clamped <= 0.5
-      ? Color.lerp(_heatLow, _heatMid, clamped / 0.5)!
-      : Color.lerp(_heatMid, _heatHigh, (clamped - 0.5) / 0.5)!;
-}
+// Real completed-order demand only — no mock/baseline padding. One point
+// per buyer area (DashboardAnalyticsService.demandByBuyerAreaForMonth),
+// at that area's general location, weighted by its number of completed
+// purchases — the weight becomes the heat's colour and size. An area
+// with no completed purchase has no point, and a buyer with no location on
+// file contributes to none, rather than a fabricated one.
+// Shown on the map and in Highest Demand Areas when the selected
+// Month/Year has no completed purchase with a buyer area.
+const String _noDemandMessage = 'No completed buyer purchases for this period.';
 
-// Real completed-order demand only — no mock/baseline padding. Every
-// point is one completed order at its buyer's real resolved location
-// (DashboardAnalyticsService.buyerDemandPoints) — a buyer with no
-// location on file at all contributes no point, rather than a fabricated
-// one. Several distinct buyers naturally land at different real
-// coordinates, so unlike the old barangay-ring version this needs no
-// synthetic jitter to avoid a single stacked dot — repeat orders from the
-// very same buyer pin legitimately do stack, which is exactly the
-// intensity signal a heatmap should show.
 List<WeightedLatLng> _buildDemandPoints(
-  List<({double lat, double lng})> buyerPoints,
+  List<({String area, int orderCount, num revenue, double? lat, double? lng})>
+  demand,
 ) {
-  return buyerPoints
-      .map((p) => WeightedLatLng(LatLng(p.lat, p.lng), weight: 1))
-      .toList();
+  return [
+    for (final area in demand)
+      // An area still being located has no point yet.
+      if (area.orderCount > 0 && area.lat != null && area.lng != null)
+        WeightedLatLng(
+          LatLng(area.lat!, area.lng!),
+          weight: area.orderCount.toDouble(),
+        ),
+  ];
 }
 
 // Pan/zoom-out limit for the heatmap — restricted to Laurel itself
@@ -2004,7 +2436,11 @@ LatLngBounds _computeMapBounds(List<({double lat, double lng})> buyerPoints) {
     if (p.lng < minLng) minLng = p.lng;
     if (p.lng > maxLng) maxLng = p.lng;
   }
-  const pad = 0.05;
+  // In the browser this limit applies to the whole visible map, not just
+  // its centre: with a tight margin the Town view was already wider than
+  // the limit, so the map could not be dragged at all. ~28km of room keeps
+  // the map around Laurel while leaving it free to move at every preset.
+  const pad = 0.25;
   return LatLngBounds(
     southwest: LatLng(minLat - pad, minLng - pad),
     northeast: LatLng(maxLat + pad, maxLng + pad),
@@ -2018,6 +2454,10 @@ LatLngBounds _computeMapBounds(List<({double lat, double lng})> buyerPoints) {
 const double _zoomTownLevel = 12.0;
 const double _zoomBarangayLevel = 14.0;
 const double _zoomStreetLevel = 16.0;
+
+/// What the Demand Heatmap is showing: where buyers bought, or where they
+/// searched. Two layers, never combined.
+enum _HeatLayer { purchases, searches }
 
 class _DemandHeatmapView extends StatefulWidget {
   const _DemandHeatmapView();
@@ -2050,21 +2490,69 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
   // subscribes to the same instance. Completed orders / products no longer
   // need their own stream fields at all: DashboardDataService.instance.
   // orders/.products is a cached one-shot fetch shared across every admin
-  // page, read directly in build() below via a ListenableBuilder. _geoStream
-  // and _searchEventsStream stay page-local — they're unique to this view.
+  // page, read directly in build() below via a ListenableBuilder.
   Stream<QuerySnapshot<Map<String, dynamic>>> get _usersStream =>
       DashboardDataService.instance.usersStream;
-  late final _geoStream = FirebaseFirestore.instance
-      .collectionGroup('private')
-      .snapshots();
-  late final _searchEventsStream = FirebaseFirestore.instance
-      .collection('searchEvents')
-      .snapshots();
+
+  // Buyers' map pins (users/{uid}/private/geo — exact coordinates are kept
+  // off the main user doc, see firestore.rules). Read once each, only for
+  // the buyers behind a completed order, and kept for the session — instead
+  // of a live collection-group listener on every `private` document in the
+  // database, which also pulled in every order's contact document.
+  // null = looked up, no pin saved.
+  static final Map<String, ({double lat, double lng})?> _buyerPins = {};
+  static final Set<String> _buyerPinsInFlight = {};
+  final ValueNotifier<int> _buyerPinsVersion = ValueNotifier<int>(0);
+
+  void _loadBuyerPins(Set<String> buyerIds) {
+    final missing = [
+      for (final id in buyerIds)
+        if (!_buyerPins.containsKey(id) && _buyerPinsInFlight.add(id)) id,
+    ];
+    if (missing.isEmpty) return;
+    final users = FirebaseFirestore.instance.collection('users');
+    AdminPerf.time(
+      'heatmap: buyer pins',
+      () => Future.wait([
+        for (final id in missing)
+          users
+              .doc(id)
+              .collection('private')
+              .doc('geo')
+              .get()
+              .then<({double lat, double lng})?>((doc) {
+                final lat = (doc.data()?['latitude'] as num?)?.toDouble();
+                final lng = (doc.data()?['longitude'] as num?)?.toDouble();
+                return lat == null || lng == null ? null : (lat: lat, lng: lng);
+              })
+              // Unreadable for one buyer: that one has no pin, the rest
+              // are unaffected.
+              .catchError((Object _) => null),
+      ]),
+      describe: (pins) =>
+          '${pins.length} buyers, ${pins.where((p) => p != null).length} '
+          'with a pin',
+    ).then((pins) {
+      for (var i = 0; i < missing.length; i++) {
+        _buyerPinsInFlight.remove(missing[i]);
+        _buyerPins[missing[i]] = pins[i];
+      }
+      if (mounted) _buyerPinsVersion.value++;
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     DashboardDataService.instance.ensureLoaded();
+    _loadAreaCache();
+  }
+
+  @override
+  void dispose() {
+    _searchSubscription?.cancel();
+    _buyerPinsVersion.dispose();
+    super.dispose();
   }
 
   // Defaults to the current month/year on first open — everything below
@@ -2081,7 +2569,10 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
   // from wherever the admin left off instead of resetting to Laurel's
   // center. (Each _HeatmapMap still creates its own GoogleMapController;
   // this is what makes the *camera position* itself carry over.)
-  CameraPosition _camera = const CameraPosition(target: _center, zoom: 12.5);
+  CameraPosition _camera = const CameraPosition(
+    target: _center,
+    zoom: _zoomStreetLevel,
+  );
 
   // Which month/year the camera was last auto-framed for — null on first
   // build so even the very first render frames on real data if there is
@@ -2092,21 +2583,168 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
   int? _framedMonth;
   int? _framedYear;
 
-  void _onCameraIdle(CameraPosition position) {
-    _camera = position;
+  // The area whose purchases Most Purchased Products by Area shows. Chosen
+  // from Highest Demand Areas or by clicking its heat on the map; until
+  // then (and whenever a period no longer has it) the busiest area.
+  String? _selectedArea;
+
+  // Goes up each time the Admin picks an area, so the map moves to it —
+  // even when the same area is picked again after panning away.
+  int _focusRequest = 0;
+
+  void _selectArea(String area) => setState(() {
+    _selectedArea = area;
+    _focusRequest++;
+  });
+
+  // Which demand the map shows. Purchases and searches are two separate
+  // layers: switching replaces one with the other, it never blends them.
+  _HeatLayer _layer = _HeatLayer.purchases;
+
+  // Buyer searches for the selected month — a live listener on just that
+  // month's records, opened only while the Searches layer is shown.
+  // null = not loaded yet.
+  List<Map<String, dynamic>>? _searchEvents;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _searchSubscription;
+  int? _searchPeriod;
+
+  void _watchSearches() {
+    final period = _selectedYear * 12 + _selectedMonth;
+    if (_searchPeriod == period && _searchSubscription != null) return;
+    _searchSubscription?.cancel();
+    _searchPeriod = period;
+    _searchEvents = null;
+    final window = DashboardAnalyticsService.monthWindow(
+      _selectedYear,
+      _selectedMonth,
+    );
+    _searchSubscription =
+        AdminPerf.firstEvent(
+          'heatmap: searchEvents for the month (live)',
+          FirebaseFirestore.instance
+              .collection('searchEvents')
+              .where(
+                'createdAt',
+                isGreaterThanOrEqualTo: Timestamp.fromDate(window.start),
+              )
+              .where('createdAt', isLessThan: Timestamp.fromDate(window.end))
+              .snapshots(),
+          describe: (s) => '${s.docs.length} docs',
+        ).listen(
+          (snapshot) {
+            if (!mounted || _searchPeriod != period) return;
+            setState(() {
+              _searchEvents = [for (final doc in snapshot.docs) doc.data()];
+            });
+          },
+          onError: (Object _) {
+            if (!mounted || _searchPeriod != period) return;
+            // Shown as "no searches" rather than loading forever; switching
+            // month or layer tries again.
+            _searchSubscription = null;
+            setState(() => _searchEvents = const []);
+          },
+        );
   }
 
-  static LatLng _centerOf(List<({double lat, double lng})> points) {
-    if (points.isEmpty) return _center;
-    var minLat = points.first.lat, maxLat = points.first.lat;
-    var minLng = points.first.lng, maxLng = points.first.lng;
-    for (final p in points) {
-      if (p.lat < minLat) minLat = p.lat;
-      if (p.lat > maxLat) maxLat = p.lat;
-      if (p.lng < minLng) minLng = p.lng;
-      if (p.lng > maxLng) maxLng = p.lng;
+  // Where an area is, for the ones no buyer pin could place: looked up
+  // once by name and kept for the session. null = looked up, not found.
+  static final Map<String, ({double lat, double lng})?> _areaLookups = {};
+  static final Set<String> _areaLookupsInFlight = {};
+
+  Map<String, ({double lat, double lng})> get _areaCoordinates => {
+    for (final entry in _areaLookups.entries)
+      if (entry.value != null) entry.key: entry.value!,
+  };
+
+  // The lookups run one after another, a little over a second apart: the
+  // public lookup service allows one request per second.
+  static Future<void> _areaLookupQueue = Future.value();
+
+  // Area name → where it is, kept in this browser's storage. Place names
+  // and their public coordinates only — nothing about any buyer. Areas
+  // that could not be found are not kept, so they are tried again later.
+  static const String _areaCacheKey = 'admin_area_coordinates_v1';
+  static bool _areaCacheLoaded = false;
+
+  Future<void> _loadAreaCache() async {
+    if (_areaCacheLoaded) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString(_areaCacheKey);
+      if (saved != null) {
+        final decoded = jsonDecode(saved);
+        if (decoded is Map) {
+          for (final entry in decoded.entries) {
+            final at = entry.value;
+            if (at is List && at.length == 2 && at[0] is num && at[1] is num) {
+              _areaLookups.putIfAbsent(
+                entry.key.toString(),
+                () => (
+                  lat: (at[0] as num).toDouble(),
+                  lng: (at[1] as num).toDouble(),
+                ),
+              );
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Storage unavailable or unreadable: the areas are simply looked up.
     }
-    return LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
+    _areaCacheLoaded = true;
+    if (mounted) setState(() {});
+  }
+
+  static Future<void> _saveAreaCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _areaCacheKey,
+        jsonEncode({
+          for (final entry in _areaLookups.entries)
+            if (entry.value != null)
+              entry.key: [entry.value!.lat, entry.value!.lng],
+        }),
+      );
+    } catch (_) {
+      // Not saved: they are looked up again next time.
+    }
+  }
+
+  // Fire-and-forget, safe on every rebuild: each area is asked for once.
+  // An area is a barangay or town, so this locates a place — it is not a
+  // buyer's address — so it is used as found: rounding it, as buyers'
+  // own pins are rounded, would only move the area off its real spot.
+  //
+  // What is found is remembered on this browser (see _loadAreaCache), so
+  // an area is looked up once, not once every time the portal is opened.
+  void _locateAreas(List<String> areas) {
+    // Not before the remembered coordinates are in: they may already hold
+    // these areas.
+    if (!_areaCacheLoaded) return;
+    for (final area in areas) {
+      if (_areaLookups.containsKey(area) || !_areaLookupsInFlight.add(area)) {
+        continue;
+      }
+      _areaLookupQueue = _areaLookupQueue.then((_) async {
+        final found = await GeocodingService.forwardGeocode(
+          '$area, Philippines',
+        );
+        _areaLookupsInFlight.remove(area);
+        _areaLookups[area] = found == null
+            ? null
+            : (lat: found.lat, lng: found.lng);
+        if (found != null) _saveAreaCache();
+        // Found or not, the map has something new to say.
+        if (mounted) setState(() {});
+        await Future<void>.delayed(const Duration(milliseconds: 1100));
+      });
+    }
+  }
+
+  void _onCameraIdle(CameraPosition position) {
+    _camera = position;
   }
 
   Future<void> _openFullscreen(
@@ -2114,6 +2752,8 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
     required List<WeightedLatLng> points,
     required LatLngBounds bounds,
     required VoidCallback onExport,
+    String? emptyMessage,
+    String legendTitle = 'Completed purchases',
   }) async {
     final themeScope = AdminThemeScope.of(context);
     await Navigator.of(context, rootNavigator: true).push(
@@ -2137,6 +2777,8 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
               bounds: bounds,
               onCameraIdle: _onCameraIdle,
               onExport: onExport,
+              emptyMessage: emptyMessage,
+              legendTitle: legendTitle,
             ),
           );
         },
@@ -2149,11 +2791,42 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
 
   Future<void> _exportReport(
     BuildContext context,
-    List<({String area, int orderCount, num revenue, double lat, double lng})>
+    List<({String area, int orderCount, num revenue, double? lat, double? lng})>
     demand,
-    List<MapEntry<String, int>> topSearches,
   ) async {
     final periodLabel = '${_monthNames[_selectedMonth - 1]} $_selectedYear';
+    // Buyer searches are only part of the exported report, so they are read
+    // once, here, when a report is asked for — not kept open as a live
+    // listener for the whole time the page is on screen.
+    var topSearches = const <MapEntry<String, int>>[];
+    try {
+      final searches = await AdminPerf.time(
+        'heatmap export: searchEvents',
+        // Only the month being exported — not the whole collection.
+        () {
+          final window = DashboardAnalyticsService.monthWindow(
+            _selectedYear,
+            _selectedMonth,
+          );
+          return FirebaseFirestore.instance
+              .collection('searchEvents')
+              .where(
+                'createdAt',
+                isGreaterThanOrEqualTo: Timestamp.fromDate(window.start),
+              )
+              .where('createdAt', isLessThan: Timestamp.fromDate(window.end))
+              .get();
+        },
+        describe: (s) => '${s.docs.length} docs',
+      );
+      topSearches = DashboardAnalyticsService.topSearchQueriesForMonth(
+        searches.docs,
+        year: _selectedYear,
+        month: _selectedMonth,
+      );
+    } catch (_) {
+      // The report is still exported, without the searches table's rows.
+    }
     final bytes = await PdfReportService.buildDemandReport(
       demand: demand
           .map(
@@ -2175,73 +2848,48 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
     );
   }
 
-  Widget _monthYearSelector(AdminPalette c, List<int> years) {
-    InputDecoration pillDecoration() => InputDecoration(
-      isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      filled: true,
-      fillColor: c.surfaceAlt,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide(color: c.border),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide(color: c.border),
+  // Which product category the heat is for; null = every category.
+  String? _category;
+
+  Widget _categorySelector(AdminPalette c) {
+    final categories = <String>{
+      ...DashboardAnalyticsService.salesCategories,
+      ...CommodityRegistry.instance.categories,
+    }.toList();
+    return Tooltip(
+      message: 'Show demand for one product category',
+      child: AdminPillDropdown<String?>(
+        value: categories.contains(_category) ? _category : null,
+        width: 190,
+        icon: Icons.category_outlined,
+        items: [
+          const DropdownMenuItem(value: null, child: Text('All Categories')),
+          for (final name in categories)
+            DropdownMenuItem(value: name, child: Text(name)),
+        ],
+        onChanged: (value) => setState(() => _category = value),
       ),
     );
+  }
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          width: 150,
-          child: DropdownButtonFormField<int>(
-            initialValue: _selectedMonth,
-            decoration: pillDecoration(),
-            dropdownColor: c.surface,
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-            icon: Icon(Icons.expand_more, color: c.textSecondary, size: 18),
-            items: List.generate(
-              12,
-              (i) =>
-                  DropdownMenuItem(value: i + 1, child: Text(_monthNames[i])),
-            ),
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => _selectedMonth = value);
-            },
-          ),
-        ),
-        const SizedBox(width: 10),
-        SizedBox(
-          width: 100,
-          child: DropdownButtonFormField<int>(
-            initialValue: years.contains(_selectedYear)
-                ? _selectedYear
-                : years.first,
-            decoration: pillDecoration(),
-            dropdownColor: c.surface,
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-            icon: Icon(Icons.expand_more, color: c.textSecondary, size: 18),
-            items: years
-                .map((y) => DropdownMenuItem(value: y, child: Text('$y')))
-                .toList(),
-            onChanged: (value) {
-              if (value == null) return;
-              setState(() => _selectedYear = value);
-            },
-          ),
-        ),
-      ],
+  // The period is always a whole month: one pill that opens a calendar of
+  // months, over the years there is something to show for.
+  Widget _monthYearSelector(AdminPalette c, List<int> years) {
+    var firstYear = _selectedYear;
+    var lastYear = _selectedYear;
+    for (final year in years) {
+      if (year < firstYear) firstYear = year;
+      if (year > lastYear) lastYear = year;
+    }
+    return AdminMonthPill(
+      year: _selectedYear,
+      month: _selectedMonth,
+      firstYear: firstYear,
+      lastYear: lastYear,
+      onChanged: (year, month) => setState(() {
+        _selectedYear = year;
+        _selectedMonth = month;
+      }),
     );
   }
 
@@ -2256,33 +2904,22 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
           stream: _usersStream,
           builder: (context, usersSnap) {
-            // Exact coordinates live under users/{uid}/private/geo (see
-            // firestore.rules), not on the main user doc, so the demand
-            // heatmap's admin-only view reads them via this collection-group
-            // stream and merges them into usersByUid below — the one place in
-            // the app that's allowed to see every buyer's real pin at once.
-            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _geoStream,
-              builder: (context, geoSnap) {
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: _searchEventsStream,
-                  builder: (context, searchSnap) {
+            // Rebuilt when buyers' map pins arrive (see _loadBuyerPins): the
+            // page is drawn first from the areas buyers saved by name, and
+            // the pins then place them more exactly.
+            return ValueListenableBuilder<int>(
+              valueListenable: _buyerPinsVersion,
+              builder: (context, _, _) {
+                return Builder(
+                  builder: (context) {
+                    // Only completed orders and user profiles are needed
+                    // here — not the product or price lists.
                     if (usersSnap.hasError ||
-                        geoSnap.hasError ||
-                        searchSnap.hasError ||
-                        svc.lastError != null) {
+                        (!svc.ordersReady && svc.lastError != null)) {
                       final failedSource = usersSnap.hasError
                           ? 'user profiles'
-                          : geoSnap.hasError
-                          ? 'saved locations'
-                          : searchSnap.hasError
-                          ? 'buyer search activity'
-                          : 'completed orders or product listings';
-                      final streamError =
-                          usersSnap.error ??
-                          geoSnap.error ??
-                          searchSnap.error ??
-                          svc.lastError;
+                          : 'completed orders';
+                      final streamError = usersSnap.error ?? svc.lastError;
                       debugPrint(
                         'Demand Heatmap failed to load $failedSource: $streamError',
                       );
@@ -2291,10 +2928,7 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                         error: streamError,
                       );
                     }
-                    if (!usersSnap.hasData ||
-                        !geoSnap.hasData ||
-                        !searchSnap.hasData ||
-                        !svc.hasLoadedOnce) {
+                    if (!usersSnap.hasData || !svc.ordersReady) {
                       return const AdminLoadingSpinner();
                     }
 
@@ -2302,15 +2936,22 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                       for (final doc in usersSnap.data!.docs)
                         doc.id: doc.data(),
                     };
-                    for (final doc in geoSnap.data?.docs ?? const []) {
-                      if (doc.id != 'geo') continue;
-                      final ownerUid = doc.reference.parent.parent?.id;
-                      final user = ownerUid == null
-                          ? null
-                          : usersByUid[ownerUid];
-                      if (user == null) continue;
-                      user['latitude'] = doc.data()['latitude'];
-                      user['longitude'] = doc.data()['longitude'];
+                    // Pins for the buyers behind a completed order: asked
+                    // for once each (a no-op afterwards), merged in as they
+                    // are known.
+                    _loadBuyerPins({
+                      for (final doc in svc.orders)
+                        if (usersByUid.containsKey(
+                          (doc.data()['buyerId'] ?? '').toString(),
+                        ))
+                          (doc.data()['buyerId'] ?? '').toString(),
+                    });
+                    for (final entry in _buyerPins.entries) {
+                      final user = usersByUid[entry.key];
+                      final pin = entry.value;
+                      if (user == null || pin == null) continue;
+                      user['latitude'] = pin.lat;
+                      user['longitude'] = pin.lng;
                     }
 
                     // Every buyer behind a completed order, outside Laurel,
@@ -2357,20 +2998,121 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                           svc.orders,
                           _now,
                         );
-                    final rankedDemand =
+                    // One product category at a time, when one is chosen:
+                    // by each order's own recorded category, and each
+                    // search by the commodity it names.
+                    final category = _category;
+                    final productById = category == null
+                        ? const <String, Map<String, dynamic>>{}
+                        : {for (final p in svc.products) p.id: p.data()};
+                    final heatOrders = category == null
+                        ? svc.orders
+                        : [
+                            for (final doc in svc.orders)
+                              if (DashboardAnalyticsService.orderCategory(
+                                    doc.data(),
+                                    productById[(doc.data()['productId'] ?? '')
+                                        .toString()],
+                                  ) ==
+                                  category)
+                                doc,
+                          ];
+                    final purchaseDemand =
                         DashboardAnalyticsService.demandByBuyerAreaForMonth(
-                          svc.orders,
+                          heatOrders,
+                          usersByUid,
+                          year: _selectedYear,
+                          month: _selectedMonth,
+                          areaCoordinates: _areaCoordinates,
+                        );
+                    // The Searches layer: where buyers are looking, counted
+                    // the same way but kept entirely apart — searches never
+                    // add to purchase heat. Only loaded while it is shown.
+                    final showSearches = _layer == _HeatLayer.searches;
+                    if (showSearches) _watchSearches();
+                    final searches = showSearches
+                        ? DashboardAnalyticsService.searchesByBuyerAreaForMonth(
+                            category == null
+                                ? (_searchEvents ?? const [])
+                                : [
+                                    for (final event
+                                        in _searchEvents ?? const [])
+                                      if (categoryOfCommodity(
+                                            matchSupportedCommodity(
+                                                  (event['query'] ?? '')
+                                                      .toString(),
+                                                ) ??
+                                                '',
+                                          ) ==
+                                          category)
+                                        event,
+                                  ],
+                            usersByUid,
+                            year: _selectedYear,
+                            month: _selectedMonth,
+                            areaCoordinates: _areaCoordinates,
+                          )
+                        : null;
+                    // One list drives the map and the areas panel, for
+                    // whichever layer is shown.
+                    final List<
+                      ({
+                        String area,
+                        int orderCount,
+                        num revenue,
+                        double? lat,
+                        double? lng,
+                      })
+                    >
+                    rankedDemand = searches == null
+                        ? purchaseDemand
+                        : [
+                            for (final area in searches.areas)
+                              (
+                                area: area.area,
+                                orderCount: area.searches,
+                                revenue: 0,
+                                lat: area.lat,
+                                lng: area.lng,
+                              ),
+                          ];
+                    final noneMessage = !showSearches
+                        ? _noDemandMessage
+                        : _searchEvents == null
+                        ? 'Loading buyer searches…'
+                        : 'No buyer searches for this period.';
+                    final areasTitle = showSearches
+                        ? 'Top Search Areas'
+                        : 'Highest Demand Areas';
+                    _locateAreas([
+                      for (final area in rankedDemand)
+                        if (area.lat == null) area.area,
+                    ]);
+                    final productsByArea =
+                        DashboardAnalyticsService.productsByBuyerAreaForMonth(
+                          heatOrders,
                           usersByUid,
                           year: _selectedYear,
                           month: _selectedMonth,
                         );
-                    final buyerPoints =
-                        DashboardAnalyticsService.buyerDemandPointsForMonth(
-                          svc.orders,
-                          usersByUid,
-                          year: _selectedYear,
-                          month: _selectedMonth,
-                        );
+                    final selectedArea =
+                        rankedDemand.any((d) => d.area == _selectedArea)
+                        ? _selectedArea
+                        : (rankedDemand.isEmpty
+                              ? null
+                              : rankedDemand.first.area);
+                    final plottedAreas = [
+                      for (final area in rankedDemand)
+                        if (area.lat != null && area.lng != null)
+                          (area: area.area, lat: area.lat!, lng: area.lng!),
+                    ];
+                    // Where the demand is, for framing the map: the areas
+                    // themselves, never individual buyers.
+                    final buyerPoints = [
+                      for (final area in rankedDemand)
+                        if (area.lat != null && area.lng != null)
+                          (lat: area.lat!, lng: area.lng!),
+                    ];
                     // The Month/Year selection just changed (or this is the
                     // first build) — snap the camera to where this period's
                     // real buyer demand actually is instead of leaving it
@@ -2381,91 +3123,45 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                     if (_framedMonth != _selectedMonth ||
                         _framedYear != _selectedYear) {
                       _camera = CameraPosition(
-                        target: _centerOf(buyerPoints),
-                        zoom: _zoomTownLevel,
+                        // At street level the middle of several areas can
+                        // be empty ground, so open on the area with the
+                        // most demand (the first; the list is ranked).
+                        target: buyerPoints.isEmpty
+                            ? _center
+                            : LatLng(
+                                buyerPoints.first.lat,
+                                buyerPoints.first.lng,
+                              ),
+                        zoom: _zoomStreetLevel,
                       );
                       _framedMonth = _selectedMonth;
                       _framedYear = _selectedYear;
                     }
-                    final topSearches =
-                        DashboardAnalyticsService.topSearchQueriesForMonth(
-                          searchSnap.data!.docs,
-                          year: _selectedYear,
-                          month: _selectedMonth,
-                        );
-                    final periodLabel =
-                        '${_monthNames[_selectedMonth - 1]} $_selectedYear';
-                    final activeProducts = svc.products
-                        .where((d) => d.data()['isArchived'] != true)
-                        .map((d) => d.data())
-                        .toList();
-                    // "As of" reference point for the rolling 6-week trend
-                    // window: the current moment for the current month/year
-                    // (so today's own activity still counts), otherwise the
-                    // last moment of the selected month — so this card
-                    // actually responds to the Month/Year filter like every
-                    // other figure on this page, instead of always silently
-                    // showing "as of today" regardless of what period is
-                    // selected.
-                    final isCurrentPeriod =
-                        _selectedYear == _now.year &&
-                        _selectedMonth == _now.month;
-                    final trendsAsOf = isCurrentPeriod
-                        ? _now
-                        : DashboardAnalyticsService.monthWindow(
-                            _selectedYear,
-                            _selectedMonth,
-                          ).end.subtract(const Duration(milliseconds: 1));
-                    final trends = MarketTrendService.commodityTrends(
-                      completedOrders: svc.orders.map((d) => d.data()).toList(),
-                      activeProducts: activeProducts,
-                      now: trendsAsOf,
-                    );
 
                     return Padding(
-                      padding: const EdgeInsets.all(24.0),
+                      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // The title is in the utility bar above.
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Text(
-                                'Market Demand Forecast',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.bold,
-                                  color: c.textPrimary,
-                                ),
-                              ),
                               Row(
                                 children: [
+                                  _categorySelector(c),
+                                  const SizedBox(width: 12),
                                   _monthYearSelector(c, years),
                                   const SizedBox(width: 12),
                                   AdminQuickActionButton(
                                     icon: Icons.download,
                                     label: 'Export Report',
-                                    filled: true,
-                                    onPressed: () => _exportReport(
-                                      context,
-                                      rankedDemand,
-                                      topSearches,
-                                    ),
+                                    onPressed: () =>
+                                        _exportReport(context, purchaseDemand),
                                   ),
                                 ],
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Heat intensity reflects real completed purchases by BUYER location for $periodLabel — '
-                            'never the farmer\'s, product\'s, or seller\'s. Positions use each buyer\'s real map pin '
-                            '(set at registration); the ranked list groups them by their actual saved area, in Laurel '
-                            'or anywhere else.',
-                            style: TextStyle(
-                              color: c.textSecondary,
-                              fontSize: 12.5,
-                            ),
                           ),
                           const SizedBox(height: 16),
                           Expanded(
@@ -2476,8 +3172,23 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                   flex: 3,
                                   child: Builder(
                                     builder: (context) {
+                                      // Nothing bought, or bought but the
+                                      // areas are still being located.
+                                      final emptyMessage = rankedDemand.isEmpty
+                                          ? noneMessage
+                                          : buyerPoints.isNotEmpty
+                                          ? null
+                                          : rankedDemand.any(
+                                              (d) => !_areaLookups.containsKey(
+                                                d.area,
+                                              ),
+                                            )
+                                          ? 'Locating buyer areas on the map…'
+                                          : 'These buyer areas could not be '
+                                                'placed on the map. They are '
+                                                'listed under $areasTitle.';
                                       final points = _buildDemandPoints(
-                                        buyerPoints,
+                                        rankedDemand,
                                       );
                                       return _HeatmapMap(
                                         initialCamera: _camera,
@@ -2485,17 +3196,28 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                         bounds: _computeMapBounds(buyerPoints),
                                         onCameraIdle: _onCameraIdle,
                                         isFullscreen: false,
+                                        legendTitle: showSearches
+                                            ? 'Buyer searches'
+                                            : 'Completed purchases',
+                                        emptyMessage: emptyMessage,
+                                        areas: plottedAreas,
+                                        onSelectArea: _selectArea,
+                                        focusArea: _selectedArea,
+                                        focusRequest: _focusRequest,
                                         onToggleFullscreen: () =>
                                             _openFullscreen(
                                               context,
+                                              emptyMessage: emptyMessage,
+                                              legendTitle: showSearches
+                                                  ? 'Buyer searches'
+                                                  : 'Completed purchases',
                                               points: points,
                                               bounds: _computeMapBounds(
                                                 buyerPoints,
                                               ),
                                               onExport: () => _exportReport(
                                                 context,
-                                                rankedDemand,
-                                                topSearches,
+                                                purchaseDemand,
                                               ),
                                             ),
                                       );
@@ -2510,36 +3232,73 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Expanded(
-                                        child: _DemandSidePanel(
-                                          title: 'Highest Demand Areas',
-                                          icon: Icons
-                                              .local_fire_department_outlined,
-                                          emptyText:
-                                              'No completed buyer purchases for $periodLabel.',
-                                          rows: rankedDemand
-                                              .where((d) => d.orderCount > 0)
-                                              .take(6)
-                                              .map(
-                                                (d) =>
-                                                    '${d.area} — ${d.orderCount} completed order${d.orderCount == 1 ? '' : 's'}',
-                                              )
-                                              .toList(),
+                                        // Where buyers purchased, or where
+                                        // they searched: tabs on the panel
+                                        // they change. No counts: these
+                                        // are two views, not two lists.
+                                        child: AdminTabbedTable<_HeatLayer>(
+                                          expand: true,
+                                          selected: _layer,
+                                          onSelected: (layer) =>
+                                              setState(() => _layer = layer),
+                                          tabs: const [
+                                            (
+                                              value: _HeatLayer.purchases,
+                                              label: 'Purchases',
+                                              count: null,
+                                              icon: Icons.shopping_bag_outlined,
+                                            ),
+                                            (
+                                              value: _HeatLayer.searches,
+                                              label: 'Searches',
+                                              count: null,
+                                              icon: Icons.search_rounded,
+                                            ),
+                                          ],
+                                          child: AdminDemandAreasPanel(
+                                            tabbed: true,
+                                            areas: [
+                                              for (final d in rankedDemand)
+                                                if (d.orderCount > 0)
+                                                  (
+                                                    area: d.area,
+                                                    orderCount: d.orderCount,
+                                                  ),
+                                            ],
+                                            selectedArea: selectedArea,
+                                            onSelect: _selectArea,
+                                            emptyText: noneMessage,
+                                            title: areasTitle,
+                                            subtitle: showSearches
+                                                ? 'By buyer searches · select an area'
+                                                : 'By completed buyer purchases · select an area',
+                                            unit: showSearches
+                                                ? 'search'
+                                                : 'purchase',
+                                            unitPlural: showSearches
+                                                ? 'searches'
+                                                : 'purchases',
+                                          ),
                                         ),
                                       ),
                                       const SizedBox(height: 16),
                                       Expanded(
-                                        child: _DemandSidePanel(
-                                          title: 'Top Buyer Searches',
-                                          icon: Icons.search,
-                                          emptyText:
-                                              'No search activity logged for $periodLabel.',
-                                          rows: topSearches
-                                              .map(
-                                                (e) =>
-                                                    '${e.key} — ${e.value} search(es)',
+                                        child: searches != null
+                                            ? AdminAreaSearchesPanel(
+                                                area: selectedArea,
+                                                terms:
+                                                    searches
+                                                        .terms[selectedArea] ??
+                                                    const [],
+                                                emptyText: noneMessage,
                                               )
-                                              .toList(),
-                                        ),
+                                            : AdminAreaProductsPanel(
+                                                area: selectedArea,
+                                                products:
+                                                    productsByArea[selectedArea] ??
+                                                    const [],
+                                                emptyText: noneMessage,
+                                              ),
                                       ),
                                     ],
                                   ),
@@ -2547,8 +3306,6 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                               ],
                             ),
                           ),
-                          const SizedBox(height: 16),
-                          _MarketTrendPredictions(trends: trends),
                         ],
                       ),
                     );
@@ -2578,6 +3335,21 @@ class _HeatmapMap extends StatefulWidget {
   final LatLngBounds bounds;
   final ValueChanged<CameraPosition> onCameraIdle;
   final bool isFullscreen;
+
+  /// Shown over the map when there is nothing to plot; null for none.
+  final String? emptyMessage;
+
+  /// What the heat counts, for the legend.
+  final String legendTitle;
+
+  /// The areas behind the heat, so a click on the map can select one.
+  final List<({String area, double lat, double lng})> areas;
+  final ValueChanged<String>? onSelectArea;
+
+  /// The area the Admin picked; the map moves to it each time
+  /// [focusRequest] changes.
+  final String? focusArea;
+  final int focusRequest;
   final VoidCallback onToggleFullscreen;
   // Only shown (as a button in the top-right cluster) while isFullscreen:
   // the normal inline view already has its own "Export Report" button in
@@ -2590,7 +3362,13 @@ class _HeatmapMap extends StatefulWidget {
     required this.points,
     required this.bounds,
     required this.onCameraIdle,
+    this.areas = const [],
+    this.onSelectArea,
+    this.focusArea,
+    this.focusRequest = 0,
     required this.isFullscreen,
+    this.emptyMessage,
+    this.legendTitle = 'Completed purchases',
     required this.onToggleFullscreen,
     this.onExport,
   });
@@ -2601,18 +3379,141 @@ class _HeatmapMap extends StatefulWidget {
 
 class _HeatmapMapState extends State<_HeatmapMap> {
   GoogleMapController? _controller;
-  late final ValueNotifier<CameraPosition> _liveCamera =
-      ValueNotifier<CameraPosition>(widget.initialCamera);
+
+  // The last camera the map reported, handed back to the page so the view
+  // carries over into and out of full screen.
+  late CameraPosition _lastCamera = widget.initialCamera;
+
+  final GlobalKey _mapKey = GlobalKey();
+  void Function()? _stopTrackpadPan;
+
+  @override
+  void initState() {
+    super.initState();
+    _stopTrackpadPan = listenTrackpadPan(_panByTrackpad);
+  }
 
   @override
   void dispose() {
-    _liveCamera.dispose();
+    _stopTrackpadPan?.call();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(_HeatmapMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusRequest != oldWidget.focusRequest) _showFocusArea();
+  }
+
+  // Moves the map to the area the Admin picked, at street level — never
+  // zooming out if the map is already closer than that.
+  void _showFocusArea() {
+    for (final area in widget.areas) {
+      if (area.area != widget.focusArea) continue;
+      _controller?.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng(area.lat, area.lng),
+          _lastCamera.zoom < _zoomStreetLevel
+              ? _zoomStreetLevel
+              : _lastCamera.zoom,
+        ),
+      );
+      return;
+    }
+  }
+
+  // A laptop trackpad's two-finger scroll over the map moves it, the way
+  // dragging does. (On its own the map would zoom instead.) Pinch and the
+  // mouse wheel still zoom — see listenTrackpadPan.
+  bool _panByTrackpad(double x, double y, double dx, double dy) {
+    final controller = _controller;
+    if (!mounted || controller == null) return false;
+    // Only when the pointer is really on this map: not while the page is
+    // kept in the background behind another one (its place on screen is
+    // still there), and not through a dialog, menu or full screen over it.
+    // Anywhere else the scroll is left alone, so pages scroll as usual.
+    final box = _mapKey.currentContext?.findRenderObject();
+    if (box == null) return false;
+    final hit = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(
+      hit,
+      Offset(x, y),
+      View.of(context).viewId,
+    );
+    if (!hit.path.any((entry) => entry.target == box)) return false;
+    controller.moveCamera(CameraUpdate.scrollBy(dx, dy));
+    return true;
+  }
+
+  // ---- The heat ----
+  // Each area is drawn by the map itself, as circles anchored to the
+  // area's real coordinates — so the colour is in the right place from the
+  // moment the map appears and stays there through every pan and zoom,
+  // with nothing in the app to keep in step. (It used to be painted over
+  // the map from the app's idea of the camera, which could be out of date
+  // until the map was next moved.)
+  //
+  // An area is three circles of the same colour, widest and faintest
+  // first, so it fades outward like heat rather than ending in a hard
+  // edge. Their size is in metres — an area's worth of ground — so the
+  // spot grows as the map zooms in on it.
+  static const List<({double size, double opacity})> _heatRings = [
+    (size: 1.00, opacity: 0.16),
+    (size: 0.68, opacity: 0.22),
+    (size: 0.38, opacity: 0.30),
+  ];
+  static const double _heatRadiusMetres = 900;
+  static const double _heatRadiusBoostMetres = 600;
+
+  Set<Circle> _heatCircles() {
+    if (widget.points.isEmpty) return const {};
+    final busiest = widget.points
+        .map((p) => p.weight)
+        .reduce((a, b) => a > b ? a : b);
+    // Lowest demand first, so the busiest area is drawn on top.
+    final ordered = [...widget.points]
+      ..sort((a, b) => a.weight.compareTo(b.weight));
+    final circles = <Circle>{};
+    for (var i = 0; i < ordered.length; i++) {
+      final point = ordered[i];
+      // Against the busiest area, never below the scale's floor.
+      final intensity = demandIntensity(point.weight, busiest);
+      final color = heatColorForIntensity(intensity);
+      final radius = _heatRadiusMetres + _heatRadiusBoostMetres * intensity;
+      final area = _areaAt(point.point);
+      for (var ring = 0; ring < _heatRings.length; ring++) {
+        circles.add(
+          Circle(
+            circleId: CircleId('heat-$i-$ring'),
+            center: point.point,
+            radius: radius * _heatRings[ring].size,
+            fillColor: color.withValues(alpha: _heatRings[ring].opacity),
+            strokeWidth: 0,
+            zIndex: i,
+            // A click on an area's heat selects that area.
+            consumeTapEvents: area != null && widget.onSelectArea != null,
+            onTap: area == null ? null : () => widget.onSelectArea?.call(area),
+          ),
+        );
+      }
+    }
+    return circles;
+  }
+
+  // The area a heat point belongs to.
+  String? _areaAt(LatLng point) {
+    for (final area in widget.areas) {
+      if (area.lat == point.latitude && area.lng == point.longitude) {
+        return area.area;
+      }
+    }
+    return null;
   }
 
   @override
   Widget build(BuildContext context) {
     return ClipRRect(
+      key: _mapKey,
       borderRadius: widget.isFullscreen
           ? BorderRadius.zero
           : BorderRadius.circular(16),
@@ -2632,18 +3533,10 @@ class _HeatmapMapState extends State<_HeatmapMap> {
               mapToolbarEnabled: false,
               // Mouse wheel, trackpad pinch/scroll, and double-click zoom
               // are all real, standard map interactions and must work
-              // normally — never disabled. _DemandHeatmapPainter's heat
-              // discs use a fixed SCREEN-pixel radius specifically so they
-              // look correct at any zoom level (see its own doc comment:
-              // that's what gives a real heatmap layer its "dissipates as
-              // you zoom in" look), so free zoom never looks broken.
+              // normally — never disabled.
               zoomGesturesEnabled: true,
-              // Rotate/tilt stay off: _DemandHeatmapPainter's projection
-              // assumes a simple north-up, no-tilt camera (see _project) —
-              // panning and zooming still update it correctly frame to
-              // frame, but a rotated/tilted camera would make the painted
-              // heat discs visibly drift off their real map position.
-              // Neither gesture was requested; only pan/zoom are.
+              // Rotate/tilt stay off: neither was asked for; only pan and
+              // zoom are.
               rotateGesturesEnabled: false,
               tiltGesturesEnabled: false,
               // Keeps the map to wherever the real data actually is —
@@ -2655,39 +3548,11 @@ class _HeatmapMapState extends State<_HeatmapMap> {
                 6,
                 _zoomStreetLevel + 1,
               ),
+              // The demand itself: see _heatCircles.
+              circles: _heatCircles(),
               onMapCreated: (controller) => _controller = controller,
-              onCameraMove: (pos) => _liveCamera.value = pos,
-              onCameraIdle: () => widget.onCameraIdle(_liveCamera.value),
-            ),
-          ),
-          // Custom heat overlay: google.maps.visualization.HeatmapLayer was
-          // removed from the Maps JavaScript API (Google deprecated it as
-          // of v3.65 — confirmed live against this project's key, which
-          // isn't pinned to an older version), so google_maps_flutter's
-          // Heatmap widget (which only ever targeted that JS class on web)
-          // can't be used here. This paints the same blended yellow ->
-          // orange -> red look directly with Canvas instead, projecting
-          // each point to screen space with the same Web Mercator math
-          // Google Maps itself uses (see _DemandHeatmapPainter). Wrapped
-          // in IgnorePointer so drag/scroll/click still reach the map.
-          Positioned.fill(
-            child: IgnorePointer(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return ValueListenableBuilder<CameraPosition>(
-                    valueListenable: _liveCamera,
-                    builder: (context, camera, _) {
-                      return CustomPaint(
-                        size: constraints.biggest,
-                        painter: _DemandHeatmapPainter(
-                          points: widget.points,
-                          camera: camera,
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
+              onCameraMove: (position) => _lastCamera = position,
+              onCameraIdle: () => widget.onCameraIdle(_lastCamera),
             ),
           ),
           Positioned(
@@ -2744,103 +3609,47 @@ class _HeatmapMapState extends State<_HeatmapMap> {
               ],
             ),
           ),
-          const Positioned(left: 12, bottom: 12, child: _HeatmapLegend()),
+          // Nothing to plot: say so on the map itself, not just beside it.
+          if (widget.emptyMessage != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(AdminRadii.pill),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Colors.black26,
+                          blurRadius: 8,
+                          offset: Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Text(
+                      widget.emptyMessage!,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            left: 12,
+            bottom: 12,
+            child: AdminHeatLegend(title: widget.legendTitle),
+          ),
         ],
       ),
     );
-  }
-}
-
-/// Paints [points] as smooth, additively-blended discs colored along the
-/// yellow -> orange -> red ramp, projected into screen space with the
-/// same Web Mercator formula Google Maps uses internally (so the heat
-/// tracks the map correctly through pans and zooms without needing any
-/// platform-channel round trip per point/frame).
-class _DemandHeatmapPainter extends CustomPainter {
-  final List<WeightedLatLng> points;
-  final CameraPosition camera;
-
-  const _DemandHeatmapPainter({required this.points, required this.camera});
-
-  // Fixed *screen-space* pixel radius — geographic coverage shrinks as
-  // you zoom in, which is exactly the "dissipating" behavior a real
-  // heatmap layer has, without any extra zoom-based scaling logic.
-  static const double _radius = 34.0;
-
-  static double _lngToFrac(double lng) => (lng + 180.0) / 360.0;
-
-  static double _latToFrac(double lat) {
-    final sinLat = sin(lat * pi / 180.0).clamp(-0.9999, 0.9999).toDouble();
-    return 0.5 - log((1 + sinLat) / (1 - sinLat)) / (4 * pi);
-  }
-
-  Offset _project(LatLng point, Size size) {
-    final double scale = 256.0 * pow(2.0, camera.zoom).toDouble();
-    final double dx =
-        (_lngToFrac(point.longitude) - _lngToFrac(camera.target.longitude)) *
-        scale;
-    final double dy =
-        (_latToFrac(point.latitude) - _latToFrac(camera.target.latitude)) *
-        scale;
-    return Offset(size.width / 2 + dx, size.height / 2 + dy);
-  }
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (points.isEmpty) return;
-    final maxWeight = points
-        .map((p) => p.weight)
-        .reduce((a, b) => a > b ? a : b);
-    if (maxWeight <= 0) return;
-
-    final visibleBounds = (Offset.zero & size).inflate(_radius);
-
-    // Project once and sort ascending by weight, so the highest-demand
-    // (reddest) discs paint LAST, on top of the lower ones. With normal
-    // alpha compositing (the default BlendMode.srcOver — NOT additive:
-    // an earlier version of this used BlendMode.plus, which sums color
-    // channels across every overlapping disc and clips to solid white
-    // wherever more than a few points are near each other, wiping out
-    // the yellow/orange/red gradient entirely) this makes the hottest
-    // point in a cluster visually dominate it, exactly like a real
-    // weighted heatmap's hot core, while still letting sparser/lower
-    // points around it blend smoothly into softer yellow/orange.
-    final projected =
-        points
-            .map(
-              (p) => (
-                offset: _project(p.point, size),
-                t: (p.weight / maxWeight).clamp(0.0, 1.0),
-              ),
-            )
-            .where((p) => visibleBounds.contains(p.offset))
-            .toList()
-          ..sort((a, b) => a.t.compareTo(b.t));
-
-    for (final p in projected) {
-      final color = _heatColorForIntensity(p.t);
-      final peakAlpha = (0.30 + 0.40 * p.t).clamp(0.0, 1.0);
-      // A radial gradient (solid, saturated color at the center, tapering
-      // smoothly to transparent at the edge) reads as clean/defined —
-      // MaskFilter.blur (used previously) softens every pixel into a haze,
-      // which is what looked "blurry." This keeps the same smooth,
-      // hard-edge-free falloff without that soft-focus look.
-      final rect = Rect.fromCircle(center: p.offset, radius: _radius);
-      final paint = Paint()
-        ..shader = RadialGradient(
-          colors: [
-            color.withValues(alpha: peakAlpha),
-            color.withValues(alpha: 0.0),
-          ],
-        ).createShader(rect);
-      canvas.drawCircle(p.offset, _radius, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _DemandHeatmapPainter oldDelegate) {
-    return oldDelegate.camera != camera ||
-        !identical(oldDelegate.points, points);
   }
 }
 
@@ -2876,49 +3685,6 @@ class _MapIconButton extends StatelessWidget {
 
 /// "Low -> High demand" gradient key, pinned to the map's bottom-left
 /// corner in both the inline and full-screen views.
-class _HeatmapLegend extends StatelessWidget {
-  const _HeatmapLegend();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: const [
-          BoxShadow(color: Colors.black26, blurRadius: 6, offset: Offset(0, 2)),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 120,
-            height: 8,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(4),
-              gradient: const LinearGradient(
-                colors: [
-                  Color(0x00FFEB3B),
-                  Color(0xFFFFEB3B),
-                  Color(0xFFFF9800),
-                  Color(0xFFE53935),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Low → High demand',
-            style: TextStyle(fontSize: 10.5, color: Colors.black54),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// Fills the entire browser viewport with just the map — the admin
 /// sidebar and top bar (which live in AdminDashboardScreen's own
@@ -2930,6 +3696,10 @@ class _FullscreenHeatmapPage extends StatelessWidget {
   final LatLngBounds bounds;
   final ValueChanged<CameraPosition> onCameraIdle;
   final VoidCallback onExport;
+  final String? emptyMessage;
+
+  /// What the heat counts, for the legend.
+  final String legendTitle;
 
   const _FullscreenHeatmapPage({
     required this.initialCamera,
@@ -2937,6 +3707,8 @@ class _FullscreenHeatmapPage extends StatelessWidget {
     required this.bounds,
     required this.onCameraIdle,
     required this.onExport,
+    this.emptyMessage,
+    this.legendTitle = 'Completed purchases',
   });
 
   @override
@@ -2963,6 +3735,8 @@ class _FullscreenHeatmapPage extends StatelessWidget {
                 bounds: bounds,
                 onCameraIdle: onCameraIdle,
                 isFullscreen: true,
+                emptyMessage: emptyMessage,
+                legendTitle: legendTitle,
                 onToggleFullscreen: () => Navigator.of(context).pop(),
                 onExport: onExport,
               ),
@@ -2989,239 +3763,32 @@ class _FullscreenHeatmapPage extends StatelessWidget {
   }
 }
 
-class _MarketTrendPredictions extends StatelessWidget {
-  final List<CommodityTrend> trends;
-  const _MarketTrendPredictions({required this.trends});
-
-  static IconData _icon(TrendDirection d) {
-    switch (d) {
-      case TrendDirection.rising:
-        return Icons.trending_up;
-      case TrendDirection.falling:
-        return Icons.trending_down;
-      case TrendDirection.stable:
-        return Icons.trending_flat;
-    }
-  }
-
-  static String _label(TrendDirection d) {
-    switch (d) {
-      case TrendDirection.rising:
-        return 'Rising';
-      case TrendDirection.falling:
-        return 'Falling';
-      case TrendDirection.stable:
-        return 'Stable';
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    Color colorFor(TrendDirection d) => d == TrendDirection.rising
-        ? c.green
-        : (d == TrendDirection.falling ? c.red : c.textSecondary);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: c.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Market Trend Predictions',
-            style: TextStyle(
-              color: c.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Price movement and local supply, projected from recent weekly trends — statistical, not a trained model.',
-            style: TextStyle(color: c.textSecondary, fontSize: 12.5),
-          ),
-          const SizedBox(height: 16),
-          if (trends.isEmpty)
-            const AdminEmptyState(
-              icon: Icons.show_chart,
-              title: 'Not enough data yet',
-              subtitle:
-                  'Trends appear once there are a few weeks of listings and completed orders.',
-            )
-          else
-            SizedBox(
-              height: 132,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: trends.length,
-                itemBuilder: (context, index) {
-                  final t = trends[index];
-                  return Container(
-                    width: 220,
-                    padding: const EdgeInsets.all(14),
-                    margin: const EdgeInsets.only(right: 12),
-                    decoration: BoxDecoration(
-                      color: c.surfaceAlt,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: c.border),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          t.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: c.textPrimary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Icon(
-                              _icon(t.priceDirection),
-                              size: 15,
-                              color: colorFor(t.priceDirection),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Price: ${_label(t.priceDirection)}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: colorFor(t.priceDirection),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                        if (t.projectedNextPrice != null) ...[
-                          const SizedBox(height: 2),
-                          Text(
-                            '~${formatPeso(t.projectedNextPrice!)} next week',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: c.textSecondary,
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            Icon(
-                              _icon(t.supplyDirection),
-                              size: 15,
-                              color: colorFor(t.supplyDirection),
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Supply: ${_label(t.supplyDirection)}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: colorFor(t.supplyDirection),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '~${t.projectedNextWeekListings} new listing(s) next week',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: c.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DemandSidePanel extends StatelessWidget {
-  final String title;
-  final IconData icon;
-  final String emptyText;
-  final List<String> rows;
-
-  const _DemandSidePanel({
-    required this.title,
-    required this.icon,
-    required this.emptyText,
-    required this.rows,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: c.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 18, color: c.textSecondary),
-              const SizedBox(width: 8),
-              Text(
-                title,
-                style: TextStyle(
-                  color: c.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (rows.isEmpty)
-            Expanded(
-              child: Center(
-                child: Text(
-                  emptyText,
-                  style: TextStyle(color: c.textMuted, fontSize: 12),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            )
-          else
-            Expanded(
-              child: ListView.separated(
-                itemCount: rows.length,
-                separatorBuilder: (_, _) => Divider(height: 1, color: c.border),
-                itemBuilder: (context, index) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text(
-                    rows[index],
-                    style: TextStyle(color: c.textPrimary, fontSize: 12.5),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+/// Keeps one dated entry per reference price under
+/// `market_prices/{commodity}/history`, so the office's prices build into
+/// a month-by-month record instead of each new one replacing the last.
+/// The entry is keyed by its date: saving a price for a date that already
+/// has one corrects it rather than adding a second.
+void _recordReferencePrice(
+  WriteBatch batch,
+  DocumentReference<Map<String, dynamic>> commodity, {
+  required double price,
+  required String unit,
+  required DateTime effectiveDate,
+  required String updatedBy,
+}) {
+  final day = DateUtils.dateOnly(effectiveDate);
+  batch.set(
+    commodity.collection('history').doc(DateFormat('yyyy-MM-dd').format(day)),
+    {
+      'price': price,
+      'unit': unit,
+      'effectiveDate': Timestamp.fromDate(day),
+      'year': day.year,
+      'month': day.month,
+      'recordedAt': FieldValue.serverTimestamp(),
+      'recordedBy': updatedBy,
+    },
+  );
 }
 
 // ============================================================
@@ -3528,8 +4095,214 @@ _PriceImportParseResult _buildImportRows(List<List<_Cell>> rawRows) {
   return _PriceImportParseResult(rows: results);
 }
 
-class _PriceManagementView extends StatelessWidget {
+class _PriceManagementView extends StatefulWidget {
   const _PriceManagementView();
+
+  @override
+  State<_PriceManagementView> createState() => _PriceManagementViewState();
+}
+
+class _PriceManagementViewState extends State<_PriceManagementView> {
+  // The commodities whose box is ticked, by document id.
+  final Set<String> _ticked = {};
+  bool _archiving = false;
+
+  // Which of the page's two tables is open: the commodities in use, or
+  // the archive.
+  bool _showArchived = false;
+
+  // Each commodity's Current Market Average for the listings last seen.
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>? _averagedProducts;
+  final Map<String, double?> _liveAverages = {};
+
+  // Archives commodities, or restores archived ones. Archived is the
+  // commodity's existing "not active" state (isActive: false): farmers are
+  // not offered it when posting a product (see CommodityRegistry). Nothing
+  // is deleted — its reference price and price history stay as they are.
+  Future<void> _setArchived(
+    BuildContext context,
+    Map<String, String> commodities, {
+    required bool archived,
+  }) async {
+    if (commodities.isEmpty || _archiving) return;
+    final label = commodities.length > 1
+        ? '${commodities.length} commodities'
+        : '"${commodities.values.first}"';
+    // Archiving stops the commodity's selling for everyone, so it needs
+    // its reason: the farmers who sell it are told it.
+    final reasonController = TextEditingController();
+    var missingReason = false;
+    final confirm = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: Text(archived ? 'Archive $label?' : 'Restore $label?'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  archived
+                      ? 'Its selling stops for now: its listings are '
+                            'hidden from the marketplace, farmers cannot '
+                            'post it, and the farmers who sell it are '
+                            'notified with the reason below. Its reference '
+                            'price and price history are kept, and it can be '
+                            'restored at any time.'
+                      : 'Its listings return to the marketplace, farmers '
+                            'can post it again, and the farmers who sell it '
+                            'are notified that it is available.',
+                ),
+                if (archived) ...[
+                  const SizedBox(height: 14),
+                  AdminField(
+                    controller: reasonController,
+                    minLines: 2,
+                    maxLines: 4,
+                    maxLength: 300,
+                    decoration: adminMultilineDecoration(
+                      dialogContext,
+                      labelText: 'Reason (required)',
+                      hintText: 'e.g. Swine flu outbreak in the area',
+                    ),
+                  ),
+                  if (missingReason)
+                    const Padding(
+                      padding: EdgeInsets.only(left: 4),
+                      child: Text(
+                        'Give the reason: the farmers who sell it will see it.',
+                        style: TextStyle(color: Colors.red, fontSize: 12),
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                if (archived && reasonController.text.trim().isEmpty) {
+                  setDialogState(() => missingReason = true);
+                  return;
+                }
+                Navigator.of(dialogContext).pop(true);
+              },
+              child: Text(archived ? 'Archive' : 'Restore'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final reason = reasonController.text.trim();
+    if (confirm != true) return;
+    if (!await ConnectivityService.instance.checkNow()) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(kNoInternetActionMessage)));
+      }
+      return;
+    }
+    if (!context.mounted) return;
+    await _writeArchived(
+      context,
+      commodities,
+      archived: archived,
+      reason: reason,
+    );
+  }
+
+  // Archives or restores, then says so in a message at the bottom of the
+  // page with an Undo — which puts the same commodities straight back,
+  // without asking again.
+  Future<void> _writeArchived(
+    BuildContext context,
+    Map<String, String> commodities, {
+    required bool archived,
+    bool offerUndo = true,
+    // Why it is archived; kept on the commodity, and what farmers and
+    // buyers are told (onCommodityArchiveChanged in functions/index.js).
+    String reason = '',
+  }) async {
+    if (_archiving) return;
+    final label = commodities.length > 1
+        ? '${commodities.length} commodities'
+        : '"${commodities.values.first}"';
+    setState(() => _archiving = true);
+    try {
+      final firestore = FirebaseFirestore.instance;
+      final updatedBy =
+          FirebaseAuth.instance.currentUser?.email ??
+          FirebaseAuth.instance.currentUser?.uid ??
+          'admin';
+      final batch = firestore.batch();
+      for (final id in commodities.keys) {
+        batch.update(firestore.collection('market_prices').doc(id), {
+          'isActive': !archived,
+          'archiveReason': archived ? reason : FieldValue.delete(),
+          'archivedAt': archived
+              ? FieldValue.serverTimestamp()
+              : FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedBy': updatedBy,
+        });
+      }
+      await batch.commit();
+      DashboardDataService.instance.refresh(force: true);
+      AuditLogService.log(
+        AuditAction.updateBaselinePrice,
+        '${archived ? 'Archived' : 'Restored'} '
+        '${commodities.values.join(', ')}'
+        '${offerUndo ? '' : ' (undo)'}.'
+        '${archived && reason.isNotEmpty ? ' Reason: $reason' : ''}',
+      );
+      if (!context.mounted) return;
+      setState(() => _ticked.removeAll(commodities.keys));
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          duration: Duration(seconds: offerUndo ? 8 : 4),
+          content: Text(
+            archived
+                ? 'Archived $label. Find it under Archived.'
+                : 'Restored $label.',
+          ),
+          action: offerUndo
+              ? SnackBarAction(
+                  label: 'Undo',
+                  onPressed: () => _writeArchived(
+                    this.context,
+                    commodities,
+                    archived: !archived,
+                    offerUndo: false,
+                    reason: reason,
+                  ),
+                )
+              : null,
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not ${archived ? 'archive' : 'restore'} $label: $e',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _archiving = false);
+    }
+  }
 
   Future<void> _openBaselineDialog(
     BuildContext context, {
@@ -3561,6 +4334,9 @@ class _PriceManagementView extends StatelessWidget {
     }
   }
 
+  // Not on the page any more (the Import File button was removed); kept
+  // so it can be put back without rewriting it.
+  // ignore: unused_element
   Future<void> _importPricesCsv(BuildContext context) async {
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
@@ -3651,6 +4427,7 @@ class _PriceManagementView extends StatelessWidget {
         FirebaseAuth.instance.currentUser?.uid ??
         'admin';
     final batch = firestore.batch();
+    final history = firestore.batch();
     for (final row in validRows) {
       // Keyed by the matched, canonical commodity name — never the file's
       // own CommodityID — so an existing commodity is always updated in
@@ -3674,8 +4451,23 @@ class _PriceManagementView extends StatelessWidget {
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': updatedBy,
       }, SetOptions(merge: true));
+      _recordReferencePrice(
+        history,
+        docRef,
+        price: row.referencePrice!,
+        unit: row.unit ?? (existing.data()?['unit'] ?? 'kg').toString(),
+        effectiveDate: row.effectiveDate!,
+        updatedBy: updatedBy,
+      );
     }
     await batch.commit();
+    // The dated history is kept on top of the prices themselves: if it
+    // cannot be written, the import above still stands.
+    try {
+      await history.commit();
+    } catch (e) {
+      debugPrint('[PriceHistory] could not record imported prices: $e');
+    }
     DashboardDataService.instance.refresh(force: true);
 
     final skipped = parsed.rows.length - validRows.length;
@@ -3740,64 +4532,135 @@ class _PriceManagementView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    DashboardDataService.instance.ensureLoaded();
     final c = AdminThemeScope.of(context).palette;
-    // The whole page (header/buttons + table) scrolls as one unit — the
-    // sidebar and top header outside this widget stay fixed. No nested
-    // vertical scroll region for the table itself, so the browser's normal
-    // scrollbar reaches every row and the action buttons at the bottom.
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 40),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    // The top row is above the scrolling page, not in it: Add Commodity
+    // and the actions for the ticked rows stay in view, over the table,
+    // however far it is scrolled.
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 4, 24, 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              Text(
-                'Commodity Price Management',
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                  color: c.textPrimary,
-                ),
+              _selectionBar(context, c),
+              const SizedBox(width: 12),
+              // The archive is a page of its own, opened from here: the
+              // commodities in use and the archived ones are never listed
+              // together.
+              ListenableBuilder(
+                listenable: DashboardDataService.instance,
+                builder: (context, _) {
+                  final archivedCount = DashboardDataService
+                      .instance
+                      .marketPrices
+                      .where((doc) => doc.data()['isActive'] == false)
+                      .length;
+                  return AdminQuickActionButton(
+                    icon: _showArchived
+                        ? Icons.arrow_back_rounded
+                        : Icons.archive_outlined,
+                    label: _showArchived
+                        ? 'Back to Commodities'
+                        : 'Archived ($archivedCount)',
+                    onPressed: () => setState(() {
+                      _showArchived = !_showArchived;
+                      _ticked.clear();
+                    }),
+                  );
+                },
               ),
-              Row(
-                children: [
-                  AdminQuickActionButton(
-                    icon: Icons.refresh,
-                    label: 'Refresh All',
-                    onPressed: () async {
-                      await DashboardDataService.instance.refresh();
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Prices and analytics data refreshed.',
-                            ),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  AdminQuickActionButton(
-                    icon: Icons.upload_file_outlined,
-                    label: 'Import File',
-                    onPressed: () => _importPricesCsv(context),
-                  ),
-                  const SizedBox(width: 8),
-                  AdminQuickActionButton(
-                    icon: Icons.add,
-                    label: 'Add Commodity',
-                    filled: true,
-                    onPressed: () => _openBaselineDialog(context),
-                  ),
-                ],
+              const SizedBox(width: 8),
+              AdminQuickActionButton(
+                icon: Icons.add,
+                label: 'Add Commodity',
+                filled: true,
+                onPressed: () => _openBaselineDialog(context),
               ),
             ],
           ),
-          const SizedBox(height: 20),
+        ),
+        Expanded(child: _page(context, c)),
+      ],
+    );
+  }
+
+  // "N selected", Clear, and Archive / Restore for the ticked commodities.
+  // Nothing while none are ticked.
+  Widget _selectionBar(BuildContext context, AdminPalette c) {
+    return ListenableBuilder(
+      listenable: DashboardDataService.instance,
+      builder: (context, _) {
+        final tickedActive = <String, String>{};
+        final tickedArchived = <String, String>{};
+        for (final doc in DashboardDataService.instance.marketPrices) {
+          if (!_ticked.contains(doc.id)) continue;
+          final data = doc.data();
+          (data['isActive'] != false ? tickedActive : tickedArchived)[doc.id] =
+              (data['name'] ?? doc.id).toString();
+        }
+        if (tickedActive.isEmpty && tickedArchived.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AdminSelectionNote(
+              count: tickedActive.length + tickedArchived.length,
+              onClear: () => setState(_ticked.clear),
+            ),
+            // Each button acts on the ticked rows it applies to:
+            // Archive on the active, Restore on the archived.
+            if (tickedActive.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _archiving
+                    ? null
+                    : () => _setArchived(context, tickedActive, archived: true),
+                icon: const Icon(Icons.archive_outlined, size: 18),
+                label: Text(
+                  tickedArchived.isEmpty
+                      ? 'Archive selected'
+                      : 'Archive (${tickedActive.length})',
+                ),
+              ),
+            ],
+            if (tickedArchived.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              FilledButton.icon(
+                onPressed: _archiving
+                    ? null
+                    : () => _setArchived(
+                        context,
+                        tickedArchived,
+                        archived: false,
+                      ),
+                icon: const Icon(Icons.unarchive_outlined, size: 18),
+                label: Text(
+                  tickedActive.isEmpty
+                      ? 'Restore selected'
+                      : 'Restore (${tickedArchived.length})',
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _page(BuildContext context, AdminPalette c) {
+    DashboardDataService.instance.ensureLoaded();
+    // The whole page (header/buttons + table) scrolls as one unit — the
+    // sidebar and top header outside this widget stay fixed. No nested
+    // vertical scroll region for the table itself, so the browser's normal
+    // scrollbar reaches every row.
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(24, 0, 24, 40),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           ListenableBuilder(
             listenable: DashboardDataService.instance,
             builder: (context, _) {
@@ -3808,212 +4671,256 @@ class _PriceManagementView extends StatelessWidget {
                     : const AdminLoadingSpinner();
               }
 
-              final priceDocs = svc.marketPrices;
               final products = svc.products;
+              final all = [
+                for (final doc in svc.marketPrices)
+                  () {
+                    final data = doc.data();
+                    final name = (data['name'] ?? doc.id).toString();
+                    return (
+                      id: doc.id,
+                      data: data,
+                      name: name,
+                      category: (data['category'] ?? categoryOfCommodity(name))
+                          ?.toString(),
+                      // Farmers can post it (Supported Products, Add
+                      // Product) only while active and in a category —
+                      // see CommodityRegistry. Not active = archived.
+                      isActive: data['isActive'] != false,
+                    );
+                  }(),
+              ];
+              if (all.isEmpty) {
+                return Container(
+                  width: double.infinity,
+                  padding: kAdminTablePadding,
+                  decoration: adminTableCard(c),
+                  child: const AdminEmptyState(
+                    icon: Icons.price_change_outlined,
+                    title: 'No admin reference prices set yet',
+                    subtitle:
+                        'Set official commodity prices to power AI price recommendations.',
+                  ),
+                );
+              }
+
+              // Two tables, never mixed: the commodities in use, and the
+              // archive. An archived commodity leaves the first and is
+              // found (and restored) in the second.
+              final rows = [
+                for (final row in all)
+                  if (row.isActive != _showArchived) row,
+              ];
+              final secondary = TextStyle(color: c.textSecondary);
 
               return Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: c.surface,
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: c.border),
-                ),
+                padding: kAdminTablePadding,
+                decoration: adminTableCard(c),
                 // Sized to fit its content naturally (no fixed/bounded
                 // height here) — the page-level scroll above is what
                 // reveals rows past the viewport, not a clipped box.
-                child: priceDocs.isEmpty
-                    ? const AdminEmptyState(
-                        icon: Icons.price_change_outlined,
-                        title: 'No admin reference prices set yet',
-                        subtitle:
-                            'Set official commodity prices to power AI price recommendations.',
+                child: rows.isEmpty
+                    ? AdminEmptyState(
+                        icon: _showArchived
+                            ? Icons.archive_outlined
+                            : Icons.price_change_outlined,
+                        title: _showArchived
+                            ? 'No archived commodities'
+                            : 'No commodities in use',
+                        subtitle: _showArchived
+                            ? 'A commodity you archive is kept here, and can be restored.'
+                            : 'Add a commodity, or restore one from Archived.',
                       )
-                    : SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: DataTable(
-                          headingRowColor: WidgetStateProperty.all(
-                            c.surfaceAlt,
-                          ),
-                          dataRowColor: WidgetStateProperty.all(
-                            Colors.transparent,
-                          ),
-                          columnSpacing: 32,
-                          horizontalMargin: 12,
-                          headingTextStyle: TextStyle(
-                            color: c.textSecondary,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          dataTextStyle: TextStyle(
-                            color: c.textPrimary,
-                            fontSize: 13,
-                          ),
-                          columns: const [
-                            DataColumn(label: Text('Commodity')),
-                            DataColumn(label: Text('Category')),
-                            DataColumn(label: Text('Status')),
-                            DataColumn(
-                              label: Text('Current Market Average (Retail)'),
-                            ),
-                            DataColumn(
-                              label: Text('Current Market Average (Wholesale)'),
-                            ),
-                            DataColumn(label: Text('Admin Reference Price')),
-                            DataColumn(label: Text('Unit')),
-                            DataColumn(label: Text('Effective Date')),
-                            DataColumn(label: Text('Source')),
-                            DataColumn(label: Text('Actions')),
-                          ],
-                          rows: priceDocs.map((doc) {
-                            final data = doc.data();
-                            final name = (data['name'] ?? doc.id).toString();
-                            final baseline =
-                                (data['baselinePrice'] as num?)?.toDouble() ??
-                                0;
-                            // Current Market Average comes ONLY from
-                            // active Farmer listings — never the admin's
-                            // reference price (see computeLiveAverage).
-                            final liveAverage = computeLiveAverage(
-                              products,
-                              name,
-                            );
-                            final wholesaleLiveAverage =
-                                computeWholesaleLiveAverage(products, name);
-                            final category =
-                                (data['category'] ?? categoryOfCommodity(name))
-                                    ?.toString();
-                            final unit = (data['unit'] ?? '').toString();
-                            final effectiveDate =
-                                data['effectiveDate'] as Timestamp?;
-                            final source = (data['source'] ?? '').toString();
-                            // Farmers can post it (Supported Products,
-                            // Add Product) only while Active and in a
-                            // category — see CommodityRegistry.
-                            final isActive = data['isActive'] != false;
-
-                            return DataRow(
-                              cells: [
-                                DataCell(Text(name)),
-                                DataCell(
-                                  Text(
-                                    category ?? '—',
-                                    style: TextStyle(color: c.textSecondary),
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          AdminTableFit(
+                            table: DataTable(
+                              headingRowColor: WidgetStateProperty.all(
+                                adminTableHeaderColor(c),
+                              ),
+                              dataRowColor: adminTableRowColor(c),
+                              columnSpacing: kAdminTableColumnSpacing,
+                              horizontalMargin: kAdminTableMargin,
+                              headingTextStyle: adminTableHeaderStyle(c),
+                              dataTextStyle: TextStyle(
+                                fontFamily: kAdminFontFamily,
+                                color: c.textPrimary,
+                                fontSize: 13,
+                              ),
+                              columns: const [
+                                DataColumn(label: Text('Commodity')),
+                                DataColumn(label: Text('Category')),
+                                DataColumn(label: Text('Status')),
+                                DataColumn(
+                                  label: Text(
+                                    'Current Market Average (Retail)',
                                   ),
                                 ),
-                                DataCell(
-                                  Text(
-                                    category == null
-                                        ? 'No category'
-                                        : isActive
-                                        ? 'Active'
-                                        : 'Disabled',
+                                DataColumn(
+                                  label: Text('Admin Reference Price'),
+                                ),
+                                DataColumn(label: Text('Unit')),
+                                DataColumn(label: Text('Price Date')),
+                                DataColumn(label: Text('Actions')),
+                              ],
+                              rows: [
+                                for (final row in rows)
+                                  _commodityRow(
+                                    context,
+                                    c,
+                                    id: row.id,
+                                    data: row.data,
+                                    name: row.name,
+                                    category: row.category,
+                                    isActive: row.isActive,
+                                    products: products,
+                                    secondary: secondary,
+                                  ),
+                              ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 10,
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '${rows.length} '
+                                    '${rows.length == 1 ? 'commodity' : 'commodities'}',
                                     style: TextStyle(
-                                      color: category != null && isActive
-                                          ? c.textPrimary
-                                          : c.textSecondary,
+                                      color: c.textSecondary,
+                                      fontSize: 12,
                                     ),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    liveAverage != null
-                                        ? _formatPriceWithUnit(
-                                            liveAverage,
-                                            unit,
-                                          )
-                                        : 'No active retail listings',
-                                    style: TextStyle(color: c.textSecondary),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    wholesaleLiveAverage != null
-                                        ? _formatPriceWithUnit(
-                                            wholesaleLiveAverage,
-                                            unit,
-                                          )
-                                        : 'No wholesale market data yet',
-                                    style: TextStyle(color: c.textSecondary),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    _formatPriceWithUnit(baseline, unit),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    unit.isEmpty ? 'kg' : unit,
-                                    style: TextStyle(color: c.textSecondary),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    effectiveDate != null
-                                        ? DateFormat(
-                                            'MMM d, y',
-                                          ).format(effectiveDate.toDate())
-                                        : '—',
-                                    style: TextStyle(color: c.textSecondary),
-                                  ),
-                                ),
-                                DataCell(
-                                  Text(
-                                    source.isEmpty ? '—' : source,
-                                    style: TextStyle(color: c.textSecondary),
-                                  ),
-                                ),
-                                DataCell(
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      IconButton(
-                                        tooltip: 'Update reference price',
-                                        icon: Icon(
-                                          Icons.edit_outlined,
-                                          size: 18,
-                                          color: c.textSecondary,
-                                        ),
-                                        onPressed: () => _openBaselineDialog(
-                                          context,
-                                          commodityId: doc.id,
-                                          name: name,
-                                          price: baseline,
-                                          unit: unit,
-                                          category: category,
-                                          isActive: isActive,
-                                        ),
-                                      ),
-                                      IconButton(
-                                        tooltip: 'Remove reference price',
-                                        icon: Icon(
-                                          Icons.delete_outline,
-                                          size: 18,
-                                          color: c.red,
-                                        ),
-                                        onPressed: () => _deleteBaseline(
-                                          context,
-                                          doc.id,
-                                          name,
-                                        ),
-                                      ),
-                                    ],
                                   ),
                                 ),
                               ],
-                            );
-                          }).toList(),
-                        ),
+                            ),
+                          ),
+                        ],
                       ),
               );
             },
           ),
         ],
       ),
+    );
+  }
+
+  DataRow _commodityRow(
+    BuildContext context,
+    AdminPalette c, {
+    required String id,
+    required Map<String, dynamic> data,
+    required String name,
+    required String? category,
+    required bool isActive,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> products,
+    required TextStyle secondary,
+  }) {
+    final baseline = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
+    // Current Market Average comes ONLY from active Farmer listings —
+    // never the admin's reference price (see computeLiveAverage). Worked
+    // out once per change in the listings: ticking a box or archiving
+    // rebuilds the table without going through every listing again.
+    if (!identical(_averagedProducts, products)) {
+      _averagedProducts = products;
+      _liveAverages.clear();
+    }
+    final liveAverage = _liveAverages.putIfAbsent(
+      name,
+      () => computeLiveAverage(products, name),
+    );
+    final unit = (data['unit'] ?? '').toString();
+    final effectiveDate = data['effectiveDate'] as Timestamp?;
+    return DataRow(
+      selected: _ticked.contains(id),
+      onSelectChanged: (on) => setState(() {
+        if (on ?? false) {
+          _ticked.add(id);
+        } else {
+          _ticked.remove(id);
+        }
+      }),
+      cells: [
+        DataCell(Text(name, style: isActive ? null : secondary)),
+        DataCell(Text(category ?? '—', style: secondary)),
+        DataCell(
+          Text(
+            !isActive
+                ? ((data['archiveReason'] ?? '').toString().trim().isEmpty
+                      ? 'Archived'
+                      : 'Archived — ${data['archiveReason']}')
+                : category == null
+                ? 'No category'
+                : 'Active',
+            style: TextStyle(
+              color: category != null && isActive
+                  ? c.textPrimary
+                  : c.textSecondary,
+            ),
+          ),
+        ),
+        DataCell(
+          Text(
+            liveAverage != null
+                ? _formatPriceWithUnit(liveAverage, unit)
+                : 'No active retail listings',
+            style: secondary,
+          ),
+        ),
+        DataCell(
+          Text(
+            _formatPriceWithUnit(baseline, unit),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        DataCell(Text(unit.isEmpty ? 'kg' : unit, style: secondary)),
+        DataCell(
+          Text(
+            effectiveDate != null
+                ? DateFormat('MMM d, y').format(effectiveDate.toDate())
+                : '—',
+            style: secondary,
+          ),
+        ),
+        DataCell(
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'Update reference price',
+                icon: Icon(
+                  Icons.edit_outlined,
+                  size: 18,
+                  color: c.textSecondary,
+                ),
+                onPressed: () => _openBaselineDialog(
+                  context,
+                  commodityId: id,
+                  name: name,
+                  price: baseline,
+                  unit: unit,
+                  category: category,
+                  isActive: isActive,
+                ),
+              ),
+              // Archive and Restore are on the selection bar above the
+              // table: tick the row.
+              if (!isActive)
+                IconButton(
+                  tooltip: 'Remove reference price',
+                  icon: Icon(Icons.delete_outline, size: 18, color: c.red),
+                  onPressed: () => _deleteBaseline(context, id, name),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -4053,7 +4960,7 @@ class _PriceImportPreviewDialog extends StatelessWidget {
     final screenHeight = MediaQuery.sizeOf(context).height;
 
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: 800,
@@ -4088,10 +4995,9 @@ class _PriceImportPreviewDialog extends StatelessWidget {
               const SizedBox(height: 12),
               Flexible(
                 child: SingleChildScrollView(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: DataTable(
-                      columnSpacing: 28,
+                  child: AdminTableFit(
+                    table: DataTable(
+                      columnSpacing: kAdminTableColumnSpacing,
                       columns: const [
                         DataColumn(label: Text('Commodity')),
                         DataColumn(label: Text('Reference Price')),
@@ -4232,6 +5138,22 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
   );
   late bool _isActive = widget.initialActive;
 
+  // The date the price being entered applies from: today unless the
+  // officer picks an earlier one. Never a future date.
+  DateTime _effectiveDate = DateUtils.dateOnly(DateTime.now());
+
+  Future<void> _pickEffectiveDate() async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final picked = await showAdminDatePicker(
+      context,
+      initialDate: _effectiveDate,
+      firstDate: DateTime(2000),
+      lastDate: today,
+      title: 'Price date',
+    );
+    if (picked != null && mounted) setState(() => _effectiveDate = picked);
+  }
+
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _products = [];
   bool _loadingProducts = true;
   bool _saving = false;
@@ -4321,20 +5243,42 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
       final existing = await docRef.get();
 
       final oldPrice = existing.data()?['baselinePrice'];
+      final updatedBy =
+          FirebaseAuth.instance.currentUser?.email ??
+          FirebaseAuth.instance.currentUser?.uid ??
+          'admin';
+      final savedUnit = unit.isEmpty ? 'kg' : unit;
       await docRef.set({
         'name': name,
         'category': category,
         'isActive': _isActive,
         'baselinePrice': price,
-        'unit': unit.isEmpty ? 'kg' : unit,
+        'unit': savedUnit,
         'previousBaselinePrice': oldPrice,
+        'effectiveDate': Timestamp.fromDate(_effectiveDate),
+        // An officer-entered price is the office's own figure.
+        'source': FieldValue.delete(),
+        'isTestData': false,
         if (!existing.exists) 'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-        'updatedBy':
-            FirebaseAuth.instance.currentUser?.email ??
-            FirebaseAuth.instance.currentUser?.uid ??
-            'admin',
+        'updatedBy': updatedBy,
       }, SetOptions(merge: true));
+      // The dated history is kept on top of the price itself: if it cannot
+      // be written, the price saved above still stands.
+      try {
+        final history = FirebaseFirestore.instance.batch();
+        _recordReferencePrice(
+          history,
+          docRef,
+          price: price,
+          unit: savedUnit,
+          effectiveDate: _effectiveDate,
+          updatedBy: updatedBy,
+        );
+        await history.commit();
+      } catch (e) {
+        debugPrint('[PriceHistory] could not record $name: $e');
+      }
 
       AuditLogService.log(
         AuditAction.updateBaselinePrice,
@@ -4367,82 +5311,102 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
             : 'Update Admin Reference Price',
       ),
       content: SizedBox(
-        width: 360,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _nameController,
-              enabled: widget.commodityId == null,
-              decoration: const InputDecoration(
-                labelText: 'Commodity name',
-                hintText: 'e.g. Rice',
+        width: 400,
+        child: SingleChildScrollView(
+          // Room for the fields' shadows, which a scroll view would cut.
+          padding: const EdgeInsets.fromLTRB(4, 2, 4, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              AdminField(
+                controller: _nameController,
+                icon: Icons.eco_outlined,
+                enabled: widget.commodityId == null,
+                decoration: const InputDecoration(
+                  labelText: 'Commodity name',
+                  hintText: 'e.g. Rice',
+                ),
+                onChanged: (_) => _onNameChanged(),
               ),
-              onChanged: (_) => _onNameChanged(),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _categoryController,
-              decoration: InputDecoration(
-                labelText: 'Category',
-                hintText: 'e.g. Vegetables',
-                helperText:
-                    'Existing: ${CommodityRegistry.instance.categories.join(', ')}',
-                helperMaxLines: 2,
+              const SizedBox(height: 14),
+              AdminField(
+                controller: _categoryController,
+                icon: Icons.category_outlined,
+                decoration: InputDecoration(
+                  labelText: 'Category',
+                  hintText: 'e.g. Vegetables',
+                  helperText:
+                      'Existing: ${CommodityRegistry.instance.categories.join(', ')}',
+                  helperMaxLines: 2,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _priceController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
+              const SizedBox(height: 14),
+              AdminField(
+                controller: _priceController,
+                icon: Icons.payments_outlined,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Admin reference price (₱)',
+                  hintText: 'e.g. 55.00',
+                ),
+                onChanged: (_) => setState(() {}),
               ),
-              decoration: const InputDecoration(
-                labelText: 'Admin reference price (₱)',
+              const SizedBox(height: 14),
+              AdminField(
+                controller: _unitController,
+                icon: Icons.straighten_rounded,
+                decoration: const InputDecoration(
+                  labelText: 'Unit',
+                  hintText: 'e.g. kg, piece, kg liveweight',
+                ),
               ),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _unitController,
-              decoration: const InputDecoration(
-                labelText: 'Unit',
-                hintText: 'e.g. kg, piece, kg liveweight',
+              const SizedBox(height: 14),
+              // The date this price applies from. Every price is kept under
+              // its date, so a history builds up month by month.
+              AdminFieldPlate(
+                label: 'Price date',
+                helper: 'The date this reference price applies from.',
+                icon: Icons.calendar_today_outlined,
+                value: DateFormat('MMMM d, y').format(_effectiveDate),
+                onTap: _saving ? null : _pickEffectiveDate,
               ),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              title: const Text('Active'),
-              subtitle: const Text(
-                'Farmers can choose it for new products. Turning this off '
-                'keeps existing listings.',
-                style: TextStyle(fontSize: 11.5),
+              const SizedBox(height: 6),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: const Text('Active'),
+                subtitle: const Text(
+                  'Farmers can choose it for new products. Turning this off '
+                  'keeps existing listings.',
+                  style: TextStyle(fontSize: 11.5),
+                ),
+                value: _isActive,
+                onChanged: (value) => setState(() => _isActive = value),
               ),
-              value: _isActive,
-              onChanged: (value) => setState(() => _isActive = value),
-            ),
-            const SizedBox(height: 4),
-            // Shows what active Farmer listings say right now, right next
-            // to the reference price the admin is about to commit — the
-            // two are always kept visibly separate (never averaged together).
-            Text(
-              _loadingProducts
-                  ? 'Checking active listings…'
-                  : liveAverage != null
-                  ? 'Current market average right now: ${formatPeso(liveAverage)}'
-                  : 'No active listings match this name yet.',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 4),
+              // Shows what active Farmer listings say right now, right next
+              // to the reference price the admin is about to commit — the
+              // two are always kept visibly separate (never averaged together).
               Text(
-                _error!,
-                style: const TextStyle(color: Colors.red, fontSize: 12),
+                _loadingProducts
+                    ? 'Checking active listings…'
+                    : liveAverage != null
+                    ? 'Current market average right now: ${formatPeso(liveAverage)}'
+                    : 'No active listings match this name yet.',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _error!,
+                  style: const TextStyle(color: Colors.red, fontSize: 12),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [

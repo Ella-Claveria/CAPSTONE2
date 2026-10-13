@@ -22,6 +22,9 @@ if (!getApps().length) {
 
 const db = getFirestore();
 const messaging = getMessaging();
+const { CHANNELS, NEW_DEVICE_TYPE, pushData, newDeviceAlert } = require("./push_payload");
+const { categoryOf, pushAllowed, deliveryChannels, WELCOME } = require("./notification_policy");
+const { COMMODITY_ARCHIVED, archiveChange, commodityNotice } = require("./commodity_notice");
 
 // Keep marketplace-visible profile fields separate from private users/{uid}
 // records. Admin SDK writes bypass client rules; clients cannot write this
@@ -59,7 +62,7 @@ exports.syncPublicProfile = onDocumentWritten("users/{uid}", async (event) => {
  * redelivers unchanged on retry) and unique per distinct event otherwise —
  * it becomes the notification's own document id, so a retried event
  * overwrites/no-ops the same doc rather than creating a duplicate. */
-async function notifyUser(uid, { title, body, type, data, dedupeId, relatedId }) {
+async function notifyUser(uid, { title, body, type, data, dedupeId, relatedId, channelId = CHANNELS.transactions }) {
   if (!uid || !dedupeId) return;
 
   const itemRef = db.collection("notifications").doc(uid).collection("items").doc(dedupeId);
@@ -82,17 +85,43 @@ async function notifyUser(uid, { title, body, type, data, dedupeId, relatedId })
     title,
     body,
     type,
+    // ACCOUNT / ORDERS / MESSAGES / REVIEWS / SYSTEM (notification_policy.js).
+    category: categoryOf(type),
     relatedId: relatedId || null,
     data: data || {},
     read: false,
+    // How it goes out. The in-app copy is always saved; "push" is added
+    // below once a push has actually been handed to a device.
+    deliveryChannels: deliveryChannels(type, { pushed: false }),
     createdAt: FieldValue.serverTimestamp(),
   });
 
+  // From here on it is push delivery only. The in-app record above is
+  // already saved, and a push that cannot be sent must never fail the
+  // trigger — the caller may still have another person to notify.
+  try {
+    const pushed = await pushToUser(uid, { title, body, type, data, channelId });
+    if (pushed) {
+      await itemRef.update({ deliveryChannels: deliveryChannels(type, { pushed: true }) });
+    }
+  } catch (err) {
+    console.error(`notifyUser(${uid}, type=${type}): push failed —`, err.message);
+  }
+}
+
+async function pushToUser(uid, { title, body, type, data, channelId }) {
   const userSnap = await db.collection("users").doc(uid).get();
-  const tokens = userSnap.exists ? userSnap.data().fcmTokens || [] : [];
+  const user = userSnap.exists ? userSnap.data() : {};
+  const tokens = user.fcmTokens || [];
   if (tokens.length === 0) {
     console.log(`notifyUser(${uid}, type=${type}): no fcmTokens on file — push skipped (in-app history still written).`);
-    return;
+    return false;
+  }
+  // The user's own Notification Preferences (Profile): a category, or all
+  // pushes, switched off. The in-app record is unaffected.
+  if (!pushAllowed(type, user.notificationPrefs)) {
+    console.log(`notifyUser(${uid}, type=${type}): push is off in the user's preferences — push skipped (in-app history still written).`);
+    return false;
   }
 
   const response = await messaging.sendEachForMulticast({
@@ -104,9 +133,10 @@ async function notifyUser(uid, { title, body, type, data, dedupeId, relatedId })
     // notification to and silently drops or downgrades it on many devices
     // — which is exactly why this worked in-app but never outside it.
     android: {
-      notification: { channelId: "agritrade_transactions" },
+      notification: { channelId },
     },
-    data: { type, ...(data || {}) },
+    // Strings only — see pushData.
+    data: pushData(type, data),
     tokens,
   });
   console.log(
@@ -136,7 +166,36 @@ async function notifyUser(uid, { title, body, type, data, dedupeId, relatedId })
       fcmTokens: FieldValue.arrayRemove(...staleTokens),
     });
   }
+  return response.successCount > 0;
 }
+
+// The one-time "Welcome to AgriTrade+!" notification. Its document id is
+// fixed ("welcome"), so it can only ever exist once per user however many
+// times this runs — never again on a later login or restart.
+async function sendWelcome(uid, role) {
+  await notifyUser(uid, {
+    title: WELCOME.title,
+    body: role === "farmer" ? WELCOME.farmer : WELCOME.buyer,
+    type: "welcome",
+    relatedId: uid,
+    data: { role },
+    dedupeId: "welcome",
+  });
+}
+
+// ---------------------------------------------------------------
+// A buyer's profile is created (registration finished: the email is
+// verified by then, see AuthService.completeRegistration) -> welcome them.
+// It is there in Notifications the first time they enter the app.
+//
+// A farmer is welcomed when their application is approved instead (see
+// notifyFarmerApprovalStatusChange): that is when they can first enter.
+// ---------------------------------------------------------------
+exports.welcomeNewBuyer = onDocumentCreated("users/{uid}", async (event) => {
+  const user = event.data.data() || {};
+  if (user.role !== "buyer") return;
+  await sendWelcome(event.params.uid, "buyer");
+});
 
 // ---------------------------------------------------------------
 // New chat message -> notify the other participant.
@@ -239,7 +298,10 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
       sellerLongitude: FieldValue.delete(),
       sellerLocationSnapshotAt: FieldValue.delete(),
     });
-    return;
+    // No return here: this used to stop the function, so the status
+    // change that happened to carry the clean-up never notified anyone.
+    // The clean-up write re-fires this trigger with an unchanged status,
+    // which ends at the check just below.
   }
   if (before.status === after.status) return;
 
@@ -563,9 +625,24 @@ exports.issueOrderReceipt = onDocumentUpdated("orders/{orderId}", async (event) 
 // through Gmail SMTP — see account_emails.js and mailer.js.
 Object.assign(exports, require("./account_emails"));
 
+// The Admin Portal's single active session and its sign-in alert: see
+// admin_session.js.
+Object.assign(exports, require("./admin_session"));
+
+// "Is this email already registered?", asked before a second
+// registration is started: see registration_status.js.
+Object.assign(exports, require("./registration_status"));
+
 // 6-digit email verification code for email/password sign-ups — see
 // email_otp.js.
 Object.assign(exports, require("./email_otp"));
+
+// Failed-login cooldown (5 wrong passwords → 5 minute pause) — see
+// login_throttle.js.
+Object.assign(exports, require("./login_throttle"));
+
+// The public page behind a shared product link (/product/<id> on Hosting).
+Object.assign(exports, require("./public_product"));
 
 // ---------------------------------------------------------------
 // Order delay / reschedule (see OrderService.reportDelay and friends).
@@ -923,20 +1000,36 @@ exports.notifyFarmerApprovalStatusChange = onDocumentUpdated(
 
     const approved = after.approvalStatus === "approved";
 
+    // The officer's reason for a rejection is kept with the application
+    // (written in the same batch as the status), and goes in the notice.
+    let reason = "";
+    if (!approved) {
+      const application = await db.collection("verificationDocs").doc(event.params.uid).get();
+      reason = application.exists ? (application.get("rejectionReason") || "").toString().trim() : "";
+    }
+
+    // Saved in-app first, whether or not a push can be sent (see
+    // notifyUser): a farmer who is signed out sees it at the next sign-in.
+    // The email for the same decision is emailFarmerApprovalDecision
+    // (account_emails.js).
     await notifyUser(event.params.uid, {
-      title: approved ? "You're verified!" : "Verification update",
+      title: approved ? "Farmer Account Approved" : "Farmer Application Update",
       body: approved
-        ? "Your farmer account has been verified. You can now start listing products."
-        : "Your verification application was not approved. Please review and resubmit your documents.",
+        ? "Your Farmer application has been approved. You can now start using AgriTrade+ as a Farmer."
+        : "Your Farmer application was not approved. Please review the Admin's remarks." +
+          (reason ? ` Reason: ${reason}` : ""),
       // Reuses the notification type the app's client already switches on
       // (NotificationNavigationService, NotificationsScreen icon lookup) —
       // introducing a differently-named type here would silently fall
       // through to their default case instead of routing/icon-matching.
       type: "verification_status",
       relatedId: event.params.uid,
-      data: { status: after.approvalStatus },
+      data: reason ? { status: after.approvalStatus, reason } : { status: after.approvalStatus },
       dedupeId: event.id,
     });
+
+    // Approved: the farmer can now enter the app for the first time.
+    if (approved) await sendWelcome(event.params.uid, "farmer");
   }
 );
 
@@ -953,7 +1046,9 @@ exports.notifyModerationWarning = onDocumentUpdated("reports/{reportId}", async 
   if (before.moderationAction === after.moderationAction) return;
   if (after.moderationAction !== "warning") return;
 
-  const farmerId = after.farmerId || after.reportedUserId;
+  // The reported account (see reportedUserIdOf in the app): on a review
+  // report farmerId is the farmer who filed it, not the one warned.
+  const farmerId = after.reportedUserId || after.farmerId;
   if (!farmerId) return;
 
   const productName = after.productName;
@@ -991,13 +1086,202 @@ exports.notifyAccountModeration = onDocumentUpdated("users/{uid}", async (event)
   await notifyUser(event.params.uid, {
     title: suspended ? "Account Suspended" : "Account Deactivated",
     body: suspended
-      ? `Your AgriTrade+ account has been temporarily suspended following an Admin review.${after.suspensionReason ? ` Reason: ${after.suspensionReason}` : ""}`
+      ? `Your AgriTrade+ account has been suspended until an Admin reactivates it.${after.suspensionReason ? ` Reason: ${after.suspensionReason}` : ""}`
       : `Your AgriTrade+ account has been deactivated following an Admin review.${after.banReason ? ` Reason: ${after.banReason}` : ""}`,
     type: "moderation_warning",
     relatedId: event.params.uid,
     data: { accountStatus: after.accountStatus },
     dedupeId: event.id,
   });
+});
+
+// ---------------------------------------------------------------
+// New Device Sign-In alert (push + in-app record).
+//
+// The app records each installation an account signs in on under
+// users/{uid}/trustedDevices/{deviceIdHash}; a record is only ever created
+// the first time that installation signs in to that account (see
+// DeviceTrustService in the app, and onNewTrustedDevice in
+// account_emails.js, which sends the email for the same event).
+//
+// This is an alert about a sign-in that has already succeeded. It is not
+// an approval step and gives no control over the session — tapping it
+// opens the account's device list, where the password can be changed.
+//
+// It goes to every device the account receives notifications on. That can
+// include the new device itself, which is harmless: it says nothing the
+// person holding that device does not already know.
+//
+// Not sent for the account's very first device — there is no earlier one
+// for it to be "new" relative to.
+// ---------------------------------------------------------------
+exports.notifyNewDeviceSignIn = onDocumentCreated(
+  "users/{uid}/trustedDevices/{deviceId}",
+  async (event) => {
+    const { uid, deviceId } = event.params;
+    const device = event.data.data() || {};
+
+    const known = await db.collection("users").doc(uid).collection("trustedDevices").limit(2).get();
+    if (known.size <= 1) return;
+
+    const alert = newDeviceAlert({ deviceName: device.deviceName, platform: device.platform });
+    await notifyUser(uid, {
+      ...alert,
+      type: NEW_DEVICE_TYPE,
+      channelId: CHANNELS.security,
+      relatedId: deviceId,
+      // What the device list needs to point at the right row — the hashed
+      // installation id, never a credential.
+      data: {
+        deviceId,
+        deviceName: (device.deviceName || "").toString(),
+        platform: (device.platform || "").toString(),
+      },
+      dedupeId: `new-device-${deviceId}`,
+    });
+  }
+);
+
+// ---------------------------------------------------------------
+// Admin announcement -> notify its audience (in-app record + push).
+//
+// The Admin Portal creates announcements/{id} (title, body, kind,
+// audience). Recipients are approved farmers, plus buyers when the
+// audience is "all" (a maintenance notice always is). Banned accounts are
+// left out. The title and body ride along in `data` so the app can show
+// the whole message when the notification is tapped.
+//
+// A retry delivers nothing twice: each recipient's record is keyed by the
+// announcement id (see notifyUser's dedupeId).
+// ---------------------------------------------------------------
+exports.sendAnnouncement = onDocumentCreated("announcements/{announcementId}", async (event) => {
+  const { announcementId } = event.params;
+  const announcement = event.data.data() || {};
+  const title = String(announcement.title || "").trim();
+  const body = String(announcement.body || "").trim();
+  if (!title || !body) return;
+
+  const kind = announcement.kind === "maintenance" ? "maintenance" : "announcement";
+  const roles = announcement.audience === "all" ? ["farmer", "buyer"] : ["farmer"];
+  const users = await db.collection("users").where("role", "in", roles).get();
+  const recipients = users.docs.filter((doc) => {
+    const user = doc.data();
+    if (user.accountStatus === "banned") return false;
+    return user.role !== "farmer" || user.approvalStatus === "approved";
+  });
+
+  let delivered = 0;
+  for (const doc of recipients) {
+    try {
+      await notifyUser(doc.id, {
+        title,
+        body,
+        type: "announcement",
+        relatedId: announcementId,
+        data: { announcementId, kind, title, body },
+        dedupeId: `announcement_${announcementId}`,
+      });
+      delivered++;
+    } catch (err) {
+      console.error(`sendAnnouncement(${announcementId}): ${doc.id} failed —`, err.message);
+    }
+  }
+  console.log(`sendAnnouncement(${announcementId}): delivered to ${delivered} of ${recipients.length} account(s).`);
+  await event.data.ref.update({
+    deliveredTo: delivered,
+    deliveredAt: FieldValue.serverTimestamp(),
+  });
+});
+
+// ---------------------------------------------------------------
+// The Agricultural Office archived a commodity (Admin → Price Management:
+// its selling is stopped for a reason, e.g. a livestock disease) or
+// restored it.
+//
+// Archived:
+//   * every listing of that commodity is hidden from the marketplace —
+//     isSuspended, the flag buyers' screens, ordering and the farmer's own
+//     listing already respect — and marked moderationStatus
+//     "commodity_archived" with the office's reason, so it is known WHY it
+//     is hidden and which listings to bring back;
+//   * the farmers who sell it are told, with the reason.
+// Restored:
+//   * only the listings hidden by the archive come back (one an Admin hid
+//     or removed for its own reasons stays as it is);
+//   * the same farmers are told it is available again.
+//
+// The notice is an "announcement" to the app: tapping it shows its title
+// and message, as any announcement from the office does.
+// ---------------------------------------------------------------
+exports.onCommodityArchiveChanged = onDocumentUpdated("market_prices/{commodityId}", async (event) => {
+  const before = event.data.before.data() || {};
+  const after = event.data.after.data() || {};
+  const change = archiveChange(before, after);
+  if (!change) return;
+
+  const { commodityId } = event.params;
+  const name = String(after.name || commodityId).trim();
+  const reason = String(after.archiveReason || "").trim();
+
+  // The commodity's listings, by the commodity each one was posted under.
+  const listings = await db.collection("products").where("commodity", "==", name).get();
+  const affectedByFarmer = new Map();
+  let batch = db.batch();
+  let writes = 0;
+  for (const doc of listings.docs) {
+    const product = doc.data();
+    if (change === "archived") {
+      // Already hidden or removed by an Admin: left exactly as it is.
+      if (product.isSuspended === true) continue;
+      batch.update(doc.ref, {
+        isSuspended: true,
+        moderationStatus: COMMODITY_ARCHIVED,
+        moderationReason: reason,
+        moderatedAt: FieldValue.serverTimestamp(),
+      });
+    } else {
+      if (product.moderationStatus !== COMMODITY_ARCHIVED) continue;
+      batch.update(doc.ref, {
+        isSuspended: false,
+        moderationStatus: FieldValue.delete(),
+        moderationReason: FieldValue.delete(),
+        moderatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    const farmerId = String(product.farmerId || "");
+    if (farmerId) affectedByFarmer.set(farmerId, (affectedByFarmer.get(farmerId) || 0) + 1);
+    if (++writes % 400 === 0) {
+      await batch.commit();
+      batch = db.batch();
+    }
+  }
+  if (writes % 400 !== 0) await batch.commit();
+
+  // Only the farmers who sell it: those with a listing hidden (or brought
+  // back) just now. Nobody else is told.
+  let delivered = 0;
+  for (const [farmerId, count] of affectedByFarmer) {
+    const notice = commodityNotice({ change, name, reason, listings: count });
+    try {
+      const farmer = await db.collection("users").doc(farmerId).get();
+      if (!farmer.exists || farmer.data().accountStatus === "banned") continue;
+      await notifyUser(farmerId, {
+        title: notice.title,
+        body: notice.body,
+        type: "announcement",
+        relatedId: commodityId,
+        data: { kind: "commodity", commodityId, change, title: notice.title, body: notice.body },
+        dedupeId: `commodity_${commodityId}_${event.id}`,
+      });
+      delivered++;
+    } catch (err) {
+      console.error(`onCommodityArchiveChanged(${commodityId}): ${farmerId} failed —`, err.message);
+    }
+  }
+  console.log(
+    `onCommodityArchiveChanged(${commodityId}): ${name} ${change}; ${writes} listing(s) updated, ` +
+      `${delivered} farmer(s) notified.`
+  );
 });
 
 // ---------------------------------------------------------------
@@ -1067,8 +1351,24 @@ exports.enforceExclusiveFcmToken = onDocumentWritten("users/{uid}", async (event
 const PRE_AUTH_ACTIONS = new Set(["LOGIN_FAILED", "PASSWORD_RESET_REQUESTED"]);
 
 const AUTHENTICATED_ACTIONS = new Set([
+  "REMOVE_REVIEW",
+  "DISMISS_REPORT",
+  "REACTIVATE_FARMER",
+  "RESTORE_LISTING",
+  "UPDATE_SUPPORT_REQUEST",
   "LOGIN_SUCCESS",
   "LOGOUT",
+  // The browser whose Admin session was ended by a sign-in elsewhere logs
+  // this on its way out. NEW_DEVICE_LOGIN and SESSION_REPLACED are written
+  // by adminSession itself (admin_session.js), never by a client.
+  "SESSION_FORCED_LOGOUT",
+  // The report workflow, and account actions on any marketplace account.
+  "START_REPORT_REVIEW",
+  "RESOLVE_REPORT",
+  "CONFIRM_VIOLATION",
+  "SUSPEND_ACCOUNT",
+  "BAN_ACCOUNT",
+  "REACTIVATE_ACCOUNT",
   "APPROVE_FARMER",
   "REJECT_FARMER",
   "UPDATE_BASELINE_PRICE",
@@ -1080,31 +1380,11 @@ const AUTHENTICATED_ACTIONS = new Set([
   "SUSPEND_FARMER",
   "BAN_FARMER",
   "EXPORT_REPORT",
+  "SEND_ANNOUNCEMENT",
 ]);
 
-// Minimal hand-rolled User-Agent parse — just enough to label "Chrome on
-// Windows" / "Safari on macOS" for the audit table, not a full UA
-// database. Falls back to "Unknown" for anything it doesn't recognize
-// rather than guessing.
-function parseUserAgent(ua) {
-  if (!ua) return { browser: "Unknown", os: "Unknown" };
-
-  let browser = "Unknown";
-  if (/edg\//i.test(ua)) browser = "Edge";
-  else if (/chrome\//i.test(ua) && !/chromium/i.test(ua)) browser = "Chrome";
-  else if (/firefox\//i.test(ua)) browser = "Firefox";
-  else if (/safari\//i.test(ua) && !/chrome\//i.test(ua)) browser = "Safari";
-  else if (/opr\//i.test(ua)) browser = "Opera";
-
-  let os = "Unknown";
-  if (/windows/i.test(ua)) os = "Windows";
-  else if (/mac os x/i.test(ua)) os = "macOS";
-  else if (/android/i.test(ua)) os = "Android";
-  else if (/iphone|ipad|ios/i.test(ua)) os = "iOS";
-  else if (/linux/i.test(ua)) os = "Linux";
-
-  return { browser, os };
-}
+// "Chrome on Windows" from a User-Agent header: see user_agent.js.
+const { parseUserAgent } = require("./user_agent");
 
 // Firestore rejects fields over ~1 MiB, but the real reason to cap these
 // is that the unauthenticated path (LOGIN_FAILED / PASSWORD_RESET_REQUESTED)
@@ -1127,7 +1407,7 @@ exports.logAuditEvent = onCall({ region: "asia-southeast1" }, async (request) =>
     throw new HttpsError("invalid-argument", "Unsupported audit action.");
   }
   if (isAuthenticated && !request.auth) {
-    throw new HttpsError("unauthenticated", "This action must be logged while signed in.");
+    throw new HttpsError("unauthenticated", "This action must be logged while logged in.");
   }
   if (isAuthenticated) {
     const adminRef = db.collection("users").doc(request.auth.uid);
@@ -1154,9 +1434,10 @@ exports.logAuditEvent = onCall({ region: "asia-southeast1" }, async (request) =>
     details,
     device: { browser, os },
     ip,
-    // City/province lookup was intentionally left out (see the Audit Log
-    // plan) — no third-party geolocation dependency for now.
-    location: "Unknown",
+    // The place the Admin's own browser reported (see AdminDeviceLocation
+    // in the app) — a place name only. It is what the device says, not
+    // something the server can check; nothing is guessed from the IP.
+    location: clip(request.data && request.data.location, 120) || "Unknown",
     timestamp: FieldValue.serverTimestamp(),
   };
 

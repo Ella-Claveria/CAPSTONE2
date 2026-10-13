@@ -1,13 +1,13 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import '../widgets/agri_dialog.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/support_request_service.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// Lets a buyer send a support request and see the ones they've already
-/// sent (with status). There's no admin review screen for these yet —
-/// they land in Firestore for now — but submitting and tracking your own
-/// requests is fully real, not a placeholder.
+/// sent, with live status updates and replies from the admin portal.
 class BuyerSupportScreen extends StatefulWidget {
   const BuyerSupportScreen({super.key});
 
@@ -17,7 +17,6 @@ class BuyerSupportScreen extends StatefulWidget {
 
 class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
   static const Color _dark = AppTheme.dark;
-  static const Color _accent = Color(0xFFDCEDC8);
 
   final _service = SupportRequestService();
   final _subjectController = TextEditingController();
@@ -141,7 +140,7 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(
-        status.toUpperCase(),
+        status.replaceAll('_', ' ').toUpperCase(),
         style: TextStyle(
           color: c,
           fontSize: 10,
@@ -156,20 +155,7 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: Colors.black87,
-        centerTitle: true,
-        title: const Text(
-          'Help & Support',
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 17,
-            color: Colors.black87,
-          ),
-        ),
-      ),
+      appBar: const AgriAppBar(title: 'Help & Support'),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openNewRequestSheet,
         backgroundColor: _dark,
@@ -195,37 +181,12 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
               });
 
           if (docs.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(22),
-                    decoration: const BoxDecoration(
-                      color: _accent,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.support_agent_outlined,
-                      size: 48,
-                      color: _dark,
-                    ),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'No support requests yet',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.black87,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Tap "New Request" if you need help with anything.',
-                    style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                  ),
-                ],
+            return const Center(
+              child: AgriEmptyState(
+                icon: Icons.support_agent_outlined,
+                title: 'No support requests yet',
+                subtitle: 'Tap "New Request" if you need help with anything.',
+                padding: EdgeInsets.all(32),
               ),
             );
           }
@@ -274,6 +235,15 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                       message,
                       style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                     ),
+                    if ((d['adminReply']?.toString().trim() ?? '')
+                        .isNotEmpty) ...[
+                      const Divider(),
+                      const Text(
+                        'Admin reply',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      Text(d['adminReply'].toString()),
+                    ],
                   ],
                 ),
               );

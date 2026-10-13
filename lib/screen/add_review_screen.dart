@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import '../widgets/agri_dialog.dart';
@@ -172,12 +173,7 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Add Review'),
-        backgroundColor: Colors.white,
-        foregroundColor: _dark,
-        elevation: 1,
-      ),
+      appBar: const AgriAppBar(title: 'Add Review'),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 
 /// First-run intro carousel — shown once on a fresh install, before the app
@@ -20,47 +21,25 @@ class OnboardingScreen extends StatefulWidget {
   State<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-/// One onboarding card's content. A single reusable page widget
-/// ([_OnboardPageView]) renders every item, instead of three near-identical
-/// screens.
-class _OnboardingItem {
-  final String image;
-  final String title;
-  final String description;
-  const _OnboardingItem({
-    required this.image,
-    required this.title,
-    required this.description,
-  });
-}
-
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const List<_OnboardingItem> _items = [
-    _OnboardingItem(
-      image: 'assets/images/onboarding_1_farming.png',
-      title: 'Fresh Products, Direct Trading',
-      description:
-          'Buy and sell selected agricultural products directly through AgriTrade+.',
-    ),
-    _OnboardingItem(
-      image: 'assets/images/onboarding_2_connection.png',
-      title: 'Smart and Convenient Marketplace',
-      description:
-          'Discover products, connect with farmers and buyers, and manage your transactions in one place.',
-    ),
-    _OnboardingItem(
-      image: 'assets/images/onboarding_3_marketplace.png',
-      title: 'Stay Connected',
-      description:
-          'Manage orders, messages, and important transaction updates through AgriTrade+.',
-    ),
+  static const List<String> _images = [
+    'assets/images/onboarding_1_farming.png',
+    'assets/images/onboarding_2_connection.png',
+    'assets/images/onboarding_3_marketplace.png',
+  ];
+
+  // Title and description of each card, in the current language.
+  static List<(String, String)> _texts(AppLocalizations t) => [
+    (t.onboardingTitle1, t.onboardingDescription1),
+    (t.onboardingTitle2, t.onboardingDescription2),
+    (t.onboardingTitle3, t.onboardingDescription3),
   ];
 
   final PageController _controller = PageController();
   int _index = 0;
   bool _submitting = false;
 
-  bool get _isLastPage => _index == _items.length - 1;
+  bool get _isLastPage => _index == _images.length - 1;
 
   void _next() {
     if (_isLastPage) {
@@ -92,15 +71,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = AppLocalizations.of(context)!;
+    final texts = _texts(t);
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
           PageView.builder(
             controller: _controller,
-            itemCount: _items.length,
+            itemCount: _images.length,
             onPageChanged: (i) => setState(() => _index = i),
-            itemBuilder: (context, i) => _OnboardPageView(item: _items[i]),
+            itemBuilder: (context, i) => _OnboardPageView(image: _images[i]),
           ),
 
           // ----- Skip, top-right — hidden on the last page since Get -----
@@ -115,7 +96,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     onPressed: _submitting ? null : _skip,
                     style: TextButton.styleFrom(foregroundColor: Colors.white),
                     child: Text(
-                      'Skip',
+                      t.onboardingSkip,
                       style: GoogleFonts.montserrat(
                         fontSize: 14.5,
                         fontWeight: FontWeight.w600,
@@ -162,7 +143,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                             fit: BoxFit.scaleDown,
                             alignment: Alignment.centerLeft,
                             child: Text(
-                              _items[_index].title,
+                              texts[_index].$1,
                               style: GoogleFonts.montserrat(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w700,
@@ -173,7 +154,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            _items[_index].description,
+                            texts[_index].$2,
                             style: GoogleFonts.montserrat(
                               fontSize: 15,
                               fontWeight: FontWeight.w400,
@@ -188,7 +169,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
                     // ----- Page indicator -----
                     Row(
-                      children: List.generate(_items.length, (i) {
+                      children: List.generate(_images.length, (i) {
                         final active = i == _index;
                         return AnimatedContainer(
                           duration: const Duration(milliseconds: 250),
@@ -230,7 +211,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                 ),
                               )
                             : Text(
-                                _isLastPage ? 'Get Started' : 'Next',
+                                _isLastPage
+                                    ? t.onboardingGetStarted
+                                    : t.onboardingNext,
                                 style: GoogleFonts.montserrat(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -249,13 +232,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// One full-bleed photo page: the realistic agricultural background, a
-/// gradient scrim for text contrast, and the small brand mark — the title/
+/// One full-bleed photo page: the realistic agricultural background and a
+/// gradient scrim for text contrast — the title/
 /// description/indicator/button chrome above lives outside this widget so
 /// it can animate independently of the page swipe.
 class _OnboardPageView extends StatelessWidget {
-  final _OnboardingItem item;
-  const _OnboardPageView({required this.item});
+  final String image;
+  const _OnboardPageView({required this.image});
 
   @override
   Widget build(BuildContext context) {
@@ -263,7 +246,7 @@ class _OnboardPageView extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         // ----- Full-bleed realistic photo, never stretched -----
-        Image.asset(item.image, fit: BoxFit.cover),
+        Image.asset(image, fit: BoxFit.cover),
 
         // ----- Dark green/black gradient: transparent near the top so the -----
         // ----- photo stays visible, solid enough by the bottom for white -----
@@ -280,22 +263,6 @@ class _OnboardPageView extends StatelessWidget {
                 Color(0xCC0B2210),
                 Color(0xF20B2210),
               ],
-            ),
-          ),
-        ),
-
-        // ----- Brand mark, upper-middle. No background — just the logo. -----
-        SafeArea(
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 44),
-              child: Image.asset(
-                'assets/images/logo.png',
-                height: 150,
-                errorBuilder: (context, error, stackTrace) =>
-                    const Icon(Icons.eco, size: 84, color: Colors.white),
-              ),
             ),
           ),
         ),

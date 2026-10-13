@@ -5,6 +5,7 @@ import '../data/ph_locations_service.dart';
 import '../services/delivery_coverage.dart';
 import '../theme/app_theme.dart';
 import 'agri_dialog.dart';
+import 'app_search_bar.dart';
 
 /// The farmer's Custom Areas picker: a searchable list of PH
 /// municipalities/cities where several can be ticked. Resolves to the new
@@ -139,27 +140,10 @@ class _DeliveryAreaPickerState extends State<_DeliveryAreaPicker> {
               ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: TextField(
+                child: AppSearchBar(
+                  hint: 'Search municipality or city',
                   controller: _search,
-                  style: GoogleFonts.montserrat(fontSize: 14),
-                  decoration: InputDecoration(
-                    hintText: 'Search municipality or city',
-                    hintStyle: GoogleFonts.montserrat(
-                      fontSize: 13.5,
-                      color: Colors.black38,
-                    ),
-                    prefixIcon: const Icon(
-                      Icons.search_rounded,
-                      color: AppTheme.dark,
-                    ),
-                    isDense: true,
-                    filled: true,
-                    fillColor: Colors.white,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(30),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
+                  onClear: _search.clear,
                 ),
               ),
               if (_selected.isNotEmpty)

@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -5,10 +6,12 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import '../services/connectivity_service.dart';
 import '../services/notification_navigation_service.dart';
+import '../services/notification_permission_prompt.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/permission_rationale_dialog.dart';
 import '../widgets/notification_card.dart';
 import '../widgets/retry_message.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// Reads notifications/{uid}/items — written by Cloud Functions
 /// (functions/index.js) whenever a new message, new order, order status
@@ -25,7 +28,6 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   static const Color _dark = AppTheme.dark;
-  static const Color _accent = Color(0xFFDCEDC8);
   static const Color _bg = Color(0xFFFAFBFA);
   static const Color _text = Color(0xFF1B1B1B);
 
@@ -151,13 +153,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
         return Scaffold(
           backgroundColor: _bg,
-          appBar: AppBar(
-            backgroundColor: Colors.white,
-            surfaceTintColor: Colors.white,
-            foregroundColor: _text,
-            elevation: 0,
-            titleSpacing: 0,
-            title: Text('Notifications', style: AppTheme.heading(18)),
+          appBar: AgriAppBar(
+            title: 'Notifications',
             actions: [
               if (hasUnread)
                 TextButton(
@@ -171,7 +168,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     ),
                   ),
                 ),
-              const SizedBox(width: 4),
             ],
           ),
           body: Column(
@@ -312,46 +308,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   Widget _emptyState(bool noNotificationsAtAll) {
     return Center(
-      child: Padding(
+      child: AgriEmptyState(
+        icon: Icons.notifications_none_rounded,
+        title: noNotificationsAtAll
+            ? 'No notifications yet'
+            : 'No ${_filter.label.toLowerCase()} notifications',
+        subtitle: noNotificationsAtAll
+            ? 'Messages, orders, and important updates will appear here.'
+            : 'Notifications of this kind will appear here.',
         padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 76,
-              height: 76,
-              decoration: const BoxDecoration(
-                color: _accent,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.notifications_none_rounded,
-                size: 38,
-                color: _dark,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              noNotificationsAtAll
-                  ? 'No notifications yet'
-                  : 'No ${_filter.label.toLowerCase()} notifications',
-              textAlign: TextAlign.center,
-              style: AppTheme.heading(17),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              noNotificationsAtAll
-                  ? 'Messages, orders, and important updates will appear here.'
-                  : 'Notifications of this kind will appear here.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                fontSize: 13.5,
-                height: 1.4,
-                color: Color(0xFF424242),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -411,11 +376,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         final proceed = await showPermissionRationale(
                           context,
                           icon: Icons.notifications_active_outlined,
-                          title: 'Stay Updated with AgriTrade+',
-                          message:
-                              'Allow notifications to receive important updates about orders, messages, verification status, delivery or pickup, warnings, and other marketplace activities.',
+                          title: kNotificationRationaleTitle,
+                          message: kNotificationRationaleMessage,
                           denyLabel: 'Not Now',
-                          allowLabel: 'Enable Notifications',
+                          allowLabel: 'Allow Notifications',
                         );
                         if (proceed) {
                           await PushNotificationService().setupFCM(

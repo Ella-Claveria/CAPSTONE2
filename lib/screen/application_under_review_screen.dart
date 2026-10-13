@@ -57,7 +57,7 @@ class ApplicationUnderReviewScreen extends StatelessWidget {
               ),
               _buildStatusRow(
                 title: 'Document Screening',
-                subtitle: 'Reviewing your Agricultural Certification.',
+                subtitle: 'Reviewing your farmer verification details.',
                 isComplete: isDocumentScreened,
               ),
               _buildStatusRow(

@@ -59,7 +59,7 @@ function smtpReason(err) {
 }
 
 const SMTP_MESSAGES = {
-  "smtp-auth": "The email service could not sign in. Please contact AgriTrade+ support.",
+  "smtp-auth": "The email service could not log in. Please contact AgriTrade+ support.",
   "smtp-connection": "The email service could not be reached. Please try again in a moment.",
   "smtp-send": "Could not send the verification code. Please try again.",
 };
@@ -67,7 +67,7 @@ const SMTP_MESSAGES = {
 async function signedInUser(request, fn) {
   if (!request.auth) {
     console.warn(`${fn}: called without a signed-in user.`);
-    throw fail("unauthenticated", "unauthenticated", "Please sign in again.");
+    throw fail("unauthenticated", "unauthenticated", "Please log in again.");
   }
   let authUser;
   try {

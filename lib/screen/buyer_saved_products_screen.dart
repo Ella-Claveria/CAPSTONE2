@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -7,6 +8,7 @@ import '../widgets/explore_product_card.dart';
 import '../widgets/retry_message.dart';
 import '../widgets/save_product_button.dart';
 import 'product_detail_screen.dart';
+import '../widgets/agri_empty_state.dart';
 
 /// The listings this buyer liked on Explore or Product Details (the heart
 /// icon in its app bar) — the same cards as the Explore grid, read live.
@@ -148,54 +150,18 @@ class _BuyerSavedProductsScreenState extends State<BuyerSavedProductsScreen> {
 
   Widget _empty({bool unavailable = false}) {
     return Center(
-      child: Padding(
+      child: AgriEmptyState(
+        icon: Icons.favorite_border_rounded,
+        title: unavailable
+            ? 'Your liked products are no longer available'
+            : 'No liked products yet',
+        subtitle: 'Tap the heart on a product to keep it here for later.',
         padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.favorite_border_rounded,
-              size: 56,
-              color: Colors.grey[350],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              unavailable
-                  ? 'Your liked products are no longer available'
-                  : 'No liked products yet',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.black87,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Tap the heart on a product to keep it here for later.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.black54, fontSize: 13.5),
-            ),
-          ],
-        ),
       ),
     );
   }
 }
 
 /// The app bar shared by the screens opened from the Buyer Profile.
-PreferredSizeWidget buyerSubScreenAppBar(String title) => AppBar(
-  backgroundColor: Colors.white,
-  surfaceTintColor: Colors.white,
-  elevation: 0,
-  foregroundColor: Colors.black87,
-  centerTitle: true,
-  title: Text(
-    title,
-    style: const TextStyle(
-      fontWeight: FontWeight.bold,
-      fontSize: 17,
-      color: Colors.black87,
-    ),
-  ),
-);
+PreferredSizeWidget buyerSubScreenAppBar(String title) =>
+    AgriAppBar(title: title);

@@ -1,3 +1,4 @@
+import '../widgets/agri_app_bar.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -114,14 +115,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F7F5),
-      appBar: AppBar(
-        title: const Text('Inventory'),
-        backgroundColor: Colors.white,
-        foregroundColor: AppTheme.dark,
-        elevation: 0,
-        scrolledUnderElevation: 0.5,
-        titleTextStyle: AppTheme.heading(17).copyWith(color: AppTheme.dark),
-      ),
+      appBar: const AgriAppBar(title: 'Inventory'),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _products,
         builder: (context, productSnap) {

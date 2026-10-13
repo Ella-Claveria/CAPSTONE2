@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../widgets/app_back_button.dart';
+
 class ThemeController extends ChangeNotifier {
   ThemeController._() {
     _load();
@@ -27,8 +29,8 @@ class ThemeController extends ChangeNotifier {
 
 class AppTheme {
   // ---------- COLOURS ----------
-  // Matches the "Agri" half of the AgriTradeText wordmark, so every button
-  // in the app reads as the same dark green as the logo text.
+  // The colour of the AgriTradeText wordmark (see brandText), so every
+  // button in the app reads as the same dark green as the logo text.
   static const Color dark = Color.fromARGB(255, 14, 50, 16); // main dark green
   static const Color mid = Color(0xFF2E7D32); // brand green
   static const Color accent = Color(0xFFDCEDC8); // pale green
@@ -58,16 +60,22 @@ class AppTheme {
       textTheme: montserratText,
       primaryTextTheme: montserratText,
 
+      // Inner screens use AgriAppBar (widgets/agri_app_bar.dart); this is
+      // the same look as a fallback for any plain AppBar.
       appBarTheme: AppBarTheme(
-        backgroundColor: mid,
-        foregroundColor: Colors.white,
+        backgroundColor: const Color(0xFFF7FAF7),
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: dark,
         elevation: 0,
+        scrolledUnderElevation: 0,
         titleTextStyle: GoogleFonts.montserrat(
           fontSize: 18,
           fontWeight: FontWeight.bold,
-          color: Colors.white,
+          color: dark,
         ),
       ),
+
+      actionIconTheme: backButtonTheme,
 
       // Default look for every ElevatedButton in the app.
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -154,8 +162,16 @@ class AppTheme {
         brightness: Brightness.dark,
       ),
       textTheme: GoogleFonts.montserratTextTheme(ThemeData.dark().textTheme),
+      actionIconTheme: backButtonTheme,
     );
   }
+
+  // Every app bar's Back button, on every screen: the shared white circle
+  // with a dark green arrow instead of Flutter's plain arrow. Only the
+  // icon changes — what the button does when tapped is untouched.
+  static final ActionIconThemeData backButtonTheme = ActionIconThemeData(
+    backButtonIconBuilder: (context) => const AppBackIcon(),
+  );
 
   // ==========================================================
   // HELPER STYLES
@@ -179,6 +195,15 @@ class AppTheme {
 
   static TextStyle body({Color? color, double size = 13.5}) =>
       GoogleFonts.montserrat(fontSize: size, color: color ?? Colors.grey[700]);
+
+  // The "AgriTrade+" wordmark: the whole word in one colour — the brand's
+  // dark green, or white where it sits on a dark background. Rendered by
+  // AgriTradeText; anything else that draws the brand name uses this too.
+  static TextStyle brandText({double fontSize = 28, bool light = false}) =>
+      GoogleFonts.lilitaOne(
+        fontSize: fontSize,
+        color: light ? Colors.white : dark,
+      );
 
   static TextStyle buttonText() =>
       GoogleFonts.montserrat(fontSize: 16, fontWeight: FontWeight.bold);

@@ -66,6 +66,21 @@ void main() {
     expect(registry.find('Mystery Item'), isNull);
   });
 
+  test('a commodity the Admin does not have is not on the list, even a '
+      'default one', () {
+    registry.applyAdminRecords([
+      {'name': 'Rice', 'category': 'Grains', 'unit': 'kg'},
+      // No category of its own: borrowed from the default of that name.
+      {'name': 'Corn'},
+    ]);
+
+    expect(registry.activeNames, ['Rice', 'Corn']);
+    expect(categoryOfCommodity('Corn'), 'Grains');
+    // Deleted by the Admin, or never added: gone, though it is a default.
+    expect(registry.find('Cattle'), isNull);
+    expect(registry.activeByCategory.keys, isNot(contains('Livestock')));
+  });
+
   test('defaults stay available until the Admin overrides them', () {
     expect(registry.activeByCategory.keys, contains('Livestock'));
     expect(unitForCommodity('Cattle'), 'head');

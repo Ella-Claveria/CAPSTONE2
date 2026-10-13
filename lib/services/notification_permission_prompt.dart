@@ -5,11 +5,21 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'push_notification_service.dart';
 import '../widgets/permission_rationale_dialog.dart';
 
-/// Offers notification access once per device, the first time a user reaches
-/// their own home screen (FarmerHomeScreen / BuyerMarketplaceScreen) — so
-/// only after login, email verification and, for farmers, admin approval.
-/// Nothing on the way there (login, registration, the email code screen,
-/// the loading/auth checks, the pending-approval screen) calls this.
+/// Why the app asks for notifications — said before the phone itself is
+/// asked, wherever that happens.
+const String kNotificationRationaleTitle = 'Stay Updated';
+const String kNotificationRationaleMessage =
+    'Allow notifications to receive important updates about your account, '
+    'orders, messages, verification status, and other AgriTrade+ '
+    'activities.';
+
+/// Offers notification access once per device, the first time a user is
+/// signed in with a verified email: on their own home screen
+/// (FarmerHomeScreen / BuyerMarketplaceScreen), or — for a farmer who has
+/// just registered — on the pending-approval screen, so the decision on
+/// their application can reach this phone. Nothing before that (the
+/// onboarding slides, login, registration, the email code screen, the
+/// loading/auth checks) calls this.
 ///
 /// "Not Now" closes it without asking the OS for anything; the Notifications
 /// screen offers the same choice again whenever the user wants it.
@@ -52,11 +62,10 @@ class NotificationPermissionPrompt {
       final proceed = await showPermissionRationale(
         context,
         icon: Icons.notifications_active_outlined,
-        title: 'Stay Updated with AgriTrade+',
-        message:
-            'Allow notifications to receive important updates about orders, messages, verification status, delivery or pickup, warnings, and other marketplace activities.',
+        title: kNotificationRationaleTitle,
+        message: kNotificationRationaleMessage,
         denyLabel: 'Not Now',
-        allowLabel: 'Enable Notifications',
+        allowLabel: 'Allow Notifications',
       );
       if (proceed) {
         try {

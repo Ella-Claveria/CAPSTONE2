@@ -13,12 +13,13 @@
  */
 
 const crypto = require("crypto");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const { MAIL_SECRETS, sendMail } = require("./mailer");
 const templates = require("./email_templates");
+const { resetPageLink } = require("./reset_link");
 
 const db = getFirestore();
 
@@ -75,7 +76,7 @@ exports.sendVerificationEmail = onCall(
   { region: REGION, secrets: MAIL_SECRETS },
   async (request) => {
     if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Sign in to verify your email.");
+      throw new HttpsError("unauthenticated", "Log in to verify your email.");
     }
     const uid = request.auth.uid;
     const authUser = await getAuth().getUser(uid);
@@ -131,8 +132,31 @@ exports.sendPasswordResetEmail = onCall(
     }
     if (authUser.disabled) return { ok: true };
 
+    // An account that only signs in with Google has no password to reset,
+    // and a reset link would quietly add one. It gets a short note saying
+    // how to log in instead. Same answer to the caller as every other case.
+    const hasPassword = authUser.providerData.some((p) => p.providerId === "password");
+    if (!hasPassword) {
+      try {
+        const name = await profileName(authUser.uid, authUser);
+        await sendMail(authUser.email, templates.googleSignInEmail({ name }));
+      } catch (err) {
+        await releaseSend(key);
+        console.error(`sendPasswordResetEmail(${authUser.uid}) login note failed:`, err.message);
+        throw new HttpsError("unavailable", "Could not send the reset email.");
+      }
+      return { ok: true };
+    }
+
     try {
-      const link = await getAuth().generatePasswordResetLink(authUser.email);
+      // Firebase makes the one-time code; the link opens the AgriTrade+
+      // reset page instead of Firebase's own (see reset_link.js).
+      // Farmers and buyers log in from the mobile app, so only an admin's
+      // link asks the page to offer the Admin web login afterwards.
+      const profile = (await db.collection("users").doc(authUser.uid).get()).data() || {};
+      const link = resetPageLink(await getAuth().generatePasswordResetLink(authUser.email), {
+        admin: profile.role === "admin",
+      });
       const name = await profileName(authUser.uid, authUser);
       await sendMail(authUser.email, templates.passwordResetEmail({ name, link }));
     } catch (err) {
@@ -220,6 +244,157 @@ exports.onNewTrustedDevice = onDocumentCreated(
     await deviceRef.update({
       alertStatus: "sent",
       alertSentAt: FieldValue.serverTimestamp(),
+    });
+  }
+);
+
+// ---------------------------------------------------------------
+// A farmer's application was approved or rejected -> email them.
+//
+// The in-app notification and the push for the same change are sent by
+// notifyFarmerApprovalStatusChange (index.js). A farmer waiting for
+// approval has usually gone "Back to login", which signs them out and
+// takes this phone off the account's push list — so the push has nowhere
+// to go and the in-app notice is only seen after the next sign-in. The
+// email is what reaches them in the meantime.
+//
+// Once per decision: emailLog/farmer-approval-<uid>-<eventId> is created
+// before sending and only ever created, so a redelivered event cannot
+// send a second email.
+// ---------------------------------------------------------------
+exports.emailFarmerApprovalDecision = onDocumentUpdated(
+  { document: "users/{uid}", secrets: MAIL_SECRETS },
+  async (event) => {
+    const before = event.data.before.data() || {};
+    const after = event.data.after.data() || {};
+    if (after.role !== "farmer") return;
+    if (before.approvalStatus === after.approvalStatus) return;
+    if (after.approvalStatus !== "approved" && after.approvalStatus !== "rejected") return;
+    const { uid } = event.params;
+
+    let authUser;
+    try {
+      authUser = await getAuth().getUser(uid);
+    } catch (err) {
+      console.log(`emailFarmerApprovalDecision(${uid}): no auth user — email skipped.`);
+      return;
+    }
+    // Only ever to the account's own verified address.
+    if (!authUser.email || !authUser.emailVerified) {
+      console.log(`emailFarmerApprovalDecision(${uid}): no verified email — email skipped.`);
+      return;
+    }
+
+    const logRef = emailLog.doc(`farmer-approval-${uid}-${event.id}`);
+    try {
+      await logRef.create({ status: "sending", createdAt: FieldValue.serverTimestamp() });
+    } catch (err) {
+      if (isAlreadyExists(err)) return; // Handled by an earlier delivery of this event.
+      throw err;
+    }
+
+    const name = (after.fullName || after.name || authUser.displayName || "").toString().trim();
+    let message;
+    if (after.approvalStatus === "approved") {
+      message = templates.farmerApprovedEmail({ name });
+    } else {
+      // The officer's reason is kept with the application.
+      const application = await db.collection("verificationDocs").doc(uid).get();
+      message = templates.farmerRejectedEmail({
+        name,
+        reason: application.exists ? application.get("rejectionReason") : "",
+      });
+    }
+
+    try {
+      await sendMail(authUser.email, message);
+    } catch (err) {
+      console.error(`emailFarmerApprovalDecision(${uid}) failed to send:`, err.message);
+      await logRef.update({ status: "failed", failedAt: FieldValue.serverTimestamp() });
+      return;
+    }
+    await logRef.update({ status: "sent", sentAt: FieldValue.serverTimestamp() });
+  }
+);
+
+// One account notice by email, once per event, to the account's own
+// verified address. Shared by the two triggers below.
+async function sendAccountNotice(uid, eventId, { title, message, reason }) {
+  let authUser;
+  try {
+    authUser = await getAuth().getUser(uid);
+  } catch (err) {
+    return;
+  }
+  if (!authUser.email || !authUser.emailVerified) return;
+
+  const logRef = emailLog.doc(`account-notice-${uid}-${eventId}`);
+  try {
+    await logRef.create({ status: "sending", createdAt: FieldValue.serverTimestamp() });
+  } catch (err) {
+    if (isAlreadyExists(err)) return;
+    throw err;
+  }
+  try {
+    await sendMail(authUser.email, templates.accountNoticeEmail({
+      name: await profileName(uid, authUser),
+      title,
+      message,
+      reason,
+    }));
+  } catch (err) {
+    console.error(`sendAccountNotice(${uid}) failed to send:`, err.message);
+    await logRef.update({ status: "failed", failedAt: FieldValue.serverTimestamp() });
+    return;
+  }
+  await logRef.update({ status: "sent", sentAt: FieldValue.serverTimestamp() });
+}
+
+// ---------------------------------------------------------------
+// An account was suspended or deactivated -> email its owner. The in-app
+// notice and push for the same change are notifyAccountModeration
+// (index.js); a suspended account cannot sign in to read those, so the
+// email is the one that is sure to be seen.
+// ---------------------------------------------------------------
+exports.emailAccountModeration = onDocumentUpdated(
+  { document: "users/{uid}", secrets: MAIL_SECRETS },
+  async (event) => {
+    const before = event.data.before.data() || {};
+    const after = event.data.after.data() || {};
+    if (before.accountStatus === after.accountStatus) return;
+    if (after.accountStatus !== "suspended" && after.accountStatus !== "banned") return;
+    const suspended = after.accountStatus === "suspended";
+    await sendAccountNotice(event.params.uid, event.id, {
+      title: suspended ? "Account Suspended" : "Account Deactivated",
+      message: suspended
+        ? "Your AgriTrade+ account has been suspended until an Admin reactivates it."
+        : "Your AgriTrade+ account has been deactivated following an Admin review.",
+      reason: suspended ? after.suspensionReason : after.banReason,
+    });
+  }
+);
+
+// ---------------------------------------------------------------
+// An Admin issued a warning on a report -> email the reported user. The
+// in-app notice and push are notifyModerationWarning (index.js).
+// ---------------------------------------------------------------
+exports.emailModerationWarning = onDocumentUpdated(
+  { document: "reports/{reportId}", secrets: MAIL_SECRETS },
+  async (event) => {
+    const before = event.data.before.data() || {};
+    const after = event.data.after.data() || {};
+    if (before.moderationAction === after.moderationAction) return;
+    if (after.moderationAction !== "warning") return;
+    // The reported account; on a review report farmerId is the reporter.
+    const uid = after.reportedUserId || after.farmerId;
+    if (!uid) return;
+    const productName = (after.productName || "").toString().trim();
+    await sendAccountNotice(uid, event.id, {
+      title: productName ? "Listing Warning" : "Account Warning",
+      message: productName
+        ? `An Admin has issued a warning regarding your listing "${productName}" following a review.`
+        : "An Admin has issued a warning regarding your account following a review. Please review your recent activity.",
+      reason: "",
     });
   }
 );

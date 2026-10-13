@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'connectivity_service.dart';
 import 'delivery_coverage.dart';
 import 'market_price_helpers.dart';
+import 'order_contact_service.dart';
 import 'pricing_tier_service.dart';
 import '../data/commodity_master_list.dart';
 
@@ -56,6 +57,9 @@ class OrderService {
       }
 
       final q = quantity <= 0 ? 1 : quantity;
+      // Known up front so the buyer's contact number can be saved under
+      // the order once it has been placed (see below).
+      final orderRef = _orders.doc();
 
       await FirebaseFirestore.instance.runTransaction((transaction) async {
         final productRef = FirebaseFirestore.instance
@@ -149,7 +153,18 @@ class OrderService {
           fulfillment['grandTotal'] = total;
         }
 
-        final orderRef = _orders.doc();
+        // The listing's own category; for an older listing saved without
+        // one, the category of the commodity it names. Never guessed.
+        final frozenCommodity = (productData?['commodity'] ?? '')
+            .toString()
+            .trim();
+        final listedCategory = (productData?['category'] ?? '')
+            .toString()
+            .trim();
+        final frozenCategory = listedCategory.isNotEmpty
+            ? listedCategory
+            : categoryOfCommodity(frozenCommodity);
+
         transaction.update(productRef, {
           'quantity': available - q,
           'lastOrderId': orderRef.id,
@@ -159,15 +174,26 @@ class OrderService {
           'sellerName': sellerName,
           'buyerId': buyerId,
           'buyerName': buyerName,
-          'buyerContact': buyerContact,
+          // The contact number is deliberately not on this document: the
+          // farmer can read an order from the moment it is placed, and
+          // the number is only for an order they have confirmed. It goes
+          // in orders/{id}/private/buyer — see OrderContactService.
           'buyerAddress': buyerAddress,
+          // The buyer's general area as it was at checkout — barangay and
+          // city, never a pin — so demand analytics keep placing this
+          // purchase where it was made if the buyer later moves.
+          if (buyerArea != null && buyerArea.isKnown) ...{
+            'buyerBarangay': buyerArea.barangay.trim(),
+            'buyerMunicipality': buyerArea.city.trim(),
+            'buyerProvince': buyerArea.province.trim(),
+          },
           'productId': productId,
           'productName': productName,
-          // Denormalized from the product doc we already read above (same
-          // reasoning as productName/imageUrl) — lets the admin dashboard's
-          // "Sales by Category" chart query orders directly instead of
-          // joining every order back to its product.
-          'category': productData?['category'],
+          // Frozen from the product doc read above (same reasoning as
+          // productName/imageUrl), so the admin "Sales by Category" chart
+          // still has it after the listing is edited or deleted.
+          'category': frozenCategory,
+          if (frozenCommodity.isNotEmpty) 'commodity': frozenCommodity,
           'imageUrl': imageUrl,
           'quantity': q,
           'unit': realUnit,
@@ -192,6 +218,11 @@ class OrderService {
           'updatedAt': FieldValue.serverTimestamp(),
         });
       });
+      // The order stands whether or not this succeeds.
+      await OrderContactService.instance.saveBuyerContact(
+        orderRef.id,
+        buyerContact,
+      );
       return null;
     } on StateError catch (e) {
       // Our own checks above (stock, listing, fulfillment) — already
@@ -243,6 +274,11 @@ class OrderService {
           if (next == 'completed') 'completedAt': FieldValue.serverTimestamp(),
         });
       });
+      // Confirming is what lets the two sides see each other's number for
+      // this order; the farmer's comes from their profile.
+      if (status.toLowerCase() == 'confirmed') {
+        await OrderContactService.instance.shareFarmerContact(id);
+      }
       return null;
     } on StateError catch (e) {
       return e.message;
