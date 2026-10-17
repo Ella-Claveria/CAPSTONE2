@@ -9,5 +9,15 @@ class ReportSection {
   final List<String> headers;
   final List<List<Object?>> rows; // String, num, or null per cell
 
-  const ReportSection({required this.title, required this.headers, required this.rows});
+  /// How much of the width each column takes in the PDF, relative to the
+  /// others (a long "Details" column wider than a date). Null: the first
+  /// column a little wider, the rest even.
+  final List<double>? columnWeights;
+
+  const ReportSection({
+    required this.title,
+    required this.headers,
+    required this.rows,
+    this.columnWeights,
+  });
 }

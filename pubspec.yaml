@@ -62,11 +62,11 @@ flutter:
 
   assets:
     - assets/images/logo.png
+    - assets/images/logo_report.png
     - assets/images/google_logo.svg
     - assets/images/onboarding_1_farming.png
     - assets/images/onboarding_2_connection.png
     - assets/images/onboarding_3_marketplace.png
-    - assets/images/login_hero.png
     - assets/images/login_landscape.png
     - assets/images/bg_adminside.png
     - assets/images/bg_admin.png
@@ -88,6 +88,11 @@ flutter:
           weight: 700
         - asset: assets/fonts/Montserrat-ExtraBold.ttf
           weight: 800
+    # The "AgriTrade+" wordmark font, bundled so it never falls back to a
+    # plain font when Google Fonts can't be reached.
+    - family: LilitaOne
+      fonts:
+        - asset: assets/fonts/LilitaOne-Regular.ttf
 
 flutter_launcher_icons:
   android: true

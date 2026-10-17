@@ -3,6 +3,7 @@ import '../services/auth_service.dart';
 import 'agri_dialog.dart';
 import '../theme/app_theme.dart';
 import 'agri_form_field.dart';
+import 'password_requirements.dart';
 
 /// Shared "change password" flow for logged-in farmers, buyers, and
 /// admins. Requires the current password (Firebase needs a recent
@@ -74,12 +75,32 @@ Future<bool> showChangePasswordDialog(BuildContext context) async {
                         hint: 'Enter a new password',
                         icon: Icons.lock_reset_rounded,
                         obscureText: obscure,
+                        // The registration rules, shown live below.
                         validator: (value) {
-                          if (value == null || value.length < 6) {
-                            return 'At least 6 characters.';
+                          final password = value ?? '';
+                          if (password.isEmpty) return 'Required';
+                          if (!PasswordRules.meetsAll(password)) {
+                            return 'Password must meet all the requirements '
+                                'below.';
+                          }
+                          if (password == currentController.text) {
+                            return 'Choose a password different from your '
+                                'current one.';
                           }
                           return null;
                         },
+                      ),
+                      // Hidden until a new password is typed, then each rule
+                      // turns green as it is met — as in registration.
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: newController,
+                        builder: (_, value, _) => Padding(
+                          padding: const EdgeInsets.only(left: 4),
+                          child: PasswordRequirementsChecklist(
+                            password: value.text,
+                            bottomSpacing: value.text.isEmpty ? 0 : 14,
+                          ),
+                        ),
                       ),
                       AgriFormField(
                         label: 'Confirm new password',

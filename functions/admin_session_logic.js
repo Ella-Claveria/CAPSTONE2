@@ -38,4 +38,53 @@ function deviceLabel({ browser, os }) {
   return "Unknown device";
 }
 
-module.exports = { isValidSessionId, planStart, deviceLabel };
+// How recently the password must have been entered to revoke a session.
+const REVOKE_RECENT_LOGIN_MS = 5 * 60 * 1000;
+
+function millisOf(value) {
+  if (!value) return null;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Whether a token was signed in before the account's sessions were revoked.
+ * `authTimeSeconds` is the token's auth_time claim; `validAfter` is
+ * sessionsValidAfter on users/{uid} (a Timestamp), set when an Admin revokes
+ * a session. firestore.rules (isAdmin) makes the same comparison.
+ */
+function signedInBeforeRevocation(authTimeSeconds, validAfter) {
+  const after = millisOf(validAfter);
+  if (after === null) return false;
+  return Number(authTimeSeconds || 0) * 1000 < after;
+}
+
+/** The password was entered within `windowMs` of `nowMs`. */
+function isRecentLogin(authTimeSeconds, nowMs, windowMs = REVOKE_RECENT_LOGIN_MS) {
+  const at = Number(authTimeSeconds || 0) * 1000;
+  return at > 0 && nowMs - at <= windowMs;
+}
+
+/**
+ * Which sessions a revocation ends: `targetId`, or every session but the
+ * caller's own when it is null. Only sessions still active are ended; the
+ * caller's own session is never one of them.
+ */
+function sessionsToRevoke(history, targetId, currentId) {
+  return history
+    .filter((s) => s.id !== currentId && (s.status || "active") === "active")
+    .filter((s) => targetId === null || s.id === targetId)
+    .map((s) => s.id);
+}
+
+module.exports = {
+  isValidSessionId,
+  planStart,
+  deviceLabel,
+  REVOKE_RECENT_LOGIN_MS,
+  signedInBeforeRevocation,
+  isRecentLogin,
+  sessionsToRevoke,
+};

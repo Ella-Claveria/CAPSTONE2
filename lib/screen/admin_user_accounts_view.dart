@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../services/audit_log_service.dart';
+import '../services/auth_routing_service.dart' show suspensionEndOf;
 import '../services/connectivity_service.dart';
 import '../services/dashboard_data_service.dart';
 import '../services/moderation_model.dart';
@@ -49,6 +50,13 @@ class AdminAccountRow {
   /// and updates); empty when none has been uploaded.
   final String photoUrl;
 
+  /// When a suspension set for a time ends; null for one that lasts until
+  /// an Admin reactivates the account (or for an account not suspended).
+  final DateTime? suspendedUntil;
+
+  /// Why the account is suspended; empty when it is not.
+  final String suspensionReason;
+
   const AdminAccountRow({
     required this.uid,
     required this.name,
@@ -60,6 +68,8 @@ class AdminAccountRow {
     required this.accountStatus,
     required this.registered,
     this.photoUrl = '',
+    this.suspendedUntil,
+    this.suspensionReason = '',
   });
 
   bool get isBuyer => role == 'buyer';
@@ -118,6 +128,8 @@ class AdminAccountRow {
           .toLowerCase(),
       registered: created is Timestamp ? created.toDate() : null,
       photoUrl: text(['photoUrl']),
+      suspendedUntil: suspensionEndOf(data),
+      suspensionReason: text(['suspensionReason']),
     );
   }
 
@@ -161,9 +173,46 @@ List<AdminAccountRow> buildAccountRows(
   return rows;
 }
 
-/// Suspends the accounts given that are active (asking for the reason
-/// first), or reactivates the ones that are suspended or deactivated.
-/// True when it was done.
+/// Reports against an account before Suspend Accounts flags it for
+/// review (the Admin can still suspend any account).
+const int kSuspendReportThreshold = 10;
+
+/// How long a suspension lasts: a set time, or until an Admin reactivates
+/// the account ([duration] null).
+typedef SuspensionLength = ({String label, Duration? duration});
+
+/// The lengths Suspend offers, 24 hours first (the default).
+const List<SuspensionLength> kSuspensionLengths = [
+  (label: '24 hours', duration: Duration(hours: 24)),
+  (label: '3 days', duration: Duration(days: 3)),
+  (label: '7 days', duration: Duration(days: 7)),
+  (label: '30 days', duration: Duration(days: 30)),
+  (label: 'Until reactivated', duration: null),
+];
+
+/// Reasons to start from; the Admin can edit or write their own.
+const List<String> kSuspensionReasons = [
+  'Many reports from other users',
+  'Scam or fraudulent transactions',
+  'Abusive or harassing messages',
+  'Fake or misleading listings',
+];
+
+/// "Suspended until Oct 17, 2026 · 10:51 AM", or until reactivated.
+String suspensionUntilLabel(DateTime? until) => until == null
+    ? 'Until an Admin reactivates it'
+    : 'Until ${DateFormat('MMM d, y · h:mm a').format(until)}';
+
+/// Suspends the accounts given that are active (asking for the reason and
+/// how long first), or reactivates the ones that are suspended or
+/// deactivated. True when it was done. With [reports], the number of
+/// reports against each account (by uid), shown when there is one.
+///
+/// A suspended account is told why and until when: by push and email
+/// (functions/index.js, account_emails.js), and with the notice it gets
+/// when it tries to log in or is signed in (AuthRoutingService,
+/// AccountStatusWatcher). A suspension for a set time ends by itself
+/// (functions/suspension.js).
 // A ban is decided on a report,
 // one account at a time, and is not undone from here. Nothing is ever
 // deleted: orders, reports and reviews keep pointing at a real account.
@@ -171,6 +220,7 @@ Future<bool> adminSetAccountsSuspended(
   BuildContext context,
   List<AdminAccountRow> selected, {
   required bool suspend,
+  Map<String, int> reports = const {},
 }) async {
   final targets = [
     for (final row in selected)
@@ -196,86 +246,287 @@ Future<bool> adminSetAccountsSuspended(
       ? (targets.single.name.isEmpty ? 'this account' : targets.single.name)
       : '${targets.length} accounts';
   final skipped = selected.length - targets.length;
+  // A dialog sits outside the page's AdminThemeScope: hand the palette in.
+  final palette =
+      context.getInheritedWidgetOfExactType<AdminThemeScope>()?.palette ??
+      AdminPalette.light;
+  final reportCount = targets.length == 1 ? reports[targets.single.uid] : null;
+
   final reasonController = TextEditingController();
+  final customController = TextEditingController(text: '2');
   var missingReason = false;
+  // An index into kSuspensionLengths, or -1 for a custom length.
+  var length = 0;
+  var customDays = true;
+  String? customError;
+
+  Duration? chosenDuration() {
+    if (length >= 0) return kSuspensionLengths[length].duration;
+    final n = int.tryParse(customController.text.trim());
+    if (n == null || n < 1) return null;
+    return customDays ? Duration(days: n) : Duration(hours: n);
+  }
+
   final confirmed = await showDialog<bool>(
     context: context,
     barrierDismissible: false,
-    builder: (dialogContext) => StatefulBuilder(
-      builder: (dialogContext, setDialogState) => AlertDialog(
-        title: Text(suspend ? 'Suspend $label?' : 'Reactivate $label?'),
-        content: SizedBox(
-          width: 420,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                suspend
-                    ? 'A suspended account cannot log in until an Admin '
-                          'reactivates it. Its orders, listings, reports '
-                          'and reviews are kept.'
-                    : 'The account will be able to log in again.',
-              ),
-              if (skipped > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    suspend
-                        ? '$skipped selected '
-                              '${skipped == 1 ? 'account is' : 'accounts are'} '
-                              'not active and will be left as '
-                              '${skipped == 1 ? 'it is' : 'they are'}.'
-                        : '$skipped selected '
-                              '${skipped == 1 ? 'account is' : 'accounts are'} '
-                              'not suspended and will be left as '
-                              '${skipped == 1 ? 'it is' : 'they are'}.',
-                    style: const TextStyle(fontSize: 12.5),
-                  ),
-                ),
-              if (suspend) ...[
-                const SizedBox(height: 14),
-                AdminField(
-                  controller: reasonController,
-                  minLines: 2,
-                  maxLines: 3,
-                  decoration: adminMultilineDecoration(
-                    dialogContext,
-                    labelText: 'Reason (required)',
-                  ),
-                ),
-                if (missingReason)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 6, left: 4),
+    builder: (dialogContext) => AdminThemeScope(
+      palette: palette,
+      child: StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final c = palette;
+          Widget chip(String text, bool selected, VoidCallback onTap) =>
+              MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: GestureDetector(
+                  onTap: onTap,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: selected ? c.greenBg : c.surfaceAlt,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: selected
+                            ? c.green.withValues(alpha: 0.6)
+                            : c.border,
+                      ),
+                    ),
                     child: Text(
-                      'Give the reason for the suspension.',
-                      style: TextStyle(color: Colors.red, fontSize: 12),
+                      text,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: selected ? c.green : c.textSecondary,
+                      ),
                     ),
                   ),
-              ],
+                ),
+              );
+          Widget heading(String text) => Padding(
+            padding: const EdgeInsets.only(top: 16, bottom: 8),
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: c.textPrimary,
+              ),
+            ),
+          );
+
+          final duration = chosenDuration();
+          final until = duration == null ? null : DateTime.now().add(duration);
+
+          return AlertDialog(
+            title: Text(suspend ? 'Suspend $label?' : 'Reactivate $label?'),
+            content: SizedBox(
+              width: 460,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      suspend
+                          ? 'A suspended account cannot log in. It is told '
+                                'why and until when, and its orders, '
+                                'listings, reports and reviews are kept.'
+                          : 'The account will be able to log in again.',
+                      style: TextStyle(fontSize: 13, color: c.textSecondary),
+                    ),
+                    if (suspend && reportCount != null && reportCount > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Text(
+                          '$reportCount '
+                          '${reportCount == 1 ? 'report' : 'reports'} '
+                          'against this account.',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: reportCount >= kSuspendReportThreshold
+                                ? c.red
+                                : c.textSecondary,
+                          ),
+                        ),
+                      ),
+                    if (skipped > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          suspend
+                              ? '$skipped selected '
+                                    '${skipped == 1 ? 'account is' : 'accounts are'} '
+                                    'not active and will be left as '
+                                    '${skipped == 1 ? 'it is' : 'they are'}.'
+                              : '$skipped selected '
+                                    '${skipped == 1 ? 'account is' : 'accounts are'} '
+                                    'not suspended and will be left as '
+                                    '${skipped == 1 ? 'it is' : 'they are'}.',
+                          style: const TextStyle(fontSize: 12.5),
+                        ),
+                      ),
+                    if (suspend) ...[
+                      heading('How long'),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (var i = 0; i < kSuspensionLengths.length; i++)
+                            chip(
+                              kSuspensionLengths[i].label,
+                              length == i,
+                              () => setDialogState(() => length = i),
+                            ),
+                          chip(
+                            'Custom',
+                            length == -1,
+                            () => setDialogState(() => length = -1),
+                          ),
+                        ],
+                      ),
+                      if (length == -1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 10),
+                          child: Row(
+                            children: [
+                              SizedBox(
+                                width: 90,
+                                child: AdminField(
+                                  controller: customController,
+                                  keyboardType: TextInputType.number,
+                                  decoration: adminMultilineDecoration(
+                                    dialogContext,
+                                    labelText: customDays ? 'Days' : 'Hours',
+                                  ),
+                                  onChanged: (_) =>
+                                      setDialogState(() => customError = null),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              chip(
+                                'Days',
+                                customDays,
+                                () => setDialogState(() => customDays = true),
+                              ),
+                              const SizedBox(width: 6),
+                              chip(
+                                'Hours',
+                                !customDays,
+                                () => setDialogState(() => customDays = false),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (customError != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6, left: 4),
+                          child: Text(
+                            customError!,
+                            style: TextStyle(color: c.red, fontSize: 12),
+                          ),
+                        ),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.event_outlined,
+                              size: 16,
+                              color: c.textSecondary,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                length == -1 && duration == null
+                                    ? 'Enter how long.'
+                                    : suspensionUntilLabel(until),
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: c.textSecondary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      heading('Reason (shown to the account)'),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final preset in kSuspensionReasons)
+                            chip(
+                              preset,
+                              reasonController.text.trim() == preset,
+                              () => setDialogState(() {
+                                reasonController.text = preset;
+                                missingReason = false;
+                              }),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      AdminField(
+                        controller: reasonController,
+                        minLines: 2,
+                        maxLines: 3,
+                        decoration: adminMultilineDecoration(
+                          dialogContext,
+                          labelText: 'Reason (required)',
+                        ),
+                        onChanged: (_) => setDialogState(() {
+                          missingReason = false;
+                        }),
+                      ),
+                      if (missingReason)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6, left: 4),
+                          child: Text(
+                            'Give the reason for the suspension.',
+                            style: TextStyle(color: c.red, fontSize: 12),
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  if (suspend) {
+                    if (length == -1 && chosenDuration() == null) {
+                      setDialogState(
+                        () => customError = 'Enter a whole number, 1 or more.',
+                      );
+                      return;
+                    }
+                    if (reasonController.text.trim().isEmpty) {
+                      setDialogState(() => missingReason = true);
+                      return;
+                    }
+                  }
+                  Navigator.of(dialogContext).pop(true);
+                },
+                child: Text(suspend ? 'Suspend' : 'Reactivate'),
+              ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              if (suspend && reasonController.text.trim().isEmpty) {
-                setDialogState(() => missingReason = true);
-                return;
-              }
-              Navigator.of(dialogContext).pop(true);
-            },
-            child: Text(suspend ? 'Suspend' : 'Reactivate'),
-          ),
-        ],
+          );
+        },
       ),
     ),
   );
   final reason = reasonController.text.trim();
+  final duration = suspend ? chosenDuration() : null;
   if (confirmed != true || !context.mounted) return false;
   if (!await ConnectivityService.instance.checkNow()) {
     if (context.mounted) {
@@ -286,6 +537,8 @@ Future<bool> adminSetAccountsSuspended(
     return false;
   }
 
+  // Counted from when the Admin confirms.
+  final until = duration == null ? null : DateTime.now().add(duration);
   try {
     final adminUid = FirebaseAuth.instance.currentUser?.uid;
     final users = FirebaseFirestore.instance.collection('users');
@@ -297,6 +550,9 @@ Future<bool> adminSetAccountsSuspended(
             ? {
                 'accountStatus': 'suspended',
                 'suspensionReason': reason,
+                'suspendedUntil': until == null
+                    ? FieldValue.delete()
+                    : Timestamp.fromDate(until),
                 'moderationUpdatedBy': adminUid,
                 'moderationUpdatedAt': FieldValue.serverTimestamp(),
               }
@@ -313,13 +569,17 @@ Future<bool> adminSetAccountsSuspended(
     AuditLogService.log(
       suspend ? AuditAction.suspendAccount : AuditAction.reactivateAccount,
       '${suspend ? 'Suspended' : 'Reactivated'} '
-      '${targets.map((r) => r.name.isEmpty ? r.uid : r.name).join(', ')}.'
-      '${suspend ? ' Reason: $reason' : ''}',
+      '${targets.map((r) => r.name.isEmpty ? r.uid : r.name).join(', ')}'
+      '${suspend ? ' (${suspensionUntilLabel(until).toLowerCase()}). Reason: $reason' : '.'}',
     );
     if (!context.mounted) return true;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${suspend ? 'Suspended' : 'Reactivated'} $label.'),
+        content: Text(
+          suspend
+              ? 'Suspended $label · ${suspensionUntilLabel(until).toLowerCase()}.'
+              : 'Reactivated $label.',
+        ),
       ),
     );
     return true;
@@ -330,6 +590,9 @@ Future<bool> adminSetAccountsSuspended(
       ).showSnackBar(SnackBar(content: Text('Could not update: $error')));
     }
     return false;
+  } finally {
+    reasonController.dispose();
+    customController.dispose();
   }
 }
 
@@ -344,7 +607,11 @@ Future<bool> adminSetAccountsSuspended(
 /// suspend anyone. The second is what an Admin sets: from the Admin
 /// menu's Suspend Accounts, or on a report.
 class AdminUserAccountsView extends StatefulWidget {
-  const AdminUserAccountsView({super.key});
+  /// Buyer accounts only (User Accounts › Buyers): no other tabs, and no
+  /// Role or Farmer Application column, which say nothing about a buyer.
+  final bool buyersOnly;
+
+  const AdminUserAccountsView({super.key, this.buyersOnly = false});
 
   @override
   State<AdminUserAccountsView> createState() => _AdminUserAccountsViewState();
@@ -356,11 +623,11 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
   String get _search => pageSearch;
 
   @override
-  void onPageSearchChanged() => _shown = _pageSize;
+  void onPageSearchChanged() => _page = 0;
 
   // The open tab: every account, the buyers, or the farmers whose
   // application is approved, pending or rejected.
-  String _tab = 'all';
+  late String _tab = widget.buyersOnly ? 'buyers' : 'all';
 
   // Rows whose box is ticked, by account id.
   final Set<String> _ticked = {};
@@ -373,8 +640,8 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
     _ => true,
   };
 
-  static const int _pageSize = 50;
-  int _shown = _pageSize;
+  // The open page of the table (10 accounts each), from 0.
+  int _page = 0;
 
   static String identityLabel(AccountIdentity identity) => switch (identity) {
     AccountIdentity.verified => 'Approved',
@@ -427,48 +694,58 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
                     // Level with the tabs, at the right: ticking a box does
                     // not push the table down.
                     // Suspending is in the Admin menu (Suspend Accounts).
-                    trailing: AdminSelectionNote(
-                      count: selected.length,
-                      onClear: () => setState(_ticked.clear),
-                    ),
+                    trailing: widget.buyersOnly
+                        ? null
+                        : AdminSelectionNote(
+                            count: selected.length,
+                            onClear: () => setState(_ticked.clear),
+                          ),
                     onSelected: (tab) => setState(() {
                       _tab = tab;
-                      _shown = _pageSize;
+                      _page = 0;
                       _ticked.clear();
                     }),
                     tabs: [
-                      (
-                        value: 'all',
-                        label: 'All accounts',
-                        count: count('all'),
-                        icon: Icons.groups_2_outlined,
-                      ),
+                      if (!widget.buyersOnly)
+                        (
+                          value: 'all',
+                          label: 'All accounts',
+                          count: count('all'),
+                          icon: Icons.groups_2_outlined,
+                        ),
                       (
                         value: 'buyers',
                         label: 'Buyers',
                         count: count('buyers'),
                         icon: Icons.shopping_basket_outlined,
                       ),
-                      (
-                        value: 'approved',
-                        label: 'Approved farmers',
-                        count: count('approved'),
-                        icon: Icons.verified_outlined,
-                      ),
-                      (
-                        value: 'pending',
-                        label: 'Pending review',
-                        count: count('pending'),
-                        icon: Icons.hourglass_empty_rounded,
-                      ),
-                      (
-                        value: 'rejected',
-                        label: 'Rejected',
-                        count: count('rejected'),
-                        icon: Icons.block_outlined,
-                      ),
+                      if (!widget.buyersOnly) ...[
+                        (
+                          value: 'approved',
+                          label: 'Approved farmers',
+                          count: count('approved'),
+                          icon: Icons.verified_outlined,
+                        ),
+                        (
+                          value: 'pending',
+                          label: 'Pending review',
+                          count: count('pending'),
+                          icon: Icons.hourglass_empty_rounded,
+                        ),
+                        (
+                          value: 'rejected',
+                          label: 'Rejected',
+                          count: count('rejected'),
+                          icon: Icons.block_outlined,
+                        ),
+                      ],
                     ],
-                    child: _table(c, filtered, all.isEmpty, summaries),
+                    child: _table(
+                      c,
+                      filtered,
+                      widget.buyersOnly ? count('buyers') == 0 : all.isEmpty,
+                      summaries,
+                    ),
                   ),
                 ],
               ),
@@ -497,19 +774,26 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
         child: AdminEmptyState(
           icon: Icons.groups_2_outlined,
           title: noAccounts
-              ? 'No user accounts yet'
+              ? (widget.buyersOnly ? 'No buyers yet' : 'No user accounts yet')
               : 'No accounts match these filters',
           subtitle: noAccounts
-              ? 'Buyer and farmer accounts appear here once they register.'
+              ? widget.buyersOnly
+                    ? 'Buyer accounts appear here once they register.'
+                    : 'Buyer and farmer accounts appear here once they register.'
               : 'Try a different search or filter.',
         ),
       );
     }
-    final visible = rows.take(_shown).toList();
+    final pages = adminPageCount(rows.length);
+    final page = _page.clamp(0, pages - 1);
+    final visible = adminPageOf(rows, page);
     final secondary = TextStyle(color: c.textSecondary);
+    final buyersOnly = widget.buyersOnly;
     return Container(
       width: double.infinity,
       decoration: adminTableCard(c, tabbed: true),
+      // The header band follows the rounded corners.
+      clipBehavior: Clip.antiAlias,
       padding: kAdminTablePadding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -528,29 +812,33 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
                 color: c.textPrimary,
                 fontSize: 13,
               ),
-              columns: const [
-                DataColumn(label: Text('Name')),
-                DataColumn(label: Text('Role')),
-                DataColumn(label: Text('Email')),
-                DataColumn(label: Text('Area')),
-                DataColumn(label: Text('Registered')),
-                DataColumn(label: Text('Email Status')),
-                DataColumn(label: Text('Farmer Application')),
-                DataColumn(label: Text('Moderation Status')),
-                DataColumn(label: Text('Account Status')),
-                DataColumn(label: Text('Actions')),
+              columns: [
+                const DataColumn(label: Text('Name')),
+                if (!buyersOnly) const DataColumn(label: Text('Role')),
+                const DataColumn(label: Text('Email')),
+                const DataColumn(label: Text('Area')),
+                const DataColumn(label: Text('Registered')),
+                const DataColumn(label: Text('Email Status')),
+                if (!buyersOnly)
+                  const DataColumn(label: Text('Farmer Application')),
+                const DataColumn(label: Text('Moderation Status')),
+                const DataColumn(label: Text('Account Status')),
+                const DataColumn(label: Text('Actions')),
               ],
               rows: [
                 for (final row in visible)
                   DataRow(
                     selected: _ticked.contains(row.uid),
-                    onSelectChanged: (ticked) => setState(() {
-                      if (ticked ?? false) {
-                        _ticked.add(row.uid);
-                      } else {
-                        _ticked.remove(row.uid);
-                      }
-                    }),
+                    // No tick boxes on the Buyers list.
+                    onSelectChanged: buyersOnly
+                        ? null
+                        : (ticked) => setState(() {
+                            if (ticked ?? false) {
+                              _ticked.add(row.uid);
+                            } else {
+                              _ticked.remove(row.uid);
+                            }
+                          }),
                     cells: [
                       DataCell(
                         // The account's current photo, or its initials.
@@ -572,7 +860,8 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
                           ],
                         ),
                       ),
-                      DataCell(Text(row.isBuyer ? 'Buyer' : 'Farmer')),
+                      if (!buyersOnly)
+                        DataCell(Text(row.isBuyer ? 'Buyer' : 'Farmer')),
                       DataCell(
                         Text(
                           row.email.isEmpty ? '—' : row.displayEmail,
@@ -606,7 +895,7 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
                                 bg: c.amberBg,
                               ),
                       ),
-                      DataCell(_identityBadge(c, row)),
+                      if (!buyersOnly) DataCell(_identityBadge(c, row)),
                       DataCell(
                         summaries == null
                             ? Text('…', style: TextStyle(color: c.textMuted))
@@ -637,25 +926,23 @@ class _AdminUserAccountsViewState extends State<AdminUserAccountsView>
               ],
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Showing ${visible.length} of ${rows.length} '
-                    '${rows.length == 1 ? 'account' : 'accounts'}',
-                    style: TextStyle(color: c.textSecondary, fontSize: 12),
-                  ),
-                ),
-                if (rows.length > visible.length)
-                  TextButton(
-                    onPressed: () => setState(() => _shown += _pageSize),
-                    child: const Text('Show more'),
-                  ),
-              ],
+          // 10 accounts a page.
+          if (pages > 1)
+            AdminTablePager(
+              page: page,
+              pageCount: pages,
+              total: rows.length,
+              onPage: (p) => setState(() => _page = p),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Text(
+                'Showing ${rows.length} '
+                '${rows.length == 1 ? 'account' : 'accounts'}',
+                style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+              ),
             ),
-          ),
         ],
       ),
     );

@@ -30,7 +30,7 @@ Color adminActionColor(AdminPalette c) => c.isDark ? c.green : AppTheme.dark;
 
 /// Text and icons on [adminActionColor].
 Color adminOnActionColor(AdminPalette c) =>
-    c.isDark ? Colors.black : Colors.white;
+    c.isDark ? AppTheme.dark : Colors.white;
 
 /// Corner radius of every menu and popup in the portal — the same rounded
 /// card the mobile app's popups use.
@@ -300,7 +300,7 @@ class AdminPillToggle<T> extends StatelessWidget {
                       fontSize: 12.5,
                       fontWeight: FontWeight.w600,
                       color: option.value == value
-                          ? (c.isDark ? Colors.black : Colors.white)
+                          ? adminOnActionColor(c)
                           : c.textSecondary,
                     ),
                   ),
@@ -390,8 +390,10 @@ TextStyle adminTableHeaderStyle(AdminPalette c) => TextStyle(
 // Every table in the portal sits in the same card (see [adminTableCard])
 // with the same spacing, and is as wide as that card ([AdminTableFit]).
 
-/// The card a table sits in: rounded, thin border, a little padding all
-/// round so the header band stops short of the card's edge.
+/// The card a table sits in: rounded corners and a thin border. The card
+/// clips what is in it (`clipBehavior: Clip.antiAlias` where it is used),
+/// so the dark green header band fills its whole top, edge to edge and
+/// round into the corners, with no white margin around it.
 ///
 /// [tabbed] squares the top-left corner, where [AdminTabbedTable]'s first
 /// tab joins the card.
@@ -400,13 +402,201 @@ BoxDecoration adminTableCard(AdminPalette c, {bool tabbed = false}) =>
       color: c.surface,
       borderRadius: tabbed
           ? const BorderRadius.only(
-              topRight: Radius.circular(16),
-              bottomLeft: Radius.circular(16),
-              bottomRight: Radius.circular(16),
+              topRight: Radius.circular(kAdminTableRadius),
+              bottomLeft: Radius.circular(kAdminTableRadius),
+              bottomRight: Radius.circular(kAdminTableRadius),
             )
-          : BorderRadius.circular(16),
+          : BorderRadius.circular(kAdminTableRadius),
       border: Border.all(color: c.border),
     );
+
+/// How round a table card's corners are.
+const double kAdminTableRadius = 14;
+
+/// Rows on one page of a table.
+const int kAdminRowsPerPage = 10;
+
+/// How many pages [count] rows take; at least one.
+int adminPageCount(int count, {int perPage = kAdminRowsPerPage}) =>
+    count <= 0 ? 1 : (count + perPage - 1) ~/ perPage;
+
+/// The rows of page [page] (0-based), the page clamped to those there are.
+List<T> adminPageOf<T>(
+  List<T> rows,
+  int page, {
+  int perPage = kAdminRowsPerPage,
+}) {
+  final last = adminPageCount(rows.length, perPage: perPage) - 1;
+  final p = page.clamp(0, last);
+  final start = p * perPage;
+  return rows.sublist(start, (start + perPage).clamp(0, rows.length));
+}
+
+/// A table shown [kAdminRowsPerPage] rows at a time: [builder] gets the
+/// rows of the open page, and the pager is under it (only when there is
+/// more than one page). Back to the first page whenever [resetKey] changes
+/// — a new search, filter, sort or tab.
+class AdminPaged<T> extends StatefulWidget {
+  final List<T> items;
+  final Object? resetKey;
+  final Widget Function(BuildContext context, List<T> pageItems) builder;
+
+  const AdminPaged({
+    super.key,
+    required this.items,
+    required this.builder,
+    this.resetKey,
+  });
+
+  @override
+  State<AdminPaged<T>> createState() => _AdminPagedState<T>();
+}
+
+class _AdminPagedState<T> extends State<AdminPaged<T>> {
+  int _page = 0;
+
+  @override
+  void didUpdateWidget(AdminPaged<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.resetKey != oldWidget.resetKey) _page = 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = widget.items;
+    final pages = adminPageCount(items.length);
+    final page = _page.clamp(0, pages - 1);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        widget.builder(context, adminPageOf(items, page)),
+        if (pages > 1)
+          AdminTablePager(
+            page: page,
+            pageCount: pages,
+            total: items.length,
+            onPage: (p) => setState(() => _page = p),
+          ),
+      ],
+    );
+  }
+}
+
+/// Under a table: "Showing 11–20 of 34" and ‹ 1 2 3 4 5 ›, the open page
+/// a dark green square. Up to five page numbers, around the open one.
+class AdminTablePager extends StatelessWidget {
+  /// 0-based.
+  final int page;
+  final int pageCount;
+  final int total;
+  final ValueChanged<int> onPage;
+  final int perPage;
+
+  /// More rows than [total] exist, not loaded yet ("of 20+").
+  final bool more;
+
+  const AdminTablePager({
+    super.key,
+    required this.page,
+    required this.pageCount,
+    required this.total,
+    required this.onPage,
+    this.perPage = kAdminRowsPerPage,
+    this.more = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c =
+        context.getInheritedWidgetOfExactType<AdminThemeScope>()?.palette ??
+        AdminPalette.light;
+    final action = adminActionColor(c);
+    // Five numbers, the open page in the middle where it can be.
+    var first = page - 2;
+    if (first + 5 > pageCount) first = pageCount - 5;
+    if (first < 0) first = 0;
+    final last = (first + 5).clamp(0, pageCount);
+
+    Widget square({
+      required Widget child,
+      required VoidCallback? onTap,
+      bool selected = false,
+      String? tooltip,
+    }) {
+      final box = Material(
+        color: selected ? action : c.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(6),
+          side: BorderSide(color: selected ? action : c.border),
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: SizedBox(width: 32, height: 32, child: Center(child: child)),
+        ),
+      );
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: tooltip == null ? box : Tooltip(message: tooltip, child: box),
+      );
+    }
+
+    final from = page * perPage + 1;
+    final to = ((page + 1) * perPage).clamp(0, total);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      child: Wrap(
+        alignment: WrapAlignment.spaceBetween,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        runSpacing: 8,
+        children: [
+          Text(
+            'Showing $from–$to of $total${more ? '+' : ''}',
+            style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              square(
+                tooltip: 'Previous page',
+                onTap: page > 0 ? () => onPage(page - 1) : null,
+                child: Icon(
+                  Icons.chevron_left_rounded,
+                  size: 18,
+                  color: page > 0 ? c.textSecondary : c.textMuted,
+                ),
+              ),
+              for (var p = first; p < last; p++)
+                square(
+                  selected: p == page,
+                  onTap: p == page ? null : () => onPage(p),
+                  child: Text(
+                    '${p + 1}',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: p == page
+                          ? adminOnActionColor(c)
+                          : c.textSecondary,
+                    ),
+                  ),
+                ),
+              square(
+                tooltip: 'Next page',
+                onTap: page < pageCount - 1 ? () => onPage(page + 1) : null,
+                child: Icon(
+                  Icons.chevron_right_rounded,
+                  size: 18,
+                  color: page < pageCount - 1 ? c.textSecondary : c.textMuted,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// The background of a table row: a faint green when its box is ticked.
 WidgetStateProperty<Color?> adminTableRowColor(AdminPalette c) =>
@@ -741,7 +931,8 @@ class AdminSelectionNote extends StatelessWidget {
   }
 }
 
-const EdgeInsets kAdminTablePadding = EdgeInsets.all(8);
+// None, so the header band runs to the card's edges.
+const EdgeInsets kAdminTablePadding = EdgeInsets.zero;
 const double kAdminTableColumnSpacing = 28;
 const double kAdminTableMargin = 12;
 

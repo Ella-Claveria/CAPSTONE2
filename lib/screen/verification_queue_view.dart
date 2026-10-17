@@ -9,15 +9,186 @@ import 'admin_filter_controls.dart';
 import '../services/audit_log_service.dart';
 import '../services/connectivity_service.dart';
 import '../services/dashboard_data_service.dart';
-import 'admin_dashboard_screen.dart' show AdminThemeScope;
+import 'admin_dashboard_screen.dart'
+    show AdminEmptyState, AdminPalette, AdminStatusBadge, AdminThemeScope;
+import 'admin_overview_widgets.dart';
 
-/// Pending Farmer applications only — role == 'farmer' && approvalStatus ==
-/// 'pending'. Approved Farmers have their own dedicated page/nav item, see
-/// farmer_list_view.dart (a fully separate screen — it does not share this
-/// file's dialog or data loaders); this screen's job stays exactly what it
-/// was: the queue of applications still awaiting an admin decision.
-class VerificationQueueView extends StatelessWidget {
+/// Which applications the page lists, chosen with its summary cards.
+enum _QueueFilter { pending, approved, rejected }
+
+/// Farmer Applications. Its job is the queue of applications still awaiting
+/// an admin decision — role == 'farmer' && approvalStatus == 'pending'.
+/// Above it, the same cards as the Dashboard's Overview: how many
+/// applications are pending, approved and rejected. Clicking one lists
+/// those applications. Approved Farmers have
+/// their own dedicated page/nav item, see farmer_list_view.dart (a fully
+/// separate screen — it does not share this file's dialog or data loaders).
+class VerificationQueueView extends StatefulWidget {
   const VerificationQueueView({super.key});
+
+  @override
+  State<VerificationQueueView> createState() => _VerificationQueueViewState();
+}
+
+class _VerificationQueueViewState extends State<VerificationQueueView> {
+  _QueueFilter _filter = _QueueFilter.pending;
+
+  // The Dashboard's Overview cards. Each lists its applications below;
+  // clicking the chosen one again goes back to the pending queue.
+  Widget _summary({
+    required int pending,
+    required int approved,
+    required int rejected,
+  }) {
+    AdminOverviewItem card(
+      _QueueFilter filter, {
+      required String label,
+      required IconData icon,
+      required int count,
+      required String caption,
+      bool attention = false,
+    }) => AdminOverviewItem(
+      label: label,
+      icon: icon,
+      value: '$count',
+      caption: caption,
+      attention: attention,
+      selected: _filter == filter,
+      onTap: () => setState(
+        () => _filter = _filter == filter ? _QueueFilter.pending : filter,
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 18),
+      child: AdminOverviewStrip(
+        items: [
+          card(
+            _QueueFilter.pending,
+            label: 'Pending Verifications',
+            icon: Icons.fact_check_outlined,
+            count: pending,
+            caption: 'Farmers awaiting admin review',
+            attention: true,
+          ),
+          card(
+            _QueueFilter.approved,
+            label: 'Approved Farmers',
+            icon: Icons.verified_outlined,
+            count: approved,
+            caption: 'Applications approved',
+          ),
+          card(
+            _QueueFilter.rejected,
+            label: 'Rejected Applications',
+            icon: Icons.block_outlined,
+            count: rejected,
+            caption: 'Applications not approved',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionTitle(AdminPalette c, String title, int? count) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        count == null ? title : '$title ($count)',
+        style: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: c.textPrimary,
+        ),
+      ),
+    );
+  }
+
+  /// One decided application: who, the decision and when, and the reason
+  /// for a rejection. The eye opens the same record as the pending list.
+  Widget _reviewedRow(
+    BuildContext context,
+    AdminPalette c,
+    String uid,
+    Map<String, dynamic> profile,
+    Map<String, dynamic>? verif,
+    DateTime? decided, {
+    required bool last,
+  }) {
+    final name =
+        _firstNonEmpty([
+          verif?['fullName'],
+          profile['fullName'],
+          profile['name'],
+        ]) ??
+        'Unknown Farmer';
+    final approved = profile['approvalStatus'] == 'approved';
+    final barangay = _firstNonEmpty([profile['barangay']]);
+    final reason = _firstNonEmpty([verif?['rejectionReason']]);
+    final details = [
+      'RSBA No.: ${farmerIdOf(profile, verif) ?? kNoFarmerId}',
+      ?barangay,
+      if (decided != null) DateFormat('MMM d, y').format(decided),
+    ].join('  •  ');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        border: last ? null : Border(bottom: BorderSide(color: c.border)),
+      ),
+      child: Row(
+        children: [
+          AdminAvatar(
+            name: name,
+            photoUrl: profile['photoUrl']?.toString(),
+            radius: 18,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: c.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  details,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12.5, color: c.textSecondary),
+                ),
+                if (!approved && reason != null)
+                  Text(
+                    'Reason: $reason',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12.5, color: c.textMuted),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          AdminStatusBadge(
+            text: approved ? 'Approved' : 'Rejected',
+            color: approved ? c.green : c.red,
+            bg: approved ? c.greenBg : c.redBg,
+          ),
+          IconButton(
+            tooltip: 'View full verification details',
+            icon: Icon(Icons.visibility_outlined, color: c.iconInactive),
+            onPressed: () => showFarmerVerificationDetails(context, uid: uid),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -83,37 +254,126 @@ class VerificationQueueView extends StatelessWidget {
                           'Unknown Farmer';
                     }
 
-                    if (docs.isEmpty) {
-                      return Center(
-                        child: Text(
-                          'No pending verifications at this time.',
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: c.textSecondary,
+                    // Decided applications, newest decision first: the page
+                    // still has something to show when nothing is waiting.
+                    var approvedCount = 0;
+                    var rejectedCount = 0;
+                    final reviewed =
+                        <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+                    for (final d in usersSnap.data?.docs ?? const []) {
+                      final data = d.data();
+                      if (data['role'] != 'farmer') continue;
+                      final status = data['approvalStatus'];
+                      if (status == 'approved') approvedCount++;
+                      if (status == 'rejected') rejectedCount++;
+                      if (status == 'approved' || status == 'rejected') {
+                        reviewed.add(d);
+                      }
+                    }
+                    DateTime? decidedAt(Map<String, dynamic> data) =>
+                        ((data['reviewedAt'] ?? data['verifiedAt'])
+                                as Timestamp?)
+                            ?.toDate();
+                    reviewed.sort((a, b) {
+                      final ta = decidedAt(a.data());
+                      final tb = decidedAt(b.data());
+                      if (ta == null && tb == null) return 0;
+                      if (ta == null) return 1;
+                      if (tb == null) return -1;
+                      return tb.compareTo(ta);
+                    });
+                    final summary = _summary(
+                      pending: docs.length,
+                      approved: approvedCount,
+                      rejected: rejectedCount,
+                    );
+
+                    // Approved or Rejected card chosen: every application
+                    // with that decision, newest first.
+                    if (_filter != _QueueFilter.pending) {
+                      final approved = _filter == _QueueFilter.approved;
+                      final decided = [
+                        for (final d in reviewed)
+                          if ((d.data()['approvalStatus'] == 'approved') ==
+                              approved)
+                            d,
+                      ];
+                      return ListView(
+                        children: [
+                          summary,
+                          _sectionTitle(
+                            c,
+                            approved
+                                ? 'Approved applications'
+                                : 'Rejected applications',
+                            decided.length,
                           ),
-                        ),
+                          if (decided.isEmpty)
+                            AdminEmptyState(
+                              icon: approved
+                                  ? Icons.verified_outlined
+                                  : Icons.block_outlined,
+                              title: approved
+                                  ? 'No approved applications yet'
+                                  : 'No rejected applications',
+                              subtitle: approved
+                                  ? 'Farmers you approve will be listed here.'
+                                  : 'Applications you reject will be listed '
+                                        'here, with the reason.',
+                            )
+                          else
+                            Card(
+                              margin: EdgeInsets.zero,
+                              child: Column(
+                                children: [
+                                  for (final d in decided)
+                                    _reviewedRow(
+                                      context,
+                                      c,
+                                      d.id,
+                                      d.data(),
+                                      verifByUid[d.id],
+                                      decidedAt(d.data()),
+                                      last: d == decided.last,
+                                    ),
+                                ],
+                              ),
+                            ),
+                        ],
                       );
                     }
 
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (context, index) {
-                        final uid = docs[index].id;
-                        final profile = docs[index].data();
-                        final farmerId = farmerIdOf(profile, verifByUid[uid]);
-                        return _farmerApplicationCard(
-                          context,
-                          uid,
-                          profile,
-                          verifByUid[uid],
-                          sameFarmerId: [
-                            for (final other
-                                in (namesByFarmerId[farmerId] ?? const {})
-                                    .entries)
-                              if (other.key != uid) other.value,
-                          ],
-                        );
-                      },
+                    return ListView(
+                      children: [
+                        summary,
+                        _sectionTitle(c, 'Pending applications', docs.length),
+                        if (docs.isEmpty)
+                          const AdminEmptyState(
+                            icon: Icons.task_alt_rounded,
+                            title: 'All caught up',
+                            subtitle:
+                                'No farmer applications are waiting for review. '
+                                'New ones will appear here as soon as a farmer '
+                                'registers.',
+                          )
+                        else
+                          for (final d in docs)
+                            FarmerApplicationCard(
+                              uid: d.id,
+                              profile: d.data(),
+                              verif: verifByUid[d.id],
+                              sameFarmerId: [
+                                for (final other
+                                    in (namesByFarmerId[farmerIdOf(
+                                              d.data(),
+                                              verifByUid[d.id],
+                                            )] ??
+                                            const {})
+                                        .entries)
+                                  if (other.key != d.id) other.value,
+                              ],
+                            ),
+                      ],
                     );
                   },
                 );
@@ -124,14 +384,30 @@ class VerificationQueueView extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _farmerApplicationCard(
-    BuildContext context,
-    String uid,
-    Map<String, dynamic> profile,
-    Map<String, dynamic>? verif, {
-    List<String> sameFarmerId = const [],
-  }) {
+/// One application waiting for a decision, as a review card: who applied
+/// (photo or initials, name, "Pending Review"), the details to check —
+/// RSBA No., email, barangay and when it was submitted — anything that
+/// needs a second look, and View Details / Reject / Approve.
+class FarmerApplicationCard extends StatelessWidget {
+  final String uid;
+  final Map<String, dynamic> profile;
+  final Map<String, dynamic>? verif;
+
+  /// Other farmer accounts with the same RSBA No.
+  final List<String> sameFarmerId;
+
+  const FarmerApplicationCard({
+    super.key,
+    required this.uid,
+    required this.profile,
+    required this.verif,
+    this.sameFarmerId = const [],
+  });
+
+  @override
+  Widget build(BuildContext context) {
     // verif (from DashboardDataService's shared verificationDocsStream, see
     // caller) is supplementary only — submission date and the document
     // image live on verificationDocs, but the row (and the Approve/Reject
@@ -160,87 +436,292 @@ class VerificationQueueView extends StatelessWidget {
     // Nothing to check an application against: no number and no document.
     final nothingToCheck = farmerId == null && document.isEmpty;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 14),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(16),
-        leading: CircleAvatar(
-          backgroundColor: Colors.green[100],
-          child: Icon(Icons.person, color: Colors.green[800]),
+    final c = AdminThemeScope.of(context).palette;
+    final warnings = [
+      if (sameFarmerId.isNotEmpty)
+        'This RSBA No. is also on another farmer account: '
+            '${sameFarmerId.join(', ')}.',
+      if (nothingToCheck)
+        'No RSBA No. was submitted, so there is nothing to check this '
+            'application against.',
+    ];
+
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        OutlinedButton.icon(
+          icon: const Icon(Icons.visibility_outlined, size: 18),
+          label: const Text('View Details'),
+          style: _actionStyle(c.textPrimary, c.border),
+          onPressed: () => showFarmerVerificationDetails(context, uid: uid),
         ),
-        title: Text(
-          fullName,
-          style: const TextStyle(fontWeight: FontWeight.bold),
+        // Only an older application has a document; the RSBA number took
+        // its place on the registration form.
+        if (document.isNotEmpty)
+          OutlinedButton.icon(
+            icon: const Icon(Icons.image_search, size: 18),
+            label: const Text('View Doc'),
+            style: _actionStyle(c.textPrimary, c.border),
+            onPressed: () => _showDocumentDialog(context, document),
+          ),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.close_rounded, size: 18),
+          label: const Text('Reject'),
+          style: _actionStyle(c.red, c.red.withValues(alpha: 0.45)),
+          onPressed: () => rejectFarmerAccount(context, uid, fullName),
         ),
-        isThreeLine: true,
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Text.rich(
-              TextSpan(
-                text: 'RSBA No.: ',
+        FilledButton.icon(
+          icon: const Icon(Icons.check_rounded, size: 18),
+          label: const Text('Approve'),
+          style: FilledButton.styleFrom(
+            // The portal's dark green, as on every main action.
+            backgroundColor: adminActionColor(c),
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: c.border,
+            minimumSize: const Size(0, 40),
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          onPressed: nothingToCheck
+              ? null
+              : () => approveFarmerAccount(context, uid, fullName),
+        ),
+      ],
+    );
+
+    // Who applied: photo or initials, the name and where it stands.
+    final header = Row(
+      children: [
+        AdminAvatar(
+          name: fullName,
+          photoUrl: profile['photoUrl']?.toString(),
+          radius: 22,
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 10,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  TextSpan(
-                    text: farmerId ?? kNoFarmerId,
+                  Text(
+                    fullName,
                     style: TextStyle(
+                      fontSize: 15.5,
                       fontWeight: FontWeight.w700,
-                      color: farmerId == null ? Colors.red[700] : null,
+                      color: c.textPrimary,
                     ),
+                  ),
+                  AdminStatusBadge(
+                    text: 'Pending Review',
+                    color: c.amber,
+                    bg: c.amberBg,
                   ),
                 ],
               ),
-            ),
-            Text(
-              '$email  •  Barangay: $barangay  •  Submitted: $dateSubmitted',
-            ),
-            if (sameFarmerId.isNotEmpty)
+              const SizedBox(height: 2),
               Text(
-                'This RSBA No. is also on another farmer account: '
-                '${sameFarmerId.join(', ')}.',
-                style: TextStyle(color: Colors.red[700], fontSize: 12.5),
+                'Farmer application',
+                style: TextStyle(fontSize: 12.5, color: c.textSecondary),
               ),
-            if (nothingToCheck)
-              Text(
-                'No RSBA No. was submitted, so there is nothing to check '
-                'this application against.',
-                style: TextStyle(color: Colors.red[700], fontSize: 12.5),
-              ),
-          ],
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              tooltip: 'View full verification details',
-              icon: Icon(Icons.visibility_outlined, color: Colors.grey[700]),
-              onPressed: () => showFarmerVerificationDetails(context, uid: uid),
-            ),
-            // Only an older application has a document; the RSBA number
-            // took its place on the registration form.
-            if (document.isNotEmpty) ...[
-              OutlinedButton.icon(
-                icon: const Icon(Icons.image_search),
-                label: const Text('View Doc'),
-                onPressed: () => _showDocumentDialog(context, document),
-              ),
-              const SizedBox(width: 8),
             ],
-            ElevatedButton.icon(
-              icon: const Icon(Icons.check),
-              label: const Text('Approve'),
-              onPressed: nothingToCheck
-                  ? null
-                  : () => approveFarmerAccount(context, uid, fullName),
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.close, color: Colors.red),
-              label: const Text('Reject', style: TextStyle(color: Colors.red)),
-              onPressed: () => rejectFarmerAccount(context, uid, fullName),
-            ),
-          ],
+          ),
         ),
+      ],
+    );
+
+    // The application's details, each with its label.
+    final details = Wrap(
+      spacing: 28,
+      runSpacing: 12,
+      children: [
+        _ApplicationField(
+          icon: Icons.badge_outlined,
+          label: 'RSBA No.',
+          value: farmerId ?? kNoFarmerId,
+          emphasis: true,
+          valueColor: farmerId == null ? c.red : null,
+        ),
+        _ApplicationField(
+          icon: Icons.mail_outline_rounded,
+          label: 'Email',
+          value: email,
+        ),
+        _ApplicationField(
+          icon: Icons.location_on_outlined,
+          label: 'Barangay',
+          value: barangay,
+        ),
+        _ApplicationField(
+          icon: Icons.event_outlined,
+          label: 'Submitted',
+          value: dateSubmitted,
+        ),
+      ],
+    );
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: c.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0A0E3210),
+            blurRadius: 10,
+            offset: Offset(0, 3),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          // Wide: the actions beside the header; narrow: under the details.
+          final wide = box.maxWidth >= 860;
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (wide)
+                  Row(
+                    children: [
+                      Expanded(child: header),
+                      const SizedBox(width: 16),
+                      actions,
+                    ],
+                  )
+                else
+                  header,
+                const SizedBox(height: 14),
+                Divider(height: 1, color: c.border),
+                const SizedBox(height: 14),
+                // Lined up under the name, past the photo.
+                Padding(
+                  padding: const EdgeInsets.only(left: 58),
+                  child: details,
+                ),
+                for (final warning in warnings) ...[
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 58),
+                    child: _ApplicationWarning(text: warning),
+                  ),
+                ],
+                if (!wide) ...[
+                  const SizedBox(height: 16),
+                  Align(alignment: Alignment.centerRight, child: actions),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  ButtonStyle _actionStyle(Color color, Color border) =>
+      OutlinedButton.styleFrom(
+        foregroundColor: color,
+        side: BorderSide(color: border),
+        minimumSize: const Size(0, 40),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        textStyle: const TextStyle(fontWeight: FontWeight.w600),
+      );
+}
+
+/// One labelled detail of an application: a small grey label with its
+/// icon, and the value under it.
+class _ApplicationField extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool emphasis;
+  final Color? valueColor;
+
+  const _ApplicationField({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.emphasis = false,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 150, maxWidth: 320),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 14, color: c.textMuted),
+              const SizedBox(width: 5),
+              Text(
+                label.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                  color: c.textMuted,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            value,
+            maxLines: 1,
+            style: TextStyle(
+              fontSize: emphasis ? 14 : 13.5,
+              fontWeight: emphasis ? FontWeight.w700 : FontWeight.w500,
+              letterSpacing: emphasis ? 0.4 : null,
+              color: valueColor ?? c.textPrimary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Something the Admin should look at before deciding, in a soft red
+/// notice.
+class _ApplicationWarning extends StatelessWidget {
+  final String text;
+  const _ApplicationWarning({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = AdminThemeScope.of(context).palette;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: c.redBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.red.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.error_outline_rounded, size: 17, color: c.red),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 12.5, color: c.red, height: 1.35),
+            ),
+          ),
+        ],
       ),
     );
   }

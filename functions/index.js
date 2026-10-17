@@ -25,6 +25,8 @@ const messaging = getMessaging();
 const { CHANNELS, NEW_DEVICE_TYPE, pushData, newDeviceAlert } = require("./push_payload");
 const { categoryOf, pushAllowed, deliveryChannels, WELCOME } = require("./notification_policy");
 const { COMMODITY_ARCHIVED, archiveChange, commodityNotice } = require("./commodity_notice");
+const { suspensionEndText } = require("./suspension_logic");
+const { signedInBeforeRevocation } = require("./admin_session_logic");
 
 // Keep marketplace-visible profile fields separate from private users/{uid}
 // records. Admin SDK writes bypass client rules; clients cannot write this
@@ -637,12 +639,19 @@ Object.assign(exports, require("./registration_status"));
 // email_otp.js.
 Object.assign(exports, require("./email_otp"));
 
+// 6-digit code to the new address before an Admin's email is changed — see
+// email_change_otp.js.
+Object.assign(exports, require("./email_change_otp"));
+
 // Failed-login cooldown (5 wrong passwords → 5 minute pause) — see
 // login_throttle.js.
 Object.assign(exports, require("./login_throttle"));
 
 // The public page behind a shared product link (/product/<id> on Hosting).
 Object.assign(exports, require("./public_product"));
+
+// A suspension set for a time ends by itself — see suspension.js.
+Object.assign(exports, require("./suspension"));
 
 // ---------------------------------------------------------------
 // Order delay / reschedule (see OrderService.reportDelay and friends).
@@ -1086,7 +1095,7 @@ exports.notifyAccountModeration = onDocumentUpdated("users/{uid}", async (event)
   await notifyUser(event.params.uid, {
     title: suspended ? "Account Suspended" : "Account Deactivated",
     body: suspended
-      ? `Your AgriTrade+ account has been suspended until an Admin reactivates it.${after.suspensionReason ? ` Reason: ${after.suspensionReason}` : ""}`
+      ? `Your AgriTrade+ account has been suspended ${suspensionEndText(after)}.${after.suspensionReason ? ` Reason: ${after.suspensionReason}` : ""}`
       : `Your AgriTrade+ account has been deactivated following an Admin review.${after.banReason ? ` Reason: ${after.banReason}` : ""}`,
     type: "moderation_warning",
     relatedId: event.params.uid,
@@ -1417,7 +1426,9 @@ exports.logAuditEvent = onCall({ region: "asia-southeast1" }, async (request) =>
       request.auth.token.email === "admin@agritrade.com";
     if ((request.auth.token.email_verified !== true && !isUnverifiedAdminAccount) ||
         admin.role !== "admin" ||
-        (admin.accountStatus || "active") !== "active") {
+        (admin.accountStatus || "active") !== "active" ||
+        // A browser signed out from Active Sessions (admin_session.js).
+        signedInBeforeRevocation(request.auth.token.auth_time, admin.sessionsValidAfter)) {
       throw new HttpsError("permission-denied", "Only an active admin can log this action.");
     }
   }

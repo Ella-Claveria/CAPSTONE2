@@ -33,8 +33,12 @@ Future<bool> showAdminSessionConflictDialog(BuildContext context) async {
 }
 
 /// Shown on the browser whose Admin session was ended by a sign-in
-/// elsewhere, once it is back at the login page.
-Future<void> showAdminSessionEndedDialog(BuildContext context) {
+/// elsewhere — or, with [revoked], signed out from Active Sessions on
+/// another device — once it is back at the login page.
+Future<void> showAdminSessionEndedDialog(
+  BuildContext context, {
+  bool revoked = false,
+}) {
   return showAgriDialog<void>(
     context: context,
     barrierDismissible: false,
@@ -42,8 +46,11 @@ Future<void> showAdminSessionEndedDialog(BuildContext context) {
       icon: Icons.logout_rounded,
       tone: AgriTone.warning,
       title: const Text('Session ended'),
-      content: const Text(
-        'Your Admin account was logged in on another device.',
+      content: Text(
+        revoked
+            ? 'This device was signed out of your Admin account from Active '
+                  'Sessions on another device. Log in again to continue.'
+            : 'Your Admin account was logged in on another device.',
       ),
       actions: [
         AgriDialogButton(

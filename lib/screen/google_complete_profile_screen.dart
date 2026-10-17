@@ -12,6 +12,8 @@ import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
 import '../widgets/barangay_location_field.dart';
 import '../widgets/permission_rationale_dialog.dart';
+import '../widgets/public_location_preview.dart';
+import '../widgets/role_toggle.dart';
 import 'auth_route_handler.dart';
 import 'privacy_policy_screen.dart';
 import 'supported_products_screen.dart';
@@ -347,7 +349,7 @@ class _GoogleCompleteProfileScreenState
     final result = await AuthRoutingService.decide(widget.uid);
     if (!mounted) return;
     setState(() => _loading = false);
-    await applyAuthRouteResult(context, result);
+    await applyAuthRouteResult(context, result, announceSignIn: true);
   }
 
   // ==========================================================
@@ -473,53 +475,9 @@ class _GoogleCompleteProfileScreenState
 
   Widget _publicLocationPreview() {
     if (_selectedBarangay == null) return const SizedBox.shrink();
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16, top: 14),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.mid.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.visibility_outlined, color: AppTheme.mid, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Public Location Preview',
-                  style: AppTheme.body(
-                    color: Colors.black87,
-                    size: 12.5,
-                  ).copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Buyers will see:',
-                  style: AppTheme.body(color: Colors.black54, size: 11.5),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '$_selectedBarangay, Laurel, Batangas',
-                  style: AppTheme.body(
-                    color: AppTheme.dark,
-                    size: 13,
-                  ).copyWith(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Your exact coordinates will not be displayed publicly.',
-                  style: AppTheme.body(color: Colors.black45, size: 11),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16, top: 14),
+      child: PublicLocationPreview(barangay: _selectedBarangay!),
     );
   }
 
@@ -771,32 +729,11 @@ class _GoogleCompleteProfileScreenState
                       ],
                       const SizedBox(height: 16),
 
-                      Text('I am a...', style: AppTheme.label()),
+                      Text('Choose your role', style: AppTheme.label()),
                       const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: AppTheme.fieldFill,
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: _roleToggleOption(
-                                'buyer',
-                                'Buyer',
-                                Icons.shopping_cart_outlined,
-                              ),
-                            ),
-                            Expanded(
-                              child: _roleToggleOption(
-                                'farmer',
-                                'Farmer',
-                                Icons.agriculture_outlined,
-                              ),
-                            ),
-                          ],
-                        ),
+                      RoleToggle(
+                        selected: _selectedRole,
+                        onChanged: _selectRole,
                       ),
 
                       if (_isFarmer) ...[
@@ -983,39 +920,6 @@ class _GoogleCompleteProfileScreenState
                   ),
                 ],
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _roleToggleOption(String role, String label, IconData icon) {
-    final selected = _selectedRole == role;
-    return GestureDetector(
-      onTap: () => _selectRole(role),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? AppTheme.dark : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 17,
-              color: selected ? Colors.white : Colors.black54,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: AppTheme.body(
-                color: selected ? Colors.white : Colors.black87,
-                size: 14,
-              ).copyWith(fontWeight: FontWeight.w600),
             ),
           ],
         ),

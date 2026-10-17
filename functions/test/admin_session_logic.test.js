@@ -67,3 +67,49 @@ test("the Admin login alert gives the details and nothing sensitive", () => {
     assert.ok(!/token|session id|latitude|longitude/i.test(body));
   }
 });
+
+const {
+  signedInBeforeRevocation,
+  isRecentLogin,
+  sessionsToRevoke,
+} = require("../admin_session_logic");
+
+test("a token signed in before a revocation is refused; the caller's is not", () => {
+  // Revoked at the caller's own password entry: 1,000,000 s.
+  const validAfter = { toMillis: () => 1000000 * 1000 };
+  assert.strictEqual(signedInBeforeRevocation(999999, validAfter), true);
+  assert.strictEqual(signedInBeforeRevocation(1000000, validAfter), false);
+  assert.strictEqual(signedInBeforeRevocation(1000500, validAfter), false);
+  // Never revoked: every token is fine.
+  assert.strictEqual(signedInBeforeRevocation(1, null), false);
+  assert.strictEqual(signedInBeforeRevocation(1, undefined), false);
+});
+
+test("revoking needs the password entered in the last five minutes", () => {
+  const now = 2000000 * 1000;
+  assert.strictEqual(isRecentLogin(2000000 - 60, now), true);
+  assert.strictEqual(isRecentLogin(2000000 - 5 * 60, now), true);
+  assert.strictEqual(isRecentLogin(2000000 - 5 * 60 - 1, now), false);
+  assert.strictEqual(isRecentLogin(0, now), false);
+});
+
+test("only other sessions that are still active are revoked", () => {
+  const history = [
+    { id: "current-session-0001", status: "active" },
+    { id: "other-session-000001", status: "active" },
+    { id: "older-session-000001", status: "ended" },
+  ];
+  assert.deepStrictEqual(
+    sessionsToRevoke(history, null, "current-session-0001"),
+    ["other-session-000001"],
+  );
+  assert.deepStrictEqual(
+    sessionsToRevoke(history, "other-session-000001", "current-session-0001"),
+    ["other-session-000001"],
+  );
+  // The caller's own session is never one of them.
+  assert.deepStrictEqual(
+    sessionsToRevoke(history, "current-session-0001", "current-session-0001"),
+    [],
+  );
+});

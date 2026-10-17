@@ -1,6 +1,7 @@
 // The Admin Portal's left sidebar: the pages in order, the active one
 // highlighted, every page an item of its own, and the icon-only rail.
 import 'package:agritrade/widgets/admin_sidebar.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -105,18 +106,19 @@ void main() {
     tester,
   ) async {
     final host = await pump(tester);
-    expect(rowColor(tester, 'Dashboard'), AdminSidebar.activeBackground);
+    const active = AdminSidebarColors.light;
+    expect(rowColor(tester, 'Dashboard'), active.activeBackground);
     expect(rowColor(tester, 'Farmers')!.a, 0);
 
     await tester.tap(find.text('Farmers'));
     await tester.pumpAndSettle();
     expect(host.selected, 4);
     expect(find.text('page 4'), findsOneWidget);
-    expect(rowColor(tester, 'Farmers'), AdminSidebar.activeBackground);
+    expect(rowColor(tester, 'Farmers'), active.activeBackground);
     expect(rowColor(tester, 'Dashboard')!.a, 0);
   });
 
-  testWidgets('the active tab is cream, flush with the left edge and '
+  testWidgets('the active tab is dark green, flush with the left edge and '
       'rounded on the right only', (tester) async {
     await pump(tester);
     final row = find
@@ -131,7 +133,7 @@ void main() {
     );
     final decoration =
         tester.widget<AnimatedContainer>(row).decoration as BoxDecoration;
-    expect(decoration.color, const Color(0xFFF2F3E9));
+    expect(decoration.color, AdminSidebarColors.light.activeBackground);
     expect(decoration.border, isNull);
     expect(decoration.boxShadow, isNull);
     final radius = decoration.borderRadius as BorderRadius;
@@ -139,14 +141,14 @@ void main() {
     expect(radius.bottomLeft, Radius.zero);
     expect(radius.topRight.x, inInclusiveRange(16, 20));
     expect(radius.bottomRight.x, inInclusiveRange(16, 20));
-    // Dark green icon and text on it.
+    // White icon and text on it.
     expect(
       tester.widget<Text>(find.text('Dashboard')).style!.color,
-      AdminSidebar.background,
+      AdminSidebarColors.light.activeForeground,
     );
     expect(
       tester.widget<Icon>(find.byIcon(Icons.dashboard_outlined)).color,
-      AdminSidebar.background,
+      AdminSidebarColors.light.activeForeground,
     );
     // Same width as before.
     expect(tester.getSize(find.byType(AdminSidebar)).width, 248);
@@ -159,7 +161,10 @@ void main() {
     await tester.tap(find.text('Audit Log'));
     await tester.pumpAndSettle();
     expect(host.selected, 7);
-    expect(rowColor(tester, 'Audit Log'), AdminSidebar.activeBackground);
+    expect(
+      rowColor(tester, 'Audit Log'),
+      AdminSidebarColors.light.activeBackground,
+    );
     expect(rowColor(tester, 'Dashboard')!.a, 0);
   });
 
@@ -187,6 +192,68 @@ void main() {
     await tester.tap(find.byIcon(Icons.fact_check_outlined));
     await tester.pumpAndSettle();
     expect(host.selected, 7);
+  });
+
+  testWidgets('the sidebar button folds it into the rail and opens it again; '
+      'on the rail the logo becomes that button on hover', (tester) async {
+    tester.view.physicalSize = const Size(1440, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    var collapsed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) => Scaffold(
+            body: Row(
+              children: [
+                AdminSidebar(
+                  entries: entries,
+                  selectedIndex: 0,
+                  collapsed: collapsed,
+                  toggleShortcut: 'Ctrl+Shift+S',
+                  onToggleCollapsed: () =>
+                      setState(() => collapsed = !collapsed),
+                  onSelect: (_) {},
+                ),
+                const Expanded(child: SizedBox()),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    // Open: the button sits at the end of the logo row.
+    final close = find.bySemanticsLabel('Close sidebar');
+    expect(close, findsOneWidget);
+    expect(
+      tester.getCenter(close).dx,
+      greaterThan(tester.getCenter(find.text('AgriTrade+')).dx),
+    );
+    await tester.tap(close);
+    await tester.pumpAndSettle();
+    expect(collapsed, isTrue);
+    expect(tester.getSize(find.byType(AdminSidebar)).width, 72);
+
+    // The rail shows the logo until the pointer is over it.
+    expect(find.bySemanticsLabel('Open sidebar'), findsNothing);
+    final logo = find.descendant(
+      of: find.byType(AdminSidebar),
+      matching: find.byType(Image),
+    );
+    expect(logo, findsOneWidget);
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await mouse.moveTo(tester.getCenter(logo));
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('Open sidebar'), findsOneWidget);
+    expect(logo, findsNothing);
+
+    await tester.tap(find.bySemanticsLabel('Open sidebar'));
+    await tester.pumpAndSettle();
+    expect(collapsed, isFalse);
+    expect(tester.getSize(find.byType(AdminSidebar)).width, 248);
   });
 
   testWidgets('scrolls on its own when the window is too short', (

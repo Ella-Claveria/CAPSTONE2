@@ -149,8 +149,22 @@ class AppTheme {
         ),
       ),
 
+      // Every system message (SnackBar): white text on the brand's dark
+      // green, floating with rounded corners. The text colour has to be set
+      // here — without one it fell back to the dark body text and could
+      // not be read on the dark bar.
       snackBarTheme: SnackBarThemeData(
-        contentTextStyle: GoogleFonts.montserrat(fontSize: 13.5),
+        backgroundColor: dark,
+        contentTextStyle: GoogleFonts.montserrat(
+          fontSize: 13.5,
+          fontWeight: FontWeight.w500,
+          color: Colors.white,
+        ),
+        actionTextColor: accent,
+        closeIconColor: Colors.white,
+        behavior: SnackBarBehavior.floating,
+        elevation: 4,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -199,11 +213,20 @@ class AppTheme {
   // The "AgriTrade+" wordmark: the whole word in one colour — the brand's
   // dark green, or white where it sits on a dark background. Rendered by
   // AgriTradeText; anything else that draws the brand name uses this too.
+  // Montserrat Bold — the bundled Montserrat (pubspec.yaml), the same as
+  // the password reset page's wordmark, so it is the same everywhere.
   static TextStyle brandText({double fontSize = 28, bool light = false}) =>
-      GoogleFonts.lilitaOne(
+      TextStyle(
+        fontFamily: 'Montserrat',
+        fontWeight: FontWeight.w700,
+        letterSpacing: fontSize * 0.01,
         fontSize: fontSize,
         color: light ? Colors.white : dark,
       );
+
+  // Lilita One, bundled in assets/fonts (see pubspec.yaml), for the few
+  // display headings that use it ("Verify Your Email").
+  static const String brandFontFamily = 'LilitaOne';
 
   static TextStyle buttonText() =>
       GoogleFonts.montserrat(fontSize: 16, fontWeight: FontWeight.bold);

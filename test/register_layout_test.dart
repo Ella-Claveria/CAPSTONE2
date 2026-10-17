@@ -12,9 +12,13 @@ const hint = 'Please complete all fields first.';
 Finder get registerButton => find.widgetWithText(ElevatedButton, 'Register');
 Finder get loginLink => find.textContaining('Log in', findRichText: true);
 
-Future<void> pumpForm(WidgetTester tester, {String role = 'farmer'}) async {
+Future<void> pumpForm(
+  WidgetTester tester, {
+  String role = 'farmer',
+  double width = 600,
+}) async {
   // Wide, because the test font is much wider than Montserrat.
-  tester.view.physicalSize = const Size(600, 720);
+  tester.view.physicalSize = Size(width, 720);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
@@ -62,6 +66,36 @@ void main() {
       find.textContaining('I agree to the', findRichText: true),
     );
     expect(terms.bottom, lessThanOrEqualTo(button.top));
+  });
+
+  testWidgets('at the end, no big empty space is left under the link', (
+    tester,
+  ) async {
+    await pumpForm(tester);
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -5000),
+    );
+    await tester.pumpAndSettle();
+    expect(720 - tester.getRect(loginLink).bottom, lessThanOrEqualTo(32));
+  });
+
+  testWidgets('the hint and the link still fit at large text sizes', (
+    tester,
+  ) async {
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    // Wider still: the test font at this size is wider than any phone.
+    await pumpForm(tester, width: 900);
+    await tester.drag(
+      find.byType(SingleChildScrollView),
+      const Offset(0, -5000),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    final link = tester.getRect(loginLink);
+    expect(tester.getRect(find.text(hint)).bottom, lessThanOrEqualTo(link.top));
+    expect(link.bottom, lessThanOrEqualTo(720));
   });
 
   testWidgets('scrolling back up floats the button again', (tester) async {

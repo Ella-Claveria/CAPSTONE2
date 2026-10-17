@@ -80,7 +80,6 @@ void main() {
       MaterialApp(
         home: AdminThemeScope(
           palette: AdminPalette.light,
-          onToggleTheme: () {},
           child: const Scaffold(
             body: Row(
               crossAxisAlignment: CrossAxisAlignment.start,

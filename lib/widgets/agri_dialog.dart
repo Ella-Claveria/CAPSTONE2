@@ -169,7 +169,7 @@ class AgriDialog extends StatelessWidget {
               ?body,
               if (actions.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                _actionsRow(context),
+                _actionsRow(context, centered: centered),
               ],
             ],
           ),
@@ -180,7 +180,7 @@ class AgriDialog extends StatelessWidget {
 
   // Two actions side by side (secondary left, primary right as passed);
   // anything else stacked full-width.
-  Widget _actionsRow(BuildContext context) {
+  Widget _actionsRow(BuildContext context, {bool centered = false}) {
     // A lone button on a wide window (the Admin Portal in a browser) is
     // only as wide as its label, centred, instead of a bar across the
     // whole popup. On a phone it stays full-width, easy to reach.
@@ -189,6 +189,35 @@ class AgriDialog extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(minWidth: 160),
           child: IntrinsicWidth(child: actions.single),
+        ),
+      );
+    }
+    // Two buttons on a wide window: each only as wide as its label — under
+    // the text when the popup is centred (it has an icon), at the right
+    // otherwise — instead of two bars filling the popup. A label too long
+    // for the room wraps.
+    if (actions.length == 2 && MediaQuery.sizeOf(context).width >= 600) {
+      return IntrinsicHeight(
+        child: Row(
+          mainAxisAlignment: centered
+              ? MainAxisAlignment.center
+              : MainAxisAlignment.end,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The first (usually Cancel) as wide as its label; the second
+            // takes what is left if its label is long.
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 96),
+              child: actions[0],
+            ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 96),
+                child: actions[1],
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -264,7 +293,7 @@ class AgriDialogButton extends StatelessWidget {
     );
     final padding = compact
         ? const EdgeInsets.symmetric(vertical: 6, horizontal: 16)
-        : const EdgeInsets.symmetric(vertical: 12, horizontal: 12);
+        : const EdgeInsets.symmetric(vertical: 12, horizontal: 20);
     // Null leaves the theme's own minimum size and tap target.
     final minimumSize = compact ? const Size(0, 32) : null;
     final tapTargetSize = compact ? MaterialTapTargetSize.shrinkWrap : null;
@@ -289,7 +318,10 @@ class AgriDialogButton extends StatelessWidget {
           style: ElevatedButton.styleFrom(
             backgroundColor: AppTheme.dark,
             foregroundColor: Colors.white,
-            disabledBackgroundColor: Colors.grey.shade400,
+            // Not ready yet (e.g. the code is not complete): a faded green,
+            // still the same button, instead of a grey one.
+            disabledBackgroundColor: AppTheme.dark.withValues(alpha: 0.35),
+            disabledForegroundColor: Colors.white,
             elevation: 0,
             padding: padding,
             minimumSize: minimumSize,

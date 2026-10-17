@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/report_export_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/busy_indicator.dart';
 import 'admin_dashboard_screen.dart' show AdminPalette;
 import 'admin_filter_controls.dart';
 
@@ -501,14 +502,9 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                 children: [
                                   Row(
                                     children: [
-                                      SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2.2,
-                                          color: c.green,
-                                        ),
-                                      ),
+                                      // Drawn by the browser, so it keeps
+                                      // turning while the file is built.
+                                      BusySpinner(color: c.green),
                                       const SizedBox(width: 10),
                                       Expanded(
                                         child: Text(
@@ -523,13 +519,9 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                                     ],
                                   ),
                                   const SizedBox(height: 10),
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(999),
-                                    child: LinearProgressIndicator(
-                                      minHeight: 4,
-                                      color: c.green,
-                                      backgroundColor: c.surface,
-                                    ),
+                                  BusyBar(
+                                    color: c.green,
+                                    trackColor: c.surface,
                                   ),
                                   const SizedBox(height: 8),
                                   Text(

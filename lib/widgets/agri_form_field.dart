@@ -26,6 +26,10 @@ class AgriFormField extends StatelessWidget {
   /// Shows the value without letting it be edited.
   final bool readOnly;
 
+  /// [AutovalidateMode.always] re-checks the field each time it is rebuilt,
+  /// so an error can show while typing.
+  final AutovalidateMode? autovalidateMode;
+
   const AgriFormField({
     super.key,
     required this.label,
@@ -40,11 +44,13 @@ class AgriFormField extends StatelessWidget {
     this.onSubmitted,
     this.autofocus = false,
     this.readOnly = false,
+    this.autovalidateMode,
   });
 
   @override
   Widget build(BuildContext context) {
     return FormField<String>(
+      autovalidateMode: autovalidateMode,
       validator: (_) => validator?.call(controller.text),
       builder: (state) => Padding(
         padding: const EdgeInsets.only(bottom: 14),

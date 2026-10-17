@@ -48,6 +48,10 @@ class AdminOverviewItem {
   /// clickable.
   final VoidCallback? onTap;
 
+  /// The card is the one chosen, where the cards filter what is under
+  /// them: a stronger border in its own colour.
+  final bool selected;
+
   const AdminOverviewItem({
     required this.label,
     required this.icon,
@@ -56,6 +60,7 @@ class AdminOverviewItem {
     this.failed = false,
     this.attention = false,
     this.onTap,
+    this.selected = false,
   });
 }
 
@@ -110,16 +115,21 @@ class AdminOverviewStrip extends StatelessWidget {
     final radius = BorderRadius.circular(14);
     // Material + InkWell, so a clickable card shows the pointer, a hover
     // tint and a ripple inside its own rounded shape.
+    // Lightly tinted on the light theme; plain charcoal on the black-and-
+    // white dark theme, where the icon box alone carries the colour.
     return Material(
-      color: Color.alphaBlend(
-        tint.withValues(alpha: c.isDark ? 0.10 : 0.06),
-        c.surface,
-      ),
+      color: c.isDark
+          ? c.surface
+          : Color.alphaBlend(tint.withValues(alpha: 0.06), c.surface),
       shape: RoundedRectangleBorder(
         borderRadius: radius,
-        side: BorderSide(
-          color: Color.alphaBlend(tint.withValues(alpha: 0.16), c.border),
-        ),
+        side: item.selected
+            ? BorderSide(color: tint, width: 1.5)
+            : BorderSide(
+                color: c.isDark
+                    ? c.border
+                    : Color.alphaBlend(tint.withValues(alpha: 0.16), c.border),
+              ),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(

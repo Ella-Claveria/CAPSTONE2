@@ -17,6 +17,9 @@ import 'email_verification_screen.dart';
 import '../services/connectivity_service.dart';
 import '../widgets/barangay_location_field.dart';
 import '../widgets/glow_field.dart';
+import '../widgets/password_requirements.dart';
+import '../widgets/public_location_preview.dart';
+import '../widgets/role_toggle.dart';
 import 'page_transitions.dart';
 import '../l10n/app_localizations.dart';
 import 'privacy_policy_screen.dart';
@@ -99,9 +102,10 @@ class _RegisterScreenState extends State<RegisterScreen>
   // Everything under the button's place: the hint and the log-in link
   // (_formEnd gives them this fixed height), then the form's own bottom
   // padding. Fixed, so where the button rests is known from the scroll
-  // position alone.
-  static const double _formEndTextHeight = 84;
-  static const double _formBottomPadding = 16;
+  // position alone. Just tall enough for both lines at the largest text
+  // size allowed there (×1.3), so no empty band is left under them.
+  static const double _formEndTextHeight = 62;
+  static const double _formBottomPadding = 8;
   // Where the button was last drawn; see the check at the top of build.
   double _drawnRegisterBottom = _registerFloatGap;
 
@@ -180,18 +184,9 @@ class _RegisterScreenState extends State<RegisterScreen>
   // ==========================================================
   // LIVE VALIDATION
   // ==========================================================
-  bool _hasUppercase(String p) => RegExp(r'[A-Z]').hasMatch(p);
-  bool _hasLowercase(String p) => RegExp(r'[a-z]').hasMatch(p);
-  bool _hasNumber(String p) => RegExp(r'[0-9]').hasMatch(p);
-  bool _hasSymbol(String p) =>
-      RegExp(r'''[!@#$%^&*(),.?":{}|<>_+\-=\[\]]''').hasMatch(p);
-
-  bool _passwordMeetsRules(String p) =>
-      p.length >= 12 &&
-      _hasUppercase(p) &&
-      _hasLowercase(p) &&
-      _hasNumber(p) &&
-      _hasSymbol(p);
+  // The shared rules (password_requirements.dart), also used by Change
+  // Password.
+  bool _passwordMeetsRules(String p) => PasswordRules.meetsAll(p);
 
   bool _nameHasDigits(String name) => RegExp(r'[0-9]').hasMatch(name);
 
@@ -396,66 +391,12 @@ class _RegisterScreenState extends State<RegisterScreen>
   // Role toggle — the default is Buyer; switching to Farmer reveals the
   // verification fields below without leaving this page.
   // ==========================================================
-  Widget _roleToggle() {
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: AppTheme.fieldFill,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _roleToggleOption(
-              'buyer',
-              AppLocalizations.of(context)!.roleBuyer,
-              Icons.shopping_cart_outlined,
-            ),
-          ),
-          Expanded(
-            child: _roleToggleOption(
-              'farmer',
-              AppLocalizations.of(context)!.roleFarmer,
-              Icons.agriculture_outlined,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _roleToggleOption(String role, String label, IconData icon) {
-    final selected = _selectedRole == role;
-    return GestureDetector(
-      onTap: () => _selectRole(role),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected ? AppTheme.dark : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 17,
-              color: selected ? Colors.white : Colors.black54,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: AppTheme.body(
-                color: selected ? Colors.white : Colors.black87,
-                size: 14,
-              ).copyWith(fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _roleToggle() => RoleToggle(
+    selected: _selectedRole,
+    onChanged: _selectRole,
+    buyerLabel: AppLocalizations.of(context)!.roleBuyer,
+    farmerLabel: AppLocalizations.of(context)!.roleFarmer,
+  );
 
   // ==========================================================
   // A reusable text field.
@@ -523,48 +464,8 @@ class _RegisterScreenState extends State<RegisterScreen>
   // Live password requirements — hidden until they start typing a
   // password, then each item turns green the moment it's satisfied.
   // ==========================================================
-  Widget _passwordRequirements() {
-    final p = _passwordController.text;
-    if (p.isEmpty) return const SizedBox(height: 16);
-
-    final requirements = <(String, bool)>[
-      ('12+ characters', p.length >= 12),
-      ('Uppercase letter', _hasUppercase(p)),
-      ('Lowercase letter', _hasLowercase(p)),
-      ('Number', _hasNumber(p)),
-      ('Symbol', _hasSymbol(p)),
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Wrap(
-        spacing: 12,
-        runSpacing: 6,
-        children: requirements.map((req) {
-          final (label, met) = req;
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                met ? Icons.check_circle : Icons.circle_outlined,
-                size: 14,
-                color: met ? Colors.green[600] : Colors.grey[400],
-              ),
-              const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: met ? FontWeight.w600 : FontWeight.normal,
-                  color: met ? Colors.green[700] : Colors.grey[600],
-                ),
-              ),
-            ],
-          );
-        }).toList(),
-      ),
-    );
-  }
+  Widget _passwordRequirements() =>
+      PasswordRequirementsChecklist(password: _passwordController.text);
 
   // ==========================================================
   // A heads-up before the farmer-only fields: registration is only open to
@@ -687,53 +588,9 @@ class _RegisterScreenState extends State<RegisterScreen>
   // ==========================================================
   Widget _publicLocationPreview() {
     if (_selectedBarangay == null) return const SizedBox.shrink();
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.mid.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.visibility_outlined, color: AppTheme.mid, size: 18),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Public Location Preview',
-                  style: AppTheme.body(
-                    color: Colors.black87,
-                    size: 12.5,
-                  ).copyWith(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Buyers will see:',
-                  style: AppTheme.body(color: Colors.black54, size: 11.5),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '$_selectedBarangay, Laurel, Batangas',
-                  style: AppTheme.body(
-                    color: AppTheme.dark,
-                    size: 13,
-                  ).copyWith(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Your exact coordinates will not be displayed publicly.',
-                  style: AppTheme.body(color: Colors.black45, size: 11),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: PublicLocationPreview(barangay: _selectedBarangay!),
     );
   }
 
@@ -919,14 +776,14 @@ class _RegisterScreenState extends State<RegisterScreen>
             maxScaleFactor: 1.3,
             child: Column(
               children: [
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 // Gentle hint when the button is disabled.
                 if (!_isFormValid && !_loading) ...[
                   Text(
                     'Please complete all fields first.',
                     style: AppTheme.body(color: Colors.black45, size: 12),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                 ],
                 GestureDetector(
                   onTap: () => Navigator.pop(context),
@@ -997,11 +854,15 @@ class _RegisterScreenState extends State<RegisterScreen>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // ---- Logo ----
-                      Center(
+                      // logo.png has a wide transparent margin around the
+                      // artwork: shown larger, and only the artwork's own
+                      // height is kept, so the wordmark sits right under it
+                      // (as on Forgot Password).
+                      Align(
+                        heightFactor: 0.76,
                         child: Image.asset(
                           'assets/images/logo.png',
-                          width: 70,
-                          height: 70,
+                          height: 100,
                           errorBuilder: (context, error, stackTrace) {
                             return Container(
                               width: 70,
@@ -1019,7 +880,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                           },
                         ),
                       ),
-                      const SizedBox(height: 8),
 
                       const Center(child: AgriTradeText(fontSize: 26)),
                       const SizedBox(height: 6),
@@ -1032,7 +892,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                       const SizedBox(height: 20),
 
                       // ---- Role toggle (defaults to Buyer) ----
-                      Text('I am a...', style: AppTheme.label()),
+                      Text('Choose your role', style: AppTheme.label()),
                       const SizedBox(height: 8),
                       _roleToggle(),
                       const SizedBox(height: 20),

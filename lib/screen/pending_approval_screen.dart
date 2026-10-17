@@ -27,7 +27,7 @@ import '../services/notification_permission_prompt.dart';
 import '../services/push_notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agritrade_text.dart';
-import 'farmer_home_screen.dart';
+import '../services/first_entry_after_approval.dart';
 import 'login_screen.dart';
 
 class PendingApprovalScreen extends StatefulWidget {
@@ -134,22 +134,21 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
         );
   }
 
+  // Approved: never straight into the app. For security the farmer logs in
+  // again first — however they reached this screen (just registered, a
+  // login, or the app reopened while waiting).
   void _maybeEnterApp(String status) {
     if (_navigated || status != 'approved') return;
     _navigated = true;
     _sub?.cancel();
-    if (widget.justVerified) {
-      _requireLoginToEnter();
-      return;
-    }
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const FarmerHomeScreen()),
-      (route) => false,
-    );
+    _requireLoginToEnter();
   }
 
   Future<void> _requireLoginToEnter() async {
+    // That login is still this farmer's first time in the app, so the
+    // walkthrough is kept for it (see LoginFormFields).
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) await FirstEntryAfterApproval.mark(uid);
     await _redirectToLogin(
       'Your application is approved. Please log in to continue.',
     );

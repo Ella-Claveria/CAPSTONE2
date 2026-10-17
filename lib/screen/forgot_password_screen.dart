@@ -619,11 +619,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                     // Room for the floating Back button above.
                     const SizedBox(height: 4 + AppBackButton.size),
                     const SizedBox(height: 12),
-                    Center(
+                    // logo.png has a wide transparent margin around the
+                    // artwork: shown larger, and only the artwork's own
+                    // height is kept, so the wordmark sits right under it.
+                    Align(
+                      heightFactor: 0.76,
                       child: Image.asset(
                         'assets/images/logo.png',
-                        width: 70,
-                        height: 70,
+                        height: 100,
                         errorBuilder: (context, error, stackTrace) => Container(
                           width: 70,
                           height: 70,
@@ -639,7 +642,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                         ),
                       ),
                     ),
-                    const SizedBox(height: 10),
                     const Center(child: AgriTradeText(fontSize: 26)),
                     const SizedBox(height: 28),
                     if (!_sent) ...[

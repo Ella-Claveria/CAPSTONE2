@@ -23,8 +23,6 @@ enum AdminNotificationTarget {
   verification,
   farmers,
   moderation,
-  transactions,
-  listings,
   auditLog,
 }
 
@@ -103,7 +101,8 @@ List<AdminNotificationItem> buildAdminNotifications({
     final seller = _text(data['sellerName'], 'a farmer');
     final product = _text(data['productName'], 'a product');
     final status = _text(data['status'], 'pending').toLowerCase();
-    const target = AdminNotificationTarget.transactions;
+    // Orders have no page of their own in the portal: shown, not opened.
+    const AdminNotificationTarget? target = null;
     add(
       _time(data['createdAt']),
       Icons.shopping_bag_outlined,
@@ -600,6 +599,8 @@ String maintenanceNoticeBody(DateTime start, DateTime end, String note) {
       '${extra.isEmpty ? '' : ' $extra'}';
 }
 
+/// The header's megaphone: an announcement to farmers, or to farmers and
+/// buyers.
 Future<void> showAdminAnnouncementDialog(BuildContext context) {
   return showDialog<void>(
     context: context,
@@ -607,8 +608,19 @@ Future<void> showAdminAnnouncementDialog(BuildContext context) {
   );
 }
 
+/// Admin menu → System Maintenance: a scheduled maintenance notice to
+/// everyone. Kept apart from ordinary announcements.
+Future<void> showAdminMaintenanceDialog(BuildContext context) {
+  return showDialog<void>(
+    context: context,
+    builder: (_) => const _AnnouncementDialog(maintenance: true),
+  );
+}
+
 class _AnnouncementDialog extends StatefulWidget {
-  const _AnnouncementDialog();
+  /// A maintenance notice instead of an announcement.
+  final bool maintenance;
+  const _AnnouncementDialog({this.maintenance = false});
 
   @override
   State<_AnnouncementDialog> createState() => _AnnouncementDialogState();
@@ -617,7 +629,7 @@ class _AnnouncementDialog extends StatefulWidget {
 class _AnnouncementDialogState extends State<_AnnouncementDialog> {
   final _title = TextEditingController();
   final _message = TextEditingController();
-  bool _maintenance = false;
+  bool get _maintenance => widget.maintenance;
   bool _everyone = false;
   DateTime? _start;
   DateTime? _end;
@@ -811,7 +823,7 @@ class _AnnouncementDialogState extends State<_AnnouncementDialog> {
     );
 
     return AlertDialog(
-      title: const Text('New announcement'),
+      title: Text(_maintenance ? 'System maintenance' : 'New announcement'),
       content: SizedBox(
         width: 460,
         child: SingleChildScrollView(
@@ -819,24 +831,6 @@ class _AnnouncementDialogState extends State<_AnnouncementDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              toggle([
-                choice(
-                  'Announcement',
-                  !_maintenance,
-                  () => setState(() {
-                    _maintenance = false;
-                    _error = null;
-                  }),
-                ),
-                choice(
-                  'System maintenance',
-                  _maintenance,
-                  () => setState(() {
-                    _maintenance = true;
-                    _error = null;
-                  }),
-                ),
-              ]),
               if (_maintenance) ...[
                 label('Maintenance schedule'),
                 Row(

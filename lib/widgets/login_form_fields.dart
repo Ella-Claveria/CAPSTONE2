@@ -6,6 +6,7 @@ import '../services/auth_service.dart';
 import '../services/auth_routing_service.dart';
 import '../services/admin_session_service.dart';
 import '../services/audit_log_service.dart';
+import '../services/first_entry_after_approval.dart';
 import '../services/registration_guard.dart';
 import 'admin_session_dialogs.dart';
 import '../theme/app_theme.dart';
@@ -287,10 +288,14 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     if (result.isSignedIn && (role == 'farmer' || role == 'buyer')) {
       // What "Create one" on this phone is checked against.
       RegistrationGuard.remember(email);
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('walkthrough_seen_$role', true);
-      } catch (_) {}
+      // Except a farmer's first login since approval: still their first
+      // time in the app (see FirstEntryAfterApproval).
+      if (!await FirstEntryAfterApproval.take(uid!)) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool('walkthrough_seen_$role', true);
+        } catch (_) {}
+      }
     }
 
     if (!mounted) return;
@@ -298,7 +303,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     // pushAndRemoveUntil (inside applyAuthRouteResult) clears splash/
     // role-selection/login from the stack, so the back button on Home has
     // nothing left to pop to.
-    await applyAuthRouteResult(context, result);
+    await applyAuthRouteResult(context, result, announceSignIn: true);
   }
 
   // The Admin Portal allows one active session per Admin account (see
@@ -431,15 +436,17 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
         final role = routeResult.role;
         if (routeResult.isSignedIn && (role == 'farmer' || role == 'buyer')) {
           RegistrationGuard.remember(_authService.currentEmail ?? '');
-          try {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setBool('walkthrough_seen_$role', true);
-          } catch (_) {}
+          if (!await FirstEntryAfterApproval.take(result.uid!)) {
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('walkthrough_seen_$role', true);
+            } catch (_) {}
+          }
         }
 
         if (!mounted) return;
         setState(() => _googleLoading = false);
-        await applyAuthRouteResult(context, routeResult);
+        await applyAuthRouteResult(context, routeResult, announceSignIn: true);
         return;
     }
   }

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../widgets/existing_account_dialog.dart';
-import '../widgets/language_toggle.dart';
 import '../widgets/login_form_fields.dart';
 import '../widgets/login_hero.dart';
 import '../l10n/app_localizations.dart';
@@ -41,7 +40,7 @@ class RoleSelectionScreen extends StatelessWidget {
           // ---- White sheet, overlapping the hero ----
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
-            top: heroHeight - 32,
+            top: heroHeight - LoginHero.sheetOverlap,
             left: 0,
             right: 0,
             bottom: 0,
@@ -140,18 +139,8 @@ class RoleSelectionScreen extends StatelessWidget {
             ),
           ),
 
-          // ---- Language, top-right over the hero photo. This is the ----
-          // ---- first screen after onboarding, so it also introduces ----
-          // ---- the switch, once. ----
-          const SafeArea(
-            child: Align(
-              alignment: Alignment.topRight,
-              child: Padding(
-                padding: EdgeInsets.only(top: 11, right: 12),
-                child: LanguageToggle(introduce: true),
-              ),
-            ),
-          ),
+          // No language switch here: the language is chosen inside the
+          // app, in the farmer's and the buyer's Settings.
         ],
       ),
     );

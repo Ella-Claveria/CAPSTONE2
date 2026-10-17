@@ -22,13 +22,12 @@
 import '../widgets/agri_app_bar.dart';
 import '../widgets/email_delivery_notice.dart';
 import '../widgets/email_request_leave_guard.dart';
+import '../widgets/otp_code_field.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../services/auth_service.dart';
 import '../services/email_mask.dart';
 import '../theme/app_theme.dart';
@@ -63,7 +62,7 @@ class EmailVerificationScreen extends StatefulWidget {
 }
 
 class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
-  static const _codeLength = 6;
+  static const _codeLength = OtpCodeField.length;
 
   final _authService = AuthService();
   final _codeController = TextEditingController();
@@ -399,64 +398,14 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
       );
   }
 
-  // ----------------------------------------------------------
-  // Six boxes drawn from one real text field laid over them — so typing,
-  // backspace, paste and the keyboard's own "code from email" suggestion
-  // all behave like a normal field.
-  // ----------------------------------------------------------
+  // The six code boxes; see OtpCodeField.
   Widget _buildCodeInput() {
-    final code = _codeController.text;
     final busy = _verifying || _navigatingAway;
-
-    return Stack(
-      alignment: Alignment.center,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            for (var i = 0; i < _codeLength; i++) ...[
-              if (i > 0) SizedBox(width: i == _codeLength ~/ 2 ? 14 : 6),
-              Flexible(
-                child: _CodeBox(
-                  digit: i < code.length ? code[i] : '',
-                  active:
-                      _codeFocus.hasFocus &&
-                      (i == code.length ||
-                          (i == _codeLength - 1 && code.length == _codeLength)),
-                ),
-              ),
-            ],
-          ],
-        ),
-        Positioned.fill(
-          child: TextField(
-            controller: _codeController,
-            focusNode: _codeFocus,
-            enabled: !busy,
-            autofocus: true,
-            keyboardType: TextInputType.number,
-            textInputAction: TextInputAction.done,
-            autofillHints: const [AutofillHints.oneTimeCode],
-            inputFormatters: [
-              FilteringTextInputFormatter.digitsOnly,
-              LengthLimitingTextInputFormatter(_codeLength),
-            ],
-            showCursor: false,
-            enableInteractiveSelection: false,
-            style: const TextStyle(color: Colors.transparent, fontSize: 1),
-            decoration: const InputDecoration(
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              disabledBorder: InputBorder.none,
-              filled: false,
-              counterText: '',
-              contentPadding: EdgeInsets.zero,
-            ),
-            onSubmitted: (_) => _verify(),
-          ),
-        ),
-      ],
+    return OtpCodeField(
+      controller: _codeController,
+      focusNode: _codeFocus,
+      enabled: !busy,
+      onSubmitted: (_) => _verify(),
     );
   }
 
@@ -504,14 +453,15 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
                     ),
                     const SizedBox(height: 18),
 
-                    // Lilita One for the wordmark and the heading; everything
-                    // else on this screen is Montserrat (AppTheme's helpers).
+                    // Lilita One for the heading; the wordmark and everything
+                    // else on this screen are Montserrat (AppTheme's helpers).
                     const AgriTradeText(fontSize: 30),
                     const SizedBox(height: 14),
 
                     Text(
                       'Verify Your Email',
-                      style: GoogleFonts.lilitaOne(
+                      style: const TextStyle(
+                        fontFamily: AppTheme.brandFontFamily,
                         fontSize: 24,
                         color: Colors.black87,
                       ),
@@ -647,36 +597,6 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// One digit of the code.
-class _CodeBox extends StatelessWidget {
-  final String digit;
-  final bool active;
-
-  const _CodeBox({required this.digit, required this.active});
-
-  @override
-  Widget build(BuildContext context) {
-    final filled = digit.isNotEmpty;
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 46),
-      height: 54,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: filled ? AppTheme.accent.withValues(alpha: 0.35) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: active || filled ? AppTheme.dark : Colors.grey.shade300,
-          width: active ? 2 : 1.2,
-        ),
-      ),
-      child: Text(
-        digit,
-        style: AppTheme.heading(22).copyWith(color: AppTheme.dark),
       ),
     );
   }

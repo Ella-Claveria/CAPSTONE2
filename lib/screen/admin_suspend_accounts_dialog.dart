@@ -8,16 +8,35 @@ import 'admin_filter_controls.dart';
 import 'admin_user_accounts_view.dart';
 
 /// Admin menu → Suspend Accounts: every buyer and farmer account with
-/// where it stands, and a Suspend or Reactivate button on each. The
-/// suspension itself (its reason, the Audit Log entry) is
-/// [adminSetAccountsSuspended].
+/// where it stands and how many reports are against it — the most
+/// reported first, flagged from [kSuspendReportThreshold] — and a Suspend
+/// or Reactivate button on each. The suspension itself (its reason, how
+/// long, the Audit Log entry) is [adminSetAccountsSuspended].
 Future<void> showAdminSuspendAccounts(BuildContext context) {
   // A dialog sits outside the page's AdminThemeScope: hand the palette in.
-  final palette = AdminThemeScope.of(context).palette;
+  final palette =
+      context.getInheritedWidgetOfExactType<AdminThemeScope>()?.palette ??
+      AdminPalette.light;
   return showDialog<void>(
     context: context,
-    builder: (_) => _SuspendAccountsDialog(palette: palette),
+    builder: (_) => AdminThemeScope(
+      palette: palette,
+      child: _SuspendAccountsDialog(palette: palette),
+    ),
   );
+}
+
+/// Reports against each account, by the reported account's uid. A report
+/// the Admin dismissed does not count. Pure, so it can be tested.
+Map<String, int> reportCountsByAccount(Iterable<Map<String, dynamic>> reports) {
+  final counts = <String, int>{};
+  for (final report in reports) {
+    if (reportDecisionOf(report) == 'dismissed') continue;
+    final uid = reportedUserIdOf(report);
+    if (uid.isEmpty) continue;
+    counts[uid] = (counts[uid] ?? 0) + 1;
+  }
+  return counts;
 }
 
 class _SuspendAccountsDialog extends StatefulWidget {
@@ -30,7 +49,7 @@ class _SuspendAccountsDialog extends StatefulWidget {
 
 class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
   String _search = '';
-  // 'all', 'active' or 'suspended'.
+  // 'all', 'reported', 'active' or 'suspended'.
   String _show = 'all';
   // The account being suspended or reactivated right now.
   String? _workingOn;
@@ -38,10 +57,19 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
   static bool _isSuspended(AdminAccountRow row) =>
       row.accountStatus == 'suspended' || row.accountStatus == 'deactivated';
 
-  Future<void> _change(AdminAccountRow row, {required bool suspend}) async {
+  Future<void> _change(
+    AdminAccountRow row,
+    Map<String, int> reports, {
+    required bool suspend,
+  }) async {
     if (_workingOn != null) return;
     setState(() => _workingOn = row.uid);
-    await adminSetAccountsSuspended(context, [row], suspend: suspend);
+    await adminSetAccountsSuspended(
+      context,
+      [row],
+      suspend: suspend,
+      reports: reports,
+    );
     if (mounted) setState(() => _workingOn = null);
   }
 
@@ -51,26 +79,18 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
     return AlertDialog(
       titlePadding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
       contentPadding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
-      title: Row(
-        children: [
-          const Expanded(child: Text('Suspend Accounts')),
-          IconButton(
-            tooltip: 'Close',
-            onPressed: () => Navigator.of(context).pop(),
-            icon: Icon(Icons.close, size: 20, color: c.textSecondary),
-          ),
-        ],
-      ),
+      title: Row(children: [const Expanded(child: Text('Suspend Accounts'))]),
       content: SizedBox(
-        width: 620,
-        height: 520,
+        width: 660,
+        height: 540,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'A suspended account cannot log in until it is reactivated. '
-              'Nothing is deleted: its orders, listings, reports and '
-              'reviews are kept.',
+              'Accounts with $kSuspendReportThreshold or more reports are '
+              'flagged and listed first. A suspended account cannot log in '
+              'until the time you set has passed or it is reactivated; it is '
+              'told why. Nothing is deleted.',
               style: TextStyle(fontSize: 12.5, color: c.textSecondary),
             ),
             const SizedBox(height: 14),
@@ -90,10 +110,14 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
                 const SizedBox(width: 10),
                 AdminPillDropdown<String>(
                   value: _show,
-                  width: 170,
+                  width: 190,
                   icon: Icons.filter_list_rounded,
                   items: const [
                     DropdownMenuItem(value: 'all', child: Text('All accounts')),
+                    DropdownMenuItem(
+                      value: 'reported',
+                      child: Text('$kSuspendReportThreshold+ reports'),
+                    ),
                     DropdownMenuItem(value: 'active', child: Text('Active')),
                     DropdownMenuItem(
                       value: 'suspended',
@@ -107,45 +131,81 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
             const SizedBox(height: 12),
             Expanded(
               child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: DashboardDataService.instance.usersStream,
-                builder: (context, snap) {
-                  if (snap.hasError) {
-                    return Center(
-                      child: Text(
-                        'Could not load the accounts. Check your connection '
-                        'and try again.',
-                        style: TextStyle(color: c.textSecondary, fontSize: 13),
-                      ),
-                    );
-                  }
-                  if (!snap.hasData) {
-                    return const Center(child: AdminLoadingBar());
-                  }
-                  final rows = [
-                    for (final row in buildAccountRows([
-                      for (final doc in snap.data!.docs)
-                        (id: doc.id, data: doc.data()),
-                    ]))
-                      if (row.matches(_search) &&
-                          (_show == 'all' ||
-                              (_show == 'active' &&
-                                  row.accountStatus == 'active') ||
-                              (_show == 'suspended' && _isSuspended(row))))
-                        row,
-                  ];
-                  if (rows.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'No accounts match.',
-                        style: TextStyle(color: c.textSecondary, fontSize: 13),
-                      ),
-                    );
-                  }
-                  return ListView.separated(
-                    itemCount: rows.length,
-                    separatorBuilder: (_, _) =>
-                        Divider(height: 1, color: c.border),
-                    itemBuilder: (context, i) => _accountRow(c, rows[i]),
+                stream: DashboardDataService.instance.allReportsStream,
+                builder: (context, reportSnap) {
+                  final reports = reportCountsByAccount([
+                    for (final doc
+                        in reportSnap.data?.docs ??
+                            const <
+                              QueryDocumentSnapshot<Map<String, dynamic>>
+                            >[])
+                      doc.data(),
+                  ]);
+                  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: DashboardDataService.instance.usersStream,
+                    builder: (context, snap) {
+                      if (snap.hasError) {
+                        return Center(
+                          child: Text(
+                            'Could not load the accounts. Check your '
+                            'connection and try again.',
+                            style: TextStyle(
+                              color: c.textSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        );
+                      }
+                      if (!snap.hasData) {
+                        return const Center(child: AdminLoadingBar());
+                      }
+                      int count(AdminAccountRow r) => reports[r.uid] ?? 0;
+                      final rows = [
+                        for (final row in buildAccountRows([
+                          for (final doc in snap.data!.docs)
+                            (id: doc.id, data: doc.data()),
+                        ]))
+                          if (row.matches(_search) &&
+                              switch (_show) {
+                                'reported' =>
+                                  count(row) >= kSuspendReportThreshold,
+                                'active' => row.accountStatus == 'active',
+                                'suspended' => _isSuspended(row),
+                                _ => true,
+                              })
+                            row,
+                      ];
+                      // Most reported first, then newest first.
+                      rows.sort((a, b) {
+                        final byReports = count(b).compareTo(count(a));
+                        if (byReports != 0) return byReports;
+                        return (b.registered?.millisecondsSinceEpoch ?? 0)
+                            .compareTo(
+                              a.registered?.millisecondsSinceEpoch ?? 0,
+                            );
+                      });
+                      if (rows.isEmpty) {
+                        return Center(
+                          child: Text(
+                            _show == 'reported'
+                                ? 'No account has $kSuspendReportThreshold '
+                                      'or more reports.'
+                                : 'No accounts match.',
+                            style: TextStyle(
+                              color: c.textSecondary,
+                              fontSize: 13,
+                            ),
+                          ),
+                        );
+                      }
+                      return ListView.separated(
+                        itemCount: rows.length,
+                        separatorBuilder: (_, _) =>
+                            Divider(height: 1, color: c.border),
+                        itemBuilder: (context, i) =>
+                            _accountRow(c, rows[i], reports),
+                      );
+                    },
                   );
                 },
               ),
@@ -162,7 +222,11 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
     );
   }
 
-  Widget _accountRow(AdminPalette c, AdminAccountRow row) {
+  Widget _accountRow(
+    AdminPalette c,
+    AdminAccountRow row,
+    Map<String, int> reports,
+  ) {
     final status = row.accountStatus;
     final (color, bg) = switch (status) {
       'active' => (c.green, c.greenBg),
@@ -171,6 +235,8 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
     };
     final busy = _workingOn == row.uid;
     final role = row.isBuyer ? 'Buyer' : 'Farmer';
+    final reportCount = reports[row.uid] ?? 0;
+    final flagged = reportCount >= kSuspendReportThreshold;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 9),
@@ -203,7 +269,54 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(color: c.textSecondary, fontSize: 12),
                 ),
+                if (status == 'suspended') ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    [
+                      suspensionUntilLabel(row.suspendedUntil),
+                      if (row.suspensionReason.isNotEmpty) row.suspensionReason,
+                    ].join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.amber, fontSize: 11.5),
+                  ),
+                ],
               ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          // How many reports are against it; red from the threshold.
+          Tooltip(
+            message: flagged
+                ? '$reportCount reports — review for suspension'
+                : '$reportCount ${reportCount == 1 ? 'report' : 'reports'}',
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 64),
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: flagged ? c.redBg : c.surfaceAlt,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.flag_outlined,
+                    size: 13,
+                    color: flagged ? c.red : c.textMuted,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '$reportCount',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: flagged ? c.red : c.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -219,7 +332,7 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
                 ? OutlinedButton(
                     onPressed: _workingOn != null
                         ? null
-                        : () => _change(row, suspend: true),
+                        : () => _change(row, reports, suspend: true),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: c.red,
                       side: BorderSide(color: c.red.withValues(alpha: 0.5)),
@@ -231,7 +344,7 @@ class _SuspendAccountsDialogState extends State<_SuspendAccountsDialog> {
                 ? FilledButton(
                     onPressed: _workingOn != null
                         ? null
-                        : () => _change(row, suspend: false),
+                        : () => _change(row, reports, suspend: false),
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 10),
                     ),

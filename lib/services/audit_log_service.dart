@@ -16,6 +16,9 @@ abstract final class AuditAction {
   static const newDeviceLogin = 'NEW_DEVICE_LOGIN';
   static const sessionReplaced = 'SESSION_REPLACED';
   static const sessionForcedLogout = 'SESSION_FORCED_LOGOUT';
+  // Active Sessions > Revoke Session; written by the revokeAdminSession
+  // Cloud Function, never by a client.
+  static const sessionRevoked = 'SESSION_REVOKED';
   static const passwordResetRequested = 'PASSWORD_RESET_REQUESTED';
   static const approveFarmer = 'APPROVE_FARMER';
   static const rejectFarmer = 'REJECT_FARMER';
@@ -49,6 +52,7 @@ abstract final class AuditAction {
     newDeviceLogin,
     sessionReplaced,
     sessionForcedLogout,
+    sessionRevoked,
     passwordResetRequested,
     approveFarmer,
     rejectFarmer,

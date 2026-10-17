@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -13,19 +14,42 @@ import 'report_section.dart';
 /// Generation (pdf package) and delivery (printing package's native share
 /// sheet — save to Files, email, etc.) are kept separate so a report can be
 /// generated once and either shared or, later, previewed/printed.
+///
+/// Every report is laid out as the same formal document: a letterhead with
+/// the AgriTrade+ logo on the first page and a slim running header on the
+/// rest, the title and its particulars, numbered sections, ruled tables
+/// (figures right-aligned, a Total row set apart), and a footer with the
+/// report's name and page number.
 class PdfReportService {
   static const _brandGreen = PdfColor.fromInt(0xFF1B5E20);
+  // The yellow of the logo's top edge, for the thin second rule under the
+  // letterhead and the bar beside the findings.
+  static const _accent = PdfColor.fromInt(0xFFD4A72C);
+  static const _ink = PdfColor.fromInt(0xFF1F2A22);
+  static const _muted = PdfColor.fromInt(0xFF66706A);
+  static const _rule = PdfColor.fromInt(0xFFDDE3DC);
+  static const _zebra = PdfColor.fromInt(0xFFF6F8F4);
+  static const _totalFill = PdfColor.fromInt(0xFFEAF1E4);
 
   // Montserrat, as in the portal — and because the pdf package's built-in
   // Helvetica only covers Latin-1: it has no peso sign, which then prints
-  // as an empty box. Loaded once and kept; a failed load (offline) is tried
-  // again on the next report.
+  // as an empty box. Taken from the app's own font files (so a report can
+  // be made offline), from Google Fonts if those cannot be read. Loaded
+  // once and kept; a failed load is tried again on the next report.
   static Future<pw.ThemeData?>? _themeLoad;
 
   // True once a font that has the peso sign is in use.
   static bool _fullFont = false;
 
   static Future<pw.ThemeData?> _theme() => _themeLoad ??= () async {
+        try {
+          final base = pw.Font.ttf(await rootBundle.load('assets/fonts/Montserrat-Regular.ttf'));
+          final bold = pw.Font.ttf(await rootBundle.load('assets/fonts/Montserrat-SemiBold.ttf'));
+          _fullFont = true;
+          return pw.ThemeData.withFont(base: base, bold: bold);
+        } catch (_) {
+          // Not bundled in this build: fetch it instead.
+        }
         try {
           final base = await PdfGoogleFonts.montserratRegular();
           final semiBold = await PdfGoogleFonts.montserratSemiBold();
@@ -41,6 +65,20 @@ class PdfReportService {
         }
       }();
 
+  // The AgriTrade+ logo for the letterhead; null if it cannot be read, in
+  // which case the letterhead carries the name alone.
+  static Future<pw.ImageProvider?>? _logoLoad;
+
+  static Future<pw.ImageProvider?> _logo() => _logoLoad ??= () async {
+        try {
+          final data = await rootBundle.load('assets/images/logo_report.png');
+          return pw.MemoryImage(data.buffer.asUint8List());
+        } catch (_) {
+          _logoLoad = null;
+          return null;
+        }
+      }();
+
   // Without that font: "PHP" for the peso sign, and "?" for anything else
   // Helvetica cannot draw — readable, instead of a box.
   static String _safe(String text) {
@@ -50,46 +88,371 @@ class PdfReportService {
     );
   }
 
-  static pw.Widget _header(String title, String subtitle, {String? generatedByLine}) {
+  static String _reference(DateTime at) => 'AT-${DateFormat('yyyyMMdd-HHmm').format(at)}';
+
+  // ============================================================
+  // PAGE FRAME — letterhead, running header, footer
+  // ============================================================
+
+  /// One report as a run of pages: the letterhead on the first, a slim
+  /// header on the rest, and the footer on all of them.
+  static pw.MultiPage _pages({
+    required PdfPageFormat format,
+    required pw.ImageProvider? logo,
+    required String kind,
+    required String title,
+    required String period,
+    required DateTime generatedAt,
+    required List<pw.Widget> Function(pw.Context context) build,
+  }) {
+    return pw.MultiPage(
+      pageFormat: format,
+      margin: const pw.EdgeInsets.fromLTRB(42, 34, 42, 30),
+      header: (context) => context.pageNumber == 1
+          ? _letterhead(logo, kind, generatedAt)
+          : _runningHeader(logo, title, period),
+      footer: (context) => _footer(context, title, period),
+      build: build,
+    );
+  }
+
+  static pw.Widget _letterhead(pw.ImageProvider? logo, String kind, DateTime generatedAt) {
     return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
       children: [
-        pw.Text('AgriTrade+',
-            style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: _brandGreen)),
-        pw.SizedBox(height: 6),
-        pw.Text(title, style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold)),
-        pw.SizedBox(height: 2),
-        pw.Text(subtitle, style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700)),
-        pw.SizedBox(height: 4),
-        pw.Text(
-          generatedByLine ??
-              'Generated ${DateFormat('MMM d, y \'at\' h:mm a').format(DateTime.now())}',
-          style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey500),
+        pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.center,
+          children: [
+            if (logo != null) ...[
+              pw.Image(logo, width: 42, height: 42),
+              pw.SizedBox(width: 10),
+            ],
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text('AgriTrade+',
+                    style: pw.TextStyle(fontSize: 17, fontWeight: pw.FontWeight.bold, color: _brandGreen)),
+                pw.SizedBox(height: 1),
+                pw.Text('Agricultural Marketplace Platform',
+                    style: const pw.TextStyle(fontSize: 8.5, color: _muted)),
+              ],
+            ),
+            pw.Spacer(),
+            pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.end,
+              children: [
+                pw.Text(kind.toUpperCase(),
+                    style: pw.TextStyle(
+                        fontSize: 8, fontWeight: pw.FontWeight.bold, color: _ink, letterSpacing: 1.2)),
+                pw.SizedBox(height: 2),
+                pw.Text('Ref. ${_reference(generatedAt)}', style: const pw.TextStyle(fontSize: 8, color: _muted)),
+              ],
+            ),
+          ],
         ),
-        pw.Divider(height: 20, color: PdfColors.grey300),
+        pw.SizedBox(height: 10),
+        pw.Container(height: 2.2, color: _brandGreen),
+        pw.SizedBox(height: 1.5),
+        pw.Container(height: 0.8, color: _accent),
+        pw.SizedBox(height: 18),
       ],
     );
   }
 
-  static pw.Widget _table(List<String> headers, List<List<String>> rows) {
-    if (rows.isEmpty) {
-      return pw.Text('No data for this period.',
-          style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey600));
-    }
-    return pw.TableHelper.fromTextArray(
-      headers: headers.map(_safe).toList(),
-      data: rows.map((row) => row.map(_safe).toList()).toList(),
-      headerStyle: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
-      headerDecoration: const pw.BoxDecoration(color: _brandGreen),
-      cellStyle: const pw.TextStyle(fontSize: 10),
-      cellAlignment: pw.Alignment.centerLeft,
-      cellHeight: 24,
-      border: null,
-      rowDecoration: const pw.BoxDecoration(
-        border: pw.Border(bottom: pw.BorderSide(color: PdfColors.grey300, width: 0.5)),
+  static pw.Widget _runningHeader(pw.ImageProvider? logo, String title, String period) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 14),
+      padding: const pw.EdgeInsets.only(bottom: 5),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(bottom: pw.BorderSide(color: _rule, width: 0.6)),
+      ),
+      child: pw.Row(
+        children: [
+          if (logo != null) ...[
+            pw.Image(logo, width: 13, height: 13),
+            pw.SizedBox(width: 6),
+          ],
+          pw.Text(_safe(title), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: _brandGreen)),
+          pw.Spacer(),
+          pw.Text(_safe(period), style: const pw.TextStyle(fontSize: 8, color: _muted)),
+        ],
       ),
     );
   }
+
+  static pw.Widget _footer(pw.Context context, String title, String period) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(top: 12),
+      padding: const pw.EdgeInsets.only(top: 5),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(top: pw.BorderSide(color: _rule, width: 0.6)),
+      ),
+      child: pw.Row(
+        children: [
+          pw.Text(_safe('$title  ·  $period'), style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+          pw.Spacer(),
+          pw.Text('Page ${context.pageNumber} of ${context.pagesCount}',
+              style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================
+  // CONTENT PIECES
+  // ============================================================
+
+  /// The report's title, and its particulars in a ruled row of labelled
+  /// fields (period, who prepared it, when).
+  static pw.Widget _titleBlock(String title, List<(String, String)> particulars) {
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+      children: [
+        pw.Text(_safe(title), style: pw.TextStyle(fontSize: 19, fontWeight: pw.FontWeight.bold, color: _ink)),
+        pw.SizedBox(height: 10),
+        pw.Container(
+          padding: const pw.EdgeInsets.symmetric(vertical: 8),
+          decoration: const pw.BoxDecoration(
+            border: pw.Border(
+              top: pw.BorderSide(color: _rule, width: 0.6),
+              bottom: pw.BorderSide(color: _rule, width: 0.6),
+            ),
+          ),
+          child: pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < particulars.length; i++) ...[
+                if (i > 0) pw.SizedBox(width: 18),
+                pw.Expanded(
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      pw.Text(particulars[i].$1.toUpperCase(),
+                          style: pw.TextStyle(
+                              fontSize: 7, fontWeight: pw.FontWeight.bold, color: _muted, letterSpacing: 0.9)),
+                      pw.SizedBox(height: 3),
+                      pw.Text(_safe(particulars[i].$2), style: const pw.TextStyle(fontSize: 9.5, color: _ink)),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        pw.SizedBox(height: 18),
+      ],
+    );
+  }
+
+  /// A section's heading: its number in the brand green, then its name,
+  /// over a hairline.
+  static pw.Widget _sectionHeading(String title, {int? number}) {
+    return pw.Container(
+      margin: const pw.EdgeInsets.only(bottom: 8),
+      padding: const pw.EdgeInsets.only(bottom: 4),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(bottom: pw.BorderSide(color: _rule, width: 0.6)),
+      ),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.end,
+        children: [
+          if (number != null)
+            pw.SizedBox(
+              width: 20,
+              child: pw.Text('$number',
+                  style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: _brandGreen)),
+            ),
+          pw.Expanded(
+            child: pw.Text(_safe(title),
+                style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold, color: _ink)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The Summary of Findings: numbered statements beside a thin bar in
+  /// the logo's yellow.
+  static pw.Widget _findings(List<String> findings) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(left: 12, top: 2, bottom: 2),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(left: pw.BorderSide(color: _accent, width: 2.5)),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < findings.length; i++)
+            pw.Padding(
+              padding: pw.EdgeInsets.only(bottom: i == findings.length - 1 ? 0 : 5),
+              child: pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.SizedBox(
+                    width: 16,
+                    child: pw.Text('${i + 1}.',
+                        style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: _brandGreen)),
+                  ),
+                  pw.Expanded(
+                    child: pw.Text(_safe(findings[i]),
+                        style: const pw.TextStyle(fontSize: 9.5, color: _ink, lineSpacing: 1.5)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  // A cell that holds a figure — an amount, a count, a percentage — and is
+  // therefore right-aligned.
+  static final RegExp _figure = RegExp(r'^(₱|PHP\s?)?-?[\d,]+(\.\d+)?\s?%?(/.+)?$');
+
+  static bool _isFigureColumn(List<List<String>> rows, int column) {
+    var seen = false;
+    for (final row in rows) {
+      if (column >= row.length) continue;
+      final cell = row[column].trim();
+      if (cell.isEmpty || cell == '—' || cell == 'No data' || cell == 'New') continue;
+      if (!_figure.hasMatch(cell)) return false;
+      seen = true;
+    }
+    return seen;
+  }
+
+  /// A ruled table: a dark green header row (repeated on every page the
+  /// table runs onto), quiet alternating rows, figures right-aligned, and
+  /// a "Total" row set apart in bold over a green rule.
+  static pw.Widget _table(List<String> headers, List<List<String>> rows, {List<double>? weights}) {
+    if (rows.isEmpty) {
+      return pw.Container(
+        width: double.infinity,
+        padding: const pw.EdgeInsets.symmetric(vertical: 10, horizontal: 10),
+        decoration: pw.BoxDecoration(border: pw.Border.all(color: _rule, width: 0.6)),
+        child: pw.Text('No data for this period.', style: const pw.TextStyle(fontSize: 9, color: _muted)),
+      );
+    }
+    final figures = [for (var c = 0; c < headers.length; c++) c > 0 && _isFigureColumn(rows, c)];
+    pw.Alignment align(int c) => figures[c] ? pw.Alignment.centerRight : pw.Alignment.centerLeft;
+
+    pw.Widget cell(String text, int c, pw.TextStyle style) => pw.Container(
+          alignment: align(c),
+          padding: const pw.EdgeInsets.symmetric(horizontal: 7, vertical: 5),
+          child: pw.Text(_safe(text), style: style, textAlign: figures[c] ? pw.TextAlign.right : pw.TextAlign.left),
+        );
+
+    final headerStyle = pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold, color: PdfColors.white);
+    const bodyStyle = pw.TextStyle(fontSize: 9, color: _ink);
+    final totalStyle = pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: _ink);
+
+    return pw.Table(
+      columnWidths: weights != null && weights.length == headers.length
+          ? {for (var c = 0; c < headers.length; c++) c: pw.FlexColumnWidth(weights[c])}
+          : {
+              // The first column (the name of each row) gets more room.
+              0: const pw.FlexColumnWidth(1.6),
+              for (var c = 1; c < headers.length; c++) c: const pw.FlexColumnWidth(1),
+            },
+      children: [
+        pw.TableRow(
+          repeat: true,
+          decoration: const pw.BoxDecoration(color: _brandGreen),
+          children: [for (var c = 0; c < headers.length; c++) cell(headers[c], c, headerStyle)],
+        ),
+        for (var r = 0; r < rows.length; r++)
+          () {
+            final isTotal = rows[r].isNotEmpty && rows[r].first == 'Total';
+            return pw.TableRow(
+              decoration: pw.BoxDecoration(
+                color: isTotal ? _totalFill : (r.isOdd ? _zebra : null),
+                border: isTotal
+                    ? const pw.Border(top: pw.BorderSide(color: _brandGreen, width: 0.9))
+                    : const pw.Border(bottom: pw.BorderSide(color: _rule, width: 0.5)),
+              ),
+              children: [
+                for (var c = 0; c < headers.length; c++)
+                  cell(c < rows[r].length ? rows[r][c] : '', c, isTotal ? totalStyle : bodyStyle),
+              ],
+            );
+          }(),
+      ],
+    );
+  }
+
+  /// The sign-off at the end of a report: Prepared by (the Admin who made
+  /// it), Noted by and Approved by, each with a line for the signature
+  /// over the printed name, and the date. Kept together on one page.
+  static pw.Widget _signOff(String preparedBy) {
+    pw.Widget block(String role, String? name) => pw.Expanded(
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(role, style: const pw.TextStyle(fontSize: 9, color: _muted)),
+              pw.SizedBox(height: 30),
+              // The same height with or without a name, so the three
+              // signature lines are level.
+              pw.Container(
+                width: double.infinity,
+                height: 16,
+                alignment: pw.Alignment.bottomCenter,
+                padding: const pw.EdgeInsets.only(bottom: 2),
+                decoration: const pw.BoxDecoration(
+                  border: pw.Border(bottom: pw.BorderSide(color: _ink, width: 0.7)),
+                ),
+                child: name == null
+                    ? pw.SizedBox()
+                    : pw.Text(
+                        _safe(name),
+                        textAlign: pw.TextAlign.center,
+                        style: pw.TextStyle(fontSize: 9.5, fontWeight: pw.FontWeight.bold, color: _ink),
+                      ),
+              ),
+              pw.SizedBox(height: 3),
+              pw.Center(
+                child: pw.Text('Signature over printed name', style: const pw.TextStyle(fontSize: 7.5, color: _muted)),
+              ),
+              pw.SizedBox(height: 12),
+              pw.Text('Date: ____________________', style: const pw.TextStyle(fontSize: 8.5, color: _muted)),
+            ],
+          ),
+        );
+
+    return pw.Inseparable(
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(height: 14),
+          _sectionHeading('Certification'),
+          pw.Text(
+            'The figures in this report were generated from the AgriTrade+ records on the date shown above.',
+            style: const pw.TextStyle(fontSize: 8.5, color: _muted),
+          ),
+          pw.SizedBox(height: 14),
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              block('Prepared by:', preparedBy),
+              pw.SizedBox(width: 26),
+              block('Noted by:', null),
+              pw.SizedBox(width: 26),
+              block('Approved by:', null),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Tables up to this many rows (of short text) are kept on one page with
+  // their heading — few enough to fit even a landscape page.
+  static const int _keepTogetherRows = 12;
+
+  static String _generatedLabel(DateTime at) => DateFormat('MMM d, y · h:mm a').format(at);
+
+  // ============================================================
+  // REPORTS
+  // ============================================================
 
   /// The Demand Heatmap screen's report: completed-order demand grouped
   /// by buyer location, plus the top buyer search terms — the same two
@@ -100,25 +463,30 @@ class PdfReportService {
     String? periodLabel,
   }) async {
     final doc = pw.Document(theme: await _theme());
+    final logo = await _logo();
+    final now = DateTime.now();
+    final period = periodLabel ?? 'All time';
     doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
+      _pages(
+        format: PdfPageFormat.a4,
+        logo: logo,
+        kind: 'Market Demand Report',
+        title: 'Market Demand Report',
+        period: period,
+        generatedAt: now,
         build: (context) => [
-          _header(
-            'Market Demand Report',
-            periodLabel == null
-                ? 'Completed orders by buyer location'
-                : 'Completed orders by buyer location — $periodLabel',
-          ),
-          pw.Text('Demand by Area', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 8),
+          _titleBlock('Market Demand Report', [
+            ('Reporting period', period),
+            ('Coverage', 'Completed orders by buyer location'),
+            ('Date generated', _generatedLabel(now)),
+          ]),
+          _sectionHeading('Demand by Area', number: 1),
           _table(
             ['Area', 'Completed Orders', 'Revenue'],
             demand.map((d) => [d.barangay, '${d.orderCount}', formatPeso(d.revenue)]).toList(),
           ),
-          pw.SizedBox(height: 24),
-          pw.Text('Top Buyer Searches', style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
-          pw.SizedBox(height: 8),
+          pw.SizedBox(height: 20),
+          _sectionHeading('Top Buyer Searches', number: 2),
           _table(
             ['Search Term', 'Count'],
             topSearches.map((e) => [e.key, '${e.value}']).toList(),
@@ -145,94 +513,121 @@ class PdfReportService {
     String? notes,
     required bool landscape,
     required bool includeDataTables,
+    // Plain sentences on what the figures say, under the title.
+    List<String> keyFindings = const [],
     required List<ReportSection> sections,
     Map<String, Uint8List> chartImages = const {},
     // Charts as raw RGBA pixels (see ChartCaptureBoundary.captureRawFrom);
     // used in preference to a PNG in [chartImages] for the same section.
     Map<String, ({Uint8List rgba, int width, int height})> rawChartImages =
         const {},
+    // The kind of report named on the letterhead, and the particulars under
+    // the title when not the usual period / prepared by / generated (the
+    // Audit Log report adds its filters).
+    String kind = 'Analytics Report',
+    List<(String, String)>? particulars,
   }) async {
     final doc = pw.Document(theme: await _theme());
-    final generatedByLine =
-        'Generated by $adminName on ${DateFormat('MMM d, y \'at\' h:mm a').format(generatedAt)}';
+    final logo = await _logo();
 
     final widgets = <pw.Widget>[
-      _header(title, dateRangeLabel, generatedByLine: generatedByLine),
+      _titleBlock(
+        title,
+        particulars ??
+            [
+              ('Reporting period', dateRangeLabel),
+              ('Prepared by', adminName),
+              ('Date generated', _generatedLabel(generatedAt)),
+            ],
+      ),
     ];
 
-    if (notes != null && notes.trim().isNotEmpty) {
+    if (keyFindings.isNotEmpty) {
       widgets.addAll([
-        pw.Text('Notes', style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
-        pw.SizedBox(height: 4),
-        pw.Text(notes.trim(), style: const pw.TextStyle(fontSize: 10)),
+        _sectionHeading('Summary of Findings'),
+        _findings(keyFindings),
         pw.SizedBox(height: 20),
       ]);
     }
 
-    for (final section in sections) {
-      widgets.add(pw.Text(section.title, style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)));
-      widgets.add(pw.SizedBox(height: 8));
+    if (notes != null && notes.trim().isNotEmpty) {
+      widgets.addAll([
+        _sectionHeading('Remarks'),
+        pw.Text(_safe(notes.trim()), style: const pw.TextStyle(fontSize: 9.5, color: _ink, lineSpacing: 1.5)),
+        pw.SizedBox(height: 20),
+      ]);
+    }
 
+    for (var i = 0; i < sections.length; i++) {
+      final section = sections[i];
       final raw = rawChartImages[section.title];
-      if (raw != null) {
+      final image = raw != null ? null : chartImages[section.title];
+      final showTable = (raw == null && image == null) || includeDataTables;
+      final heading = _sectionHeading(section.title, number: i + 1);
+
+      // A short table with no chart stays with its heading: the two move
+      // to the next page together rather than the heading being left at
+      // the foot of one page. A long table runs on across pages instead.
+      // Only a table that surely fits on one page: few rows, none with
+      // text long enough to wrap (an unsplittable block taller than a page
+      // cannot be laid out at all).
+      final compact = section.rows.length <= _keepTogetherRows &&
+          section.rows.every((r) => r.every((cell) => (cell?.toString().length ?? 0) <= 48));
+      if (raw == null && image == null && compact) {
+        // Inseparable: a page break cannot split it (a bare Column can be).
+        widgets.add(pw.Inseparable(
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+            children: [
+              heading,
+              _table(
+                section.headers,
+                section.rows.map((r) => r.map((cell) => cell?.toString() ?? '').toList()).toList(),
+                weights: section.columnWeights,
+              ),
+            ],
+          ),
+        ));
+        widgets.add(pw.SizedBox(height: 20));
+        continue;
+      }
+
+      widgets.add(heading);
+      if (raw != null || image != null) {
         widgets.add(
-          pw.Image(
-            pw.RawImage(bytes: raw.rgba, width: raw.width, height: raw.height),
-            height: 220,
-            fit: pw.BoxFit.contain,
+          pw.Container(
+            alignment: pw.Alignment.center,
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(border: pw.Border.all(color: _rule, width: 0.6)),
+            child: raw != null
+                ? pw.Image(pw.RawImage(bytes: raw.rgba, width: raw.width, height: raw.height),
+                    height: 210, fit: pw.BoxFit.contain)
+                : pw.Image(pw.MemoryImage(image!), height: 210, fit: pw.BoxFit.contain),
           ),
         );
         widgets.add(pw.SizedBox(height: 10));
       }
-      final image = raw != null ? null : chartImages[section.title];
-      if (image != null) {
-        widgets.add(pw.Image(pw.MemoryImage(image), height: 220, fit: pw.BoxFit.contain));
-        widgets.add(pw.SizedBox(height: 12));
-      }
-      if (image == null || includeDataTables) {
+      if (showTable) {
         widgets.add(_table(
           section.headers,
           section.rows.map((r) => r.map((cell) => cell?.toString() ?? '').toList()).toList(),
+                weights: section.columnWeights,
         ));
       }
-      widgets.add(pw.SizedBox(height: 24));
+      widgets.add(pw.SizedBox(height: 20));
     }
 
-    doc.addPage(
-      pw.MultiPage(
-        pageFormat: landscape ? PdfPageFormat.a4.landscape : PdfPageFormat.a4,
-        footer: (context) => pw.Container(
-          alignment: pw.Alignment.centerRight,
-          margin: const pw.EdgeInsets.only(top: 8),
-          child: pw.Text(
-            'Page ${context.pageNumber} of ${context.pagesCount}',
-            style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey500),
-          ),
-        ),
-        build: (context) => widgets,
-      ),
-    );
-    return doc.save();
-  }
+    widgets.add(_signOff(adminName));
 
-  /// The Audit Log screen's export — whatever page of entries is currently
-  /// loaded/filtered on screen (not the whole collection; see
-  /// AuditLogView's pagination), one row per entry.
-  static Future<Uint8List> buildAuditLogReport({
-    required List<({String when, String admin, String action, String details, String device, String location})>
-        entries,
-  }) async {
-    final doc = pw.Document(theme: await _theme());
     doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
-        build: (context) => [
-          _header('Admin Portal Audit Log', '${entries.length} entr${entries.length == 1 ? 'y' : 'ies'}'),
-          _table(
-            ['Date & Time', 'Admin', 'Action', 'Details', 'Device/Browser', 'Location'],
-            entries.map((e) => [e.when, e.admin, e.action, e.details, e.device, e.location]).toList(),
-          ),
-        ],
+      _pages(
+        format: landscape ? PdfPageFormat.a4.landscape : PdfPageFormat.a4,
+        logo: logo,
+        kind: kind,
+        title: title,
+        period: dateRangeLabel,
+        generatedAt: generatedAt,
+        build: (context) => widgets,
       ),
     );
     return doc.save();
@@ -258,11 +653,23 @@ class PdfReportService {
         })> rows,
   }) async {
     final doc = pw.Document(theme: await _theme());
+    final logo = await _logo();
+    final now = DateTime.now();
+    final shown = '${rows.length} of $totalFarmers approved farmers';
     doc.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4.landscape,
+      _pages(
+        format: PdfPageFormat.a4.landscape,
+        logo: logo,
+        kind: 'Farmer List',
+        title: 'Farmer List Report',
+        period: shown,
+        generatedAt: now,
         build: (context) => [
-          _header('Farmer List Report', '${rows.length} of $totalFarmers approved farmers shown'),
+          _titleBlock('Farmer List Report', [
+            ('Farmers shown', shown),
+            ('Date generated', _generatedLabel(now)),
+          ]),
+          _sectionHeading('Overview', number: 1),
           _table(
             ['Metric', 'Value'],
             [
@@ -272,6 +679,7 @@ class PdfReportService {
             ],
           ),
           pw.SizedBox(height: 20),
+          _sectionHeading('Approved Farmers', number: 2),
           _table(
             [
               'RSBA No.',

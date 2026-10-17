@@ -1,8 +1,19 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:intl/intl.dart';
 
 const String _adminEmailWithoutVerification = 'admin@agritrade.com';
+
+/// When a suspension set for a time ends (`suspendedUntil` on the
+/// account), or null for one that lasts until an Admin reactivates the
+/// account.
+DateTime? suspensionEndOf(Map<String, dynamic>? data) {
+  final value = data?['suspendedUntil'];
+  if (value is Timestamp) return value.toDate();
+  if (value is DateTime) return value;
+  return null;
+}
 
 /// Where an authenticated user belongs, decided from their `users/{uid}`
 /// Firestore document and the current platform.
@@ -39,7 +50,16 @@ class AuthRouteResult {
   final String? role;
   final String? message;
 
-  const AuthRouteResult({required this.decision, this.role, this.message});
+  /// The notice's title when it should not be the general "Unable to Log
+  /// In" ("Account Suspended").
+  final String? title;
+
+  const AuthRouteResult({
+    required this.decision,
+    this.role,
+    this.message,
+    this.title,
+  });
 
   /// Whether this account should be treated as genuinely signed in on this
   /// device (as opposed to blocked/signed back out immediately) — callers
@@ -120,6 +140,7 @@ class AuthRoutingService {
     Map<String, dynamic>? data, {
     bool emailVerified = true,
     String? authenticatedEmail,
+    DateTime? now,
   }) {
     if (data == null) {
       // No users/{uid} doc yet is expected (not an error) for an account
@@ -146,20 +167,37 @@ class AuthRoutingService {
     // valid Firebase session. (Missing accountStatus means active, the
     // same convention firestore.rules uses.)
     final accountStatus = (data['accountStatus'] ?? 'active').toString();
-    if (accountStatus != 'active') {
-      final reason =
-          (accountStatus == 'banned'
-                  ? data['banReason']
-                  : data['suspensionReason'])
-              ?.toString()
-              .trim();
+    // A suspension for a set time is over once that time has passed, even
+    // before the server marks the account active again (see
+    // liftExpiredSuspensions in functions/suspension.js).
+    final until = suspensionEndOf(data);
+    final expired =
+        accountStatus == 'suspended' &&
+        until != null &&
+        !until.isAfter(now ?? DateTime.now());
+    if (accountStatus != 'active' && !expired) {
+      final banned = accountStatus == 'banned';
+      final reason = (banned ? data['banReason'] : data['suspensionReason'])
+          ?.toString()
+          .trim();
       return AuthRouteResult(
         decision: AuthRouteDecision.accountRestricted,
         role: data['role'] as String?,
-        message:
-            '${accountStatus == 'banned' ? 'Your AgriTrade+ account has been deactivated.' : 'Your AgriTrade+ account is currently suspended.'}'
-            '${reason == null || reason.isEmpty ? '' : ' Reason: $reason'}'
-            ' Please contact support if you think this is a mistake.',
+        title: banned ? 'Account Deactivated' : 'Account Suspended',
+        message: [
+          banned
+              ? 'Your AgriTrade+ account has been deactivated.'
+              : until == null
+              ? 'Your AgriTrade+ account is suspended until an Admin '
+                    'reactivates it.'
+              : 'Your AgriTrade+ account is suspended until '
+                    '${DateFormat('MMM d, y · h:mm a').format(until)}.',
+          if (reason != null && reason.isNotEmpty) 'Reason: $reason',
+          banned
+              ? 'Please contact support if you think this is a mistake.'
+              : 'You can log in again once the suspension ends. Please '
+                    'contact support if you think this is a mistake.',
+        ].join('\n\n'),
       );
     }
 

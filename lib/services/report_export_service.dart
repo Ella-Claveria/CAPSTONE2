@@ -90,8 +90,14 @@ class ReportExportService {
     for (final section in DashboardSection.values) {
       if (!sections.contains(section)) continue;
 
+      // The KPI Summary is two tables (see _kpiSummary), and no chart.
+      if (section == DashboardSection.kpiSummary) {
+        reportSections.addAll(_kpiSummary(userDocs, orders, range, now));
+        continue;
+      }
+
       final built = switch (section) {
-        DashboardSection.kpiSummary => _kpiSummary(userDocs, orders, range),
+        DashboardSection.kpiSummary => throw StateError('handled above'),
         DashboardSection.salesOverview => _salesOverview(orders, range),
         DashboardSection.salesByCategory => _salesByCategory(orders, products, range),
         DashboardSection.priceTrend =>
@@ -121,6 +127,16 @@ class ReportExportService {
       }
     }
 
+    final keyFindings = _keyFindings(
+      users: userDocs,
+      orders: orders,
+      products: products,
+      priceDocs: priceDocs,
+      usersByUid: usersByUid,
+      now: now,
+      range: range,
+    );
+
     final rangeLabel = range == null
         ? 'All time'
         : '${DateFormat('MMM d, y').format(range.start)} – ${DateFormat('MMM d, y').format(range.end)}';
@@ -147,13 +163,23 @@ class ReportExportService {
           notes: notes,
           landscape: landscape,
           includeDataTables: includeDataTables,
+          keyFindings: keyFindings,
           sections: reportSections,
           rawChartImages: chartImages,
         );
         extension = 'pdf';
         mimeType = 'application/pdf';
       case ReportFormat.excel:
-        bytes = ExcelReportService.build(reportSections);
+        // The findings go on the workbook's Summary sheet. Not in the CSV,
+        // which stays the tables' data only.
+        bytes = ExcelReportService.build(
+          reportSections,
+          title: reportTitle,
+          period: rangeLabel,
+          preparedBy: adminName,
+          generatedAt: now,
+          findings: keyFindings,
+        );
         extension = 'xlsx';
         mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       case ReportFormat.csv:
@@ -245,26 +271,145 @@ class ReportExportService {
   // the snapshot sections that don't take one).
   // ============================================================
 
-  static ReportSection _kpiSummary(
+  /// A few plain sentences on what the period's figures say, for the top
+  /// of the report: sales, the leading category, product and barangay, the
+  /// farmer applications waiting, and the listing price furthest from its
+  /// reference price. Built from the same DashboardAnalyticsService figures
+  /// as the sections, so the summary and the tables always agree.
+  static List<String> _keyFindings({
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> users,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> products,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> priceDocs,
+    required Map<String, Map<String, dynamic>> usersByUid,
+    required DateTime now,
+    required DateTimeRange? range,
+  }) {
+    final findings = <String>[];
+
+    final total = DashboardAnalyticsService.platformTransactionTotal(orders, range: range);
+    final count = DashboardAnalyticsService.completedOrderCount(orders, range: range);
+    if (count == 0) {
+      findings.add('No completed sales in this period.');
+    } else {
+      findings.add(
+        'Completed sales reached ${formatPeso(total)} from $count '
+        '${count == 1 ? 'order' : 'orders'}, an average of '
+        '${formatPeso(total / count)} per order.',
+      );
+
+      final categories = DashboardAnalyticsService.categoryRevenue(orders, products, range: range);
+      if (categories.isNotEmpty) {
+        final top = categories.entries.reduce((a, b) => b.value > a.value ? b : a);
+        final all = categories.values.fold<num>(0, (acc, v) => acc + v);
+        findings.add(
+          'Top category: ${top.key}, with ${formatPeso(top.value)} '
+          '(${_share(top.value, all)} of sales).',
+        );
+      }
+
+      final topProducts = DashboardAnalyticsService.topSellingProducts(orders, limit: 1, range: range);
+      if (topProducts.isNotEmpty) {
+        final p = topProducts.first;
+        findings.add('Best-selling product: ${p.name}, with ${formatPeso(p.revenue)} in sales.');
+      }
+
+      final demand = DashboardAnalyticsService.demandByBuyerBarangay(orders, usersByUid, now, range: range);
+      if (demand.isNotEmpty) {
+        final d = demand.first;
+        findings.add(
+          'Highest buyer demand: ${d.barangay}, with ${d.orderCount} '
+          '${d.orderCount == 1 ? 'completed order' : 'completed orders'}.',
+        );
+      }
+    }
+
+    final pending = DashboardAnalyticsService.pendingVerifications(users);
+    findings.add(
+      pending == 0
+          ? 'No farmer applications are waiting for review.'
+          : '$pending farmer ${pending == 1 ? 'application is' : 'applications are'} '
+              'waiting for review.',
+    );
+
+    // The commodity whose active listings are priced furthest from the
+    // Admin reference price, either way.
+    ({String name, double average, double reference, String unit})? furthest;
+    for (final doc in priceDocs) {
+      final data = doc.data();
+      if (data['isActive'] == false) continue;
+      final reference = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
+      if (reference <= 0) continue;
+      final name = (data['name'] ?? doc.id).toString();
+      final average = computeLiveAverage(products, name);
+      if (average == null) continue;
+      if (furthest == null ||
+          (average - reference).abs() / reference >
+              (furthest.average - furthest.reference).abs() / furthest.reference) {
+        furthest = (name: name, average: average, reference: reference, unit: (data['unit'] ?? '').toString());
+      }
+    }
+    if (furthest != null) {
+      final gap = (furthest.average - furthest.reference) / furthest.reference * 100;
+      findings.add(
+        gap.abs() < 0.05
+            ? '${furthest.name} listings average '
+                '${formatPriceWithUnit(furthest.average, furthest.unit)}, the same as '
+                'its reference price.'
+            : '${furthest.name} listings average '
+                '${formatPriceWithUnit(furthest.average, furthest.unit)}, '
+                '${gap.abs().toStringAsFixed(1)}% ${gap > 0 ? 'above' : 'below'} its '
+                '${formatPriceWithUnit(furthest.reference, furthest.unit)} reference price '
+                '(the largest gap among commodities).',
+      );
+    }
+    return findings;
+  }
+
+  /// The KPI Summary, in two groups by the period each figure covers, said
+  /// once in the group's title: the account counts are as of the day the
+  /// report is made, whatever range was chosen; the transaction value is
+  /// for the chosen date range only.
+  static List<ReportSection> _kpiSummary(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> users,
     List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
     DateTimeRange? range,
+    DateTime now,
   ) {
     final farmerCount = DashboardAnalyticsService.farmerCount(users);
     final buyerCount = DashboardAnalyticsService.buyerCount(users);
     final pending = DashboardAnalyticsService.pendingVerifications(users);
     final total = DashboardAnalyticsService.platformTransactionTotal(orders, range: range);
-    return ReportSection(
-      title: 'KPI Summary',
-      headers: const ['Metric', 'Value', 'Scope'],
-      rows: [
-        ['Total Users', farmerCount + buyerCount, 'Current snapshot'],
-        ['Farmers', farmerCount, 'Current snapshot'],
-        ['Buyers', buyerCount, 'Current snapshot'],
-        ['Pending Verifications', pending, 'Current snapshot'],
-        ['Total Transaction Value', formatPeso(total), 'Selected date range'],
-      ],
-    );
+    final day = DateFormat('MMM d, y');
+    return [
+      ReportSection(
+        title: 'Accounts (as of ${day.format(now)})',
+        headers: const ['Metric', 'Value'],
+        rows: [
+          ['Total Users', farmerCount + buyerCount],
+          ['Farmers', farmerCount],
+          ['Buyers', buyerCount],
+          ['Pending Verifications', pending],
+        ],
+      ),
+      ReportSection(
+        title: 'Transactions (${_periodLabel(range)})',
+        headers: const ['Metric', 'Value'],
+        rows: [
+          ['Total Transaction Value', formatPeso(total)],
+        ],
+      ),
+    ];
+  }
+
+  // "Sep 16 – Oct 15, 2026" within one year, both years otherwise.
+  static String _periodLabel(DateTimeRange? range) {
+    if (range == null) return 'All time';
+    final end = DateFormat('MMM d, y').format(range.end);
+    final start = DateFormat(
+      range.start.year == range.end.year ? 'MMM d' : 'MMM d, y',
+    ).format(range.start);
+    return '$start – $end';
   }
 
   static ReportSection _salesOverview(
@@ -287,12 +432,21 @@ class ReportExportService {
     DateTimeRange? range,
   ) {
     final revenue = DashboardAnalyticsService.categoryRevenue(orders, products, range: range);
+    final entries = revenue.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final total = entries.fold<num>(0, (acc, e) => acc + e.value);
     return ReportSection(
       title: 'Sales by Category',
-      headers: const ['Category', 'Revenue'],
-      rows: revenue.entries.map((e) => [e.key, formatPeso(e.value)]).toList(),
+      headers: const ['Category', 'Revenue', 'Share of Sales'],
+      rows: [
+        for (final e in entries) [e.key, formatPeso(e.value), _share(e.value, total)],
+        if (entries.isNotEmpty) ['Total', formatPeso(total), '100%'],
+      ],
     );
   }
+
+  // [part] as a percentage of [whole]: "45.2%".
+  static String _share(num part, num whole) =>
+      whole <= 0 ? '—' : '${(part / whole * 100).toStringAsFixed(1)}%';
 
   static ReportSection _priceTrend(
     List<QueryDocumentSnapshot<Map<String, dynamic>>> orders,
@@ -308,6 +462,9 @@ class ReportExportService {
       if (!selectedCommodities.contains(name)) continue;
       final baseline = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
       final weekly = DashboardAnalyticsService.weeklyAveragePrice(orders, name, now: now, range: range);
+      // A commodity with no sale in any week of the period says nothing:
+      // left out rather than listed as a column of "No data".
+      if (weekly.every((price) => price == null)) continue;
       for (var i = 0; i < weekly.length; i++) {
         final price = weekly[i];
         rows.add([name, 'Week ${i + 1}', price == null ? 'No data' : formatPeso(price), formatPeso(baseline)]);
@@ -325,10 +482,16 @@ class ReportExportService {
     DateTimeRange? range,
   ) {
     final products = DashboardAnalyticsService.topSellingProducts(orders, limit: 100, range: range);
+    final total = products.fold<num>(0, (acc, p) => acc + p.revenue);
     return ReportSection(
       title: 'Top-Selling Products',
-      headers: const ['Product', 'Quantity Sold', 'Revenue'],
-      rows: products.map((p) => [p.name, p.quantity, formatPeso(p.revenue)]).toList(),
+      headers: const ['Product', 'Quantity Sold', 'Revenue', 'Share of Sales'],
+      rows: [
+        for (final p in products) [p.name, p.quantity, formatPeso(p.revenue), _share(p.revenue, total)],
+        // Quantities are in different units (kg, pieces, heads), so they
+        // are not added up.
+        if (products.isNotEmpty) ['Total', '—', formatPeso(total), '100%'],
+      ],
     );
   }
 
@@ -339,10 +502,15 @@ class ReportExportService {
     DateTimeRange? range,
   ) {
     final demand = DashboardAnalyticsService.demandByBuyerBarangay(orders, usersByUid, now, range: range);
+    final totalOrders = demand.fold<int>(0, (acc, d) => acc + d.orderCount);
+    final totalRevenue = demand.fold<num>(0, (acc, d) => acc + d.revenue);
     return ReportSection(
       title: 'Demand by Barangay',
-      headers: const ['Barangay', 'Orders', 'Revenue'],
-      rows: demand.map((d) => [d.barangay, d.orderCount, formatPeso(d.revenue)]).toList(),
+      headers: const ['Barangay', 'Orders', 'Revenue', 'Share of Orders'],
+      rows: [
+        for (final d in demand) [d.barangay, d.orderCount, formatPeso(d.revenue), _share(d.orderCount, totalOrders)],
+        if (demand.isNotEmpty) ['Total', totalOrders, formatPeso(totalRevenue), '100%'],
+      ],
     );
   }
 

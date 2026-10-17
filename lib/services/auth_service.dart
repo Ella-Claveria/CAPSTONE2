@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../data/legal_policies.dart' show kPrivacyPolicy, kTermsOfService;
 import 'presence_service.dart';
 import 'push_notification_service.dart';
 
@@ -143,6 +144,14 @@ class GoogleSignInResult {
     : this._(GoogleSignInOutcome.error, message: message);
 }
 
+/// A Cloud Function's own message, ready to show: on web the message can
+/// arrive with the HTTP status tacked on ("… another account. [409]"),
+/// which means nothing to the user — drop it.
+String? cleanFunctionMessage(String? message) {
+  final cleaned = message?.replaceFirst(RegExp(r'\s*\[\d{3}\]\s*$'), '').trim();
+  return (cleaned == null || cleaned.isEmpty) ? null : cleaned;
+}
+
 class AuthService {
   static const String adminEmailWithoutVerification = 'admin@agritrade.com';
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -262,6 +271,9 @@ class AuthService {
         'createdAt': FieldValue.serverTimestamp(),
         'termsAccepted': true,
         'termsAcceptedAt': FieldValue.serverTimestamp(),
+        // Which text was agreed to (see lib/data/legal_policies.dart).
+        'termsVersion': kTermsOfService.version,
+        'privacyVersion': kPrivacyPolicy.version,
         if (isFarmer)
           'supportedProductsAcknowledged': supportedProductsAcknowledged,
         if (isFarmer)
@@ -594,6 +606,9 @@ class AuthService {
         'createdAt': FieldValue.serverTimestamp(),
         'termsAccepted': true,
         'termsAcceptedAt': FieldValue.serverTimestamp(),
+        // Which text was agreed to (see lib/data/legal_policies.dart).
+        'termsVersion': kTermsOfService.version,
+        'privacyVersion': kPrivacyPolicy.version,
         if (role == 'farmer')
           'supportedProductsAcknowledged': supportedProductsAcknowledged,
         if (role == 'farmer')
@@ -791,7 +806,7 @@ class AuthService {
         error: switch (e.code) {
           // The function's own wording: cooldown / hourly limit.
           'resource-exhausted' =>
-            e.message ?? 'Please wait before requesting another code.',
+            cleanFunctionMessage(e.message) ?? 'Please wait before requesting another code.',
           'unauthenticated' =>
             'Your session has expired. Please log in again.',
           // No function of that name in that region.
@@ -801,7 +816,7 @@ class AuthService {
             'Check your internet connection and try again.',
           // Auth lookup, Firestore write or SMTP — the function says which.
           'internal' || 'unavailable' when reason != null =>
-            e.message ??
+            cleanFunctionMessage(e.message) ??
                 'Could not send the verification code. Please try again.',
           // 'unavailable' with no reason never reached the function.
           'unavailable' => 'Check your internet connection and try again.',
@@ -838,7 +853,7 @@ class AuthService {
         // The function's own wording: incorrect / expired / too many attempts.
         'invalid-argument' ||
         'failed-precondition' ||
-        'resource-exhausted' => e.message ?? 'Incorrect verification code.',
+        'resource-exhausted' => cleanFunctionMessage(e.message) ?? 'Incorrect verification code.',
         'unauthenticated' => 'Please log in again.',
         _ => 'Could not verify the code. Please try again.',
       };
@@ -996,62 +1011,137 @@ class AuthService {
   }
 
   // ----------------------------------------------------------
-  // CHANGE EMAIL — for an already-logged-in password account.
-  // Re-authenticates with the current password, then has Firebase
-  // email a confirmation link to the NEW address; the sign-in email
-  // only actually changes once that link is opened (so a typo can't
-  // lock the account out, and the new address ends up verified).
-  // Firebase signs the account out everywhere at that point — the
-  // users/{uid} copy of the email is brought in line on the next
-  // sign-in, see syncProfileEmail.
+  // CHANGE EMAIL — for a logged-in Admin with a password account.
+  // 1. requestEmailChangeCode re-authenticates with the current
+  //    password, then the requestEmailChangeOtp Cloud Function checks
+  //    the new email and sends a 6-digit code TO it
+  //    (functions/email_change_otp.js). Nothing changes yet, so a typo
+  //    cannot lock the account out.
+  // 2. confirmEmailChangeCode sends the typed-in code; when it is right
+  //    the function changes the sign-in email (marked verified) and
+  //    users/{uid}.email. Firebase then ends the account's sessions, so
+  //    the caller logs out to log in again with the new email.
   // ----------------------------------------------------------
-  Future<String?> requestEmailChange({
-    required String currentPassword,
+  Future<EmailOtpRequestResult> requestEmailChangeCode({
     required String newEmail,
+    String? currentPassword,
   }) async {
     try {
       final user = _auth.currentUser;
       final email = user?.email;
       if (user == null || email == null) {
-        return 'You are not logged in.';
+        return const EmailOtpRequestResult(error: 'You are not logged in.');
       }
       final target = newEmail.trim();
       if (target.toLowerCase() == email.trim().toLowerCase()) {
-        return 'That is already your current email.';
+        return const EmailOtpRequestResult(
+          error: 'That is already your current email.',
+        );
       }
-
-      await user.reauthenticateWithCredential(
-        EmailAuthProvider.credential(email: email, password: currentPassword),
+      // Left out on "Resend Code": the password was checked moments ago.
+      if (currentPassword != null) {
+        await user.reauthenticateWithCredential(
+          EmailAuthProvider.credential(
+            email: email,
+            password: currentPassword,
+          ),
+        );
+      }
+      final response = await _accountEmails
+          .httpsCallable('requestEmailChangeOtp')
+          .call<dynamic>({'newEmail': target});
+      final data = response.data is Map ? response.data as Map : const {};
+      return EmailOtpRequestResult(
+        sent: data['sent'] == true,
+        resendAfterSeconds: (data['resendAfterSeconds'] as num?)?.toInt() ?? 0,
       );
-      await user.verifyBeforeUpdateEmail(target);
-      return null;
     } on FirebaseAuthException catch (e) {
-      switch (e.code) {
-        case 'wrong-password':
-        case 'invalid-credential':
-        case 'user-mismatch':
-          return 'Current password is incorrect.';
-        case 'email-already-in-use':
-          return 'That email is already used by another account.';
-        case 'invalid-email':
-        case 'invalid-new-email':
-          return 'Please enter a valid email address.';
-        case 'too-many-requests':
-          return 'Too many attempts. Please wait a bit and try again.';
-        case 'network-request-failed':
-          return 'No internet connection. Please check your connection and try again.';
-        default:
-          return 'Could not start the email change. Please try again.';
-      }
+      return EmailOtpRequestResult(
+        error: switch (e.code) {
+          'wrong-password' ||
+          'invalid-credential' ||
+          'user-mismatch' => 'Current password is incorrect.',
+          'too-many-requests' =>
+            'Too many attempts. Please wait a bit and try again.',
+          'network-request-failed' =>
+            'No internet connection. Please check your connection and try again.',
+          _ => 'Could not start the email change. Please try again.',
+        },
+        errorCode: e.code,
+      );
+    } on FirebaseFunctionsException catch (e) {
+      final details = e.details;
+      debugPrint('requestEmailChangeOtp failed: ${e.code} ${e.message}');
+      return EmailOtpRequestResult(
+        error: switch (e.code) {
+          // No message of the function's own ("internal"): it did not run
+          // at all — not deployed, or it crashed.
+          'internal'
+              when (cleanFunctionMessage(e.message) ?? '').trim().toLowerCase().startsWith(
+                'internal',
+              ) =>
+            'The email service is not available right now. Please try '
+                'again later.',
+          // The function's own wording: invalid / taken email, cooldown,
+          // hourly limit, stale login, could not send.
+          'invalid-argument' ||
+          'already-exists' ||
+          'resource-exhausted' ||
+          'failed-precondition' ||
+          'unavailable' ||
+          'internal' ||
+          'permission-denied' => cleanFunctionMessage(e.message) ?? 'Please try again.',
+          'unauthenticated' => 'Your session has expired. Please log in again.',
+          'not-found' =>
+            'Changing your email is not available yet. Please try again later.',
+          'deadline-exceeded' =>
+            'Check your internet connection and try again.',
+          _ => 'Could not send the verification code. Please try again.',
+        },
+        errorCode: e.code,
+        resendAfterSeconds: details is Map
+            ? (details['retryAfterSeconds'] as num?)?.toInt() ?? 0
+            : 0,
+      );
     } catch (e) {
-      return 'Could not start the email change. Please try again.';
+      debugPrint('requestEmailChangeOtp failed before reaching the server: $e');
+      return const EmailOtpRequestResult(
+        error: 'Could not send the verification code. Please try again.',
+        errorCode: 'client-error',
+      );
+    }
+  }
+
+  /// Null when the email has been changed, or a message to show.
+  Future<String?> confirmEmailChangeCode(String code) async {
+    if (_auth.currentUser == null) return 'Please log in again.';
+    try {
+      await _accountEmails.httpsCallable('confirmEmailChangeOtp').call<dynamic>(
+        {'code': code},
+      );
+      return null;
+    } on FirebaseFunctionsException catch (e) {
+      return switch (e.code) {
+        // The function's own wording: incorrect / expired / too many
+        // attempts / email taken meanwhile / stale login.
+        'invalid-argument' ||
+        'failed-precondition' ||
+        'resource-exhausted' ||
+        'already-exists' ||
+        'unavailable' ||
+        'permission-denied' => cleanFunctionMessage(e.message) ?? 'Incorrect verification code.',
+        'unauthenticated' => 'Please log in again.',
+        _ => 'Could not verify the code. Please try again.',
+      };
+    } catch (_) {
+      return 'Could not verify the code. Please try again.';
     }
   }
 
   // Copies the Firebase Auth email onto users/{uid}.email when the two
-  // have drifted apart — i.e. the first sign-in after a confirmed
-  // requestEmailChange. Best-effort: a failure here must never block a
-  // login, and the next sign-in simply tries again.
+  // have drifted apart — e.g. the first sign-in after an email change
+  // whose profile update did not go through. Best-effort: a failure here
+  // must never block a login, and the next sign-in simply tries again.
   Future<void> syncProfileEmail() async {
     try {
       final user = _auth.currentUser;
@@ -1106,8 +1196,12 @@ class AuthService {
         return 'Too many attempts. Please wait a bit and try again.';
       case 'network-request-failed':
         return 'No internet connection. Please check your connection and try again.';
+      case 'user-disabled':
+        return 'This account has been disabled. Contact the system administrator.';
       default:
-        return 'Login failed. Please try again.';
+        // Firebase's own code, so an unexpected failure can be traced.
+        debugPrint('[Auth] login failed with code: $code');
+        return 'Login failed ($code). Please try again.';
     }
   }
 

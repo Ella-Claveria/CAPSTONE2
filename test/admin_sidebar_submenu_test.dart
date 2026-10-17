@@ -69,12 +69,12 @@ void main() {
   GoogleFonts.config.allowRuntimeFetching = false;
 
   testWidgets('only pages with several views have a chevron, and their '
-      'submenus start closed', (tester) async {
+      'submenus start open', (tester) async {
     await pump(tester);
     expect(tester.takeException(), isNull);
     expect(find.byIcon(Icons.chevron_right_rounded), findsNWidgets(2));
-    expect(find.text('Pending Reports'), findsNothing);
-    expect(find.text('All Activity'), findsNothing);
+    expect(find.text('Pending Reports'), findsOneWidget);
+    expect(find.text('All Activity'), findsOneWidget);
   });
 
   testWidgets('clicking a parent opens its page and its submenu; clicking '
@@ -96,14 +96,15 @@ void main() {
     tester,
   ) async {
     final host = await pump(tester);
+    expect(find.text('Login Activity'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.chevron_right_rounded).last);
     await tester.pumpAndSettle();
     expect(host.selected, 0);
-    expect(find.text('Login Activity'), findsOneWidget);
+    expect(find.text('Login Activity'), findsNothing);
 
     await tester.tap(find.byIcon(Icons.chevron_right_rounded).last);
     await tester.pumpAndSettle();
-    expect(find.text('Login Activity'), findsNothing);
+    expect(find.text('Login Activity'), findsOneWidget);
   });
 
   testWidgets('a submenu item opens its view and is the highlighted one; '

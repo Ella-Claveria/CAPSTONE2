@@ -127,12 +127,19 @@ function verificationEmail({ name, link }) {
 }
 
 // The 6-digit code from email_otp.js, shown as "482 731".
-function otpEmail({ code }) {
+// `purpose: "email-change"` is the code sent to the new address when an
+// account's email is being changed (email_change_otp.js).
+function otpEmail({ code, purpose }) {
   const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
+  const change = purpose === "email-change";
+  const title = change ? "Confirm your new email address" : "Verify your email address";
+  const ignore = change
+    ? "If you did not ask to change your AgriTrade+ email to this address, you may safely ignore this email."
+    : "If you did not create an AgriTrade+ account, you may safely ignore this email.";
   return {
     subject: "Your AgriTrade+ verification code",
     text: [
-      "Verify your email address",
+      title,
       "",
       "Your AgriTrade+ verification code is:",
       "",
@@ -140,18 +147,18 @@ function otpEmail({ code }) {
       "",
       "This code will expire in 10 minutes.",
       "",
-      "If you did not create an AgriTrade+ account, you may safely ignore this email.",
+      ignore,
       "",
       "AgriTrade+ Team",
     ].join("\n"),
     html: layout({
-      title: "Verify your email address",
+      title,
       preheader: "Your AgriTrade+ verification code. It expires in 10 minutes.",
       bodyHtml: [
         paragraph("Your AgriTrade+ verification code is:"),
         `<p style="margin:0 0 20px;padding:16px 12px;background:#F4F7F4;border-radius:10px;text-align:center;font-size:32px;line-height:1.2;font-weight:700;letter-spacing:6px;color:${BRAND_GREEN}">${escapeHtml(spaced)}</p>`,
         paragraph("This code will expire in 10 minutes."),
-        paragraph("If you did not create an AgriTrade+ account, you may safely ignore this email."),
+        paragraph(ignore),
         paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Team</strong>`),
       ].join("\n"),
     }),
@@ -221,6 +228,49 @@ function newDeviceEmail({ name, deviceName, platform, when }) {
         ]),
         paragraph("If this was you, no action is required."),
         paragraph("If you do not recognize this login, please change your AgriTrade+ password immediately and secure your account."),
+        paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Security</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+// Sent each time a farmer or buyer logs in to the mobile app (notifySignIn
+// in account_emails.js) — a new device gets newDeviceEmail instead.
+function signInEmail({ name, deviceName, platform, when }) {
+  const greeting = greetingFor(name);
+  const known = (value) => (value && value !== "Unknown" ? value : "Not recognized");
+  const rows = [
+    ["Date and time", `${when} (Philippine time)`],
+    ["Device", known(deviceName)],
+    ["Platform", known(platform)],
+  ];
+  const intro = "You have successfully logged in to your AgriTrade+ account.";
+  const ifNot = "If this was not you, please change your AgriTrade+ password immediately and secure your account.";
+  return {
+    subject: "You logged in to AgriTrade+",
+    text: [
+      greeting,
+      "",
+      intro,
+      "",
+      "Login details",
+      ...rows.map(([label, value]) => `${label}: ${value}`),
+      "",
+      "If this was you, no action is required.",
+      "",
+      ifNot,
+      "",
+      "AgriTrade+ Security",
+    ].join("\n"),
+    html: layout({
+      title: "Login to AgriTrade+",
+      preheader: intro,
+      bodyHtml: [
+        paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
+        paragraph(intro),
+        detailsTable(rows),
+        paragraph("If this was you, no action is required."),
+        paragraph(ifNot),
         paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Security</strong>`),
       ].join("\n"),
     }),
@@ -370,4 +420,4 @@ function googleSignInEmail({ name }) {
   };
 }
 
-module.exports = { escapeHtml, verificationEmail, otpEmail, passwordResetEmail, googleSignInEmail, newDeviceEmail, adminSignInEmail, farmerApprovedEmail, farmerRejectedEmail, accountNoticeEmail };
+module.exports = { escapeHtml, verificationEmail, otpEmail, passwordResetEmail, googleSignInEmail, newDeviceEmail, signInEmail, adminSignInEmail, farmerApprovedEmail, farmerRejectedEmail, accountNoticeEmail };

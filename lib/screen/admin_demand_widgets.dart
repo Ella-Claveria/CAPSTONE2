@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../services/market_price_helpers.dart';
+import '../theme/app_theme.dart';
 import 'admin_dashboard_screen.dart'
     show AdminThemeScope, AdminPalette, AdminRadii;
 
@@ -226,7 +227,7 @@ Widget _rankBadge(AdminPalette c, int rank, {required bool strong}) =>
       child: Text(
         '$rank',
         style: TextStyle(
-          color: strong ? (c.isDark ? Colors.black : Colors.white) : c.green,
+          color: strong ? (c.isDark ? AppTheme.dark : Colors.white) : c.green,
           fontSize: 11,
           fontWeight: FontWeight.bold,
         ),

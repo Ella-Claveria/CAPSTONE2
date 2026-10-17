@@ -8,7 +8,8 @@ import 'package:flutter/foundation.dart'
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart' show HitTestResult;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show LogicalKeyboardKey, KeyDownEvent;
+import 'package:flutter/services.dart'
+    show HardwareKeyboard, KeyDownEvent, KeyEvent, LogicalKeyboardKey;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -24,7 +25,8 @@ import '../data/laurel_barangays.dart';
 import '../services/connectivity_service.dart';
 import '../services/market_price_helpers.dart';
 import '../widgets/admin_sidebar.dart';
-import '../widgets/agri_dialog.dart' show agriBarrierColor;
+import '../widgets/agri_dialog.dart'
+    show AgriTone, agriBarrierColor, showAgriConfirm;
 import '../services/pdf_report_service.dart';
 import '../services/admin_perf.dart';
 import '../services/admin_session_service.dart';
@@ -42,11 +44,10 @@ import 'admin_global_search.dart';
 import 'admin_market_trends_card.dart';
 import 'admin_notifications.dart';
 import 'admin_account_views.dart';
+import 'admin_info_dialogs.dart';
 import 'admin_analytics_widgets.dart';
 import 'admin_demand_widgets.dart';
-import 'admin_listings_view.dart';
 import 'admin_overview_widgets.dart';
-import 'admin_transactions_view.dart';
 import 'admin_user_accounts_view.dart';
 import 'admin_sub_nav.dart';
 import 'audit_log_view.dart';
@@ -56,8 +57,8 @@ import 'admin_session_gate.dart';
 import '../services/auth_routing_service.dart';
 
 // ============================================================
-// THEME — a small self-contained palette system (dark + light)
-// so this screen doesn't depend on the app's global ThemeData.
+// THEME — a small self-contained palette (light only) so this
+// screen doesn't depend on the app's global ThemeData.
 // ============================================================
 class AdminPalette {
   final bool isDark;
@@ -100,27 +101,8 @@ class AdminPalette {
     required this.blueBg,
   });
 
-  static const dark = AdminPalette(
-    isDark: true,
-    bg: Color(0xFF101713),
-    sidebarBg: Color(0xFF111B14),
-    surface: Color(0xFF18231B),
-    surfaceAlt: Color(0xFF202D23),
-    border: Color(0xFF2B3B2F),
-    textPrimary: Colors.white,
-    textSecondary: Color(0xFF9AA1AC),
-    textMuted: Color(0xFF5B616C),
-    iconInactive: Colors.white70,
-    green: Color(0xFF63C174),
-    greenBg: Color(0x2963C174),
-    red: Color(0xFFF87171),
-    redBg: Color(0x29F87171),
-    amber: Color(0xFFFBBF24),
-    amberBg: Color(0x29FBBF24),
-    blue: Color(0xFF60A5FA),
-    blueBg: Color(0x2960A5FA),
-  );
-
+  // The portal's only theme. [isDark] stays on the palette (always false)
+  // so the widgets that read it keep working.
   static const light = AdminPalette(
     isDark: false,
     bg: Color(0xFFF8F9FA),
@@ -159,17 +141,15 @@ class AdminRadii {
   static const double pill = 999;
 }
 
-/// Provides the current [AdminPalette] + a theme-toggle callback to the
-/// whole admin subtree, so any descendant widget can read
-/// `AdminThemeScope.of(context).palette` without prop-drilling.
+/// Provides the current [AdminPalette] to the whole admin subtree, so any
+/// descendant widget can read `AdminThemeScope.of(context).palette`
+/// without prop-drilling.
 class AdminThemeScope extends InheritedWidget {
   final AdminPalette palette;
-  final VoidCallback onToggleTheme;
 
   const AdminThemeScope({
     super.key,
     required this.palette,
-    required this.onToggleTheme,
     required super.child,
   });
 
@@ -208,21 +188,11 @@ const List<_NavItem> _navItems = [
     Icons.verified_user_rounded,
     'Verification Queue',
   ),
-  _NavItem(Icons.groups_outlined, Icons.groups_rounded, 'Farmer List'),
+  _NavItem(Icons.groups_outlined, Icons.groups_rounded, 'User Accounts'),
   _NavItem(
     Icons.price_change_outlined,
     Icons.price_change_rounded,
     'Price Management',
-  ),
-  _NavItem(
-    Icons.receipt_long_outlined,
-    Icons.receipt_long_rounded,
-    'Transactions',
-  ),
-  _NavItem(
-    Icons.inventory_2_outlined,
-    Icons.inventory_2_rounded,
-    'Product Listings',
   ),
   _NavItem(Icons.gavel_outlined, Icons.gavel_rounded, 'Moderation Queue'),
   _NavItem(Icons.report_outlined, Icons.report_rounded, 'Violations'),
@@ -240,13 +210,6 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  bool _isDark =
-      false; // Match the AgriTrade+ light admin reference by default.
-
-  // TODO: persist this choice (e.g. SharedPreferences) so it survives app
-  // restarts, and/or seed it from the platform brightness on first launch.
-  void _toggleTheme() => setState(() => _isDark = !_isDark);
-
   // ---- Access is re-checked for as long as the dashboard is open ----
   // The check at the door (AdminSessionGate / login) only covers the
   // moment of entry. These two listeners cover everything after it: the
@@ -295,6 +258,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         .listen((snap) async {
           // Only the server's word counts — a cached copy may be stale.
           if (snap.metadata.isFromCache) return;
+          if (await _revokedHere(snap.data())) {
+            await _leaveSessionEnded(uid, revoked: true);
+            return;
+          }
           final lost = AuthRoutingService.adminAccessLostReason(
             snap.exists ? snap.data() : null,
           );
@@ -321,9 +288,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     super.dispose();
   }
 
-  // The account signed in on another device: this one is signed out and
-  // returned to login, where a popup says why.
-  Future<void> _leaveSessionEnded(String uid) async {
+  // The account signed in on another device — or, with [revoked], this
+  // browser was signed out from Active Sessions on another one: it is
+  // signed out and returned to login, where a popup says why.
+  Future<void> _leaveSessionEnded(String uid, {bool revoked = false}) async {
     if (_leaving) return;
     _leaving = true;
     _authSub?.cancel();
@@ -334,18 +302,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _sessionSub = null;
     _sessionHeartbeat?.cancel();
     // Logged while still signed in, and never allowed to hold the
-    // sign-out back.
-    try {
-      await AuditLogService.log(
-        AuditAction.sessionForcedLogout,
-        'This Admin session was ended because the account logged in on '
-        'another device.',
-      ).timeout(const Duration(seconds: 4));
-    } catch (_) {}
+    // sign-out back. A revoked browser can no longer log anything: the
+    // revocation itself is in the Audit Log (SESSION_REVOKED).
+    if (!revoked) {
+      try {
+        await AuditLogService.log(
+          AuditAction.sessionForcedLogout,
+          'This Admin session was ended because the account logged in on '
+          'another device.',
+        ).timeout(const Duration(seconds: 4));
+      } catch (_) {}
+    }
     await AdminSessionService.clearLocal(uid);
     debugPrint(
-      '[Auth] signOut() called — reason: Admin session replaced on another '
-      'device (uid: $uid)',
+      '[Auth] signOut() called — reason: Admin session '
+      '${revoked ? 'revoked from Active Sessions' : 'replaced on another device'} '
+      '(uid: $uid)',
     );
     try {
       await FirebaseAuth.instance.signOut();
@@ -353,11 +325,29 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
-        builder: (_) =>
-            const LoginScreen(role: 'admin', adminSessionEnded: true),
+        builder: (_) => LoginScreen(
+          role: 'admin',
+          adminSessionEnded: true,
+          adminSessionRevoked: revoked,
+        ),
       ),
       (route) => false,
     );
+  }
+
+  // Whether this browser was signed in before the account's sessions were
+  // revoked (sessionsValidAfter, set by Active Sessions > Revoke Session):
+  // it is the one signed out. firestore.rules already refuses it.
+  Future<bool> _revokedHere(Map<String, dynamic>? account) async {
+    final validAfter = account?['sessionsValidAfter'];
+    if (validAfter is! Timestamp) return false;
+    try {
+      final token = await FirebaseAuth.instance.currentUser?.getIdTokenResult();
+      final signedIn = token?.authTime;
+      return signedIn != null && signedIn.isBefore(validAfter.toDate());
+    } catch (_) {
+      return false;
+    }
   }
 
   // Replaces the dashboard (the only route on the stack) with the admin
@@ -431,11 +421,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   late final List<Widget> _pages = [
     const _AnalyticsDashboardView(),
     const _DemandHeatmapView(),
-    const _VerificationPage(),
-    const FarmerListView(),
+    const VerificationQueueView(),
+    const _UserAccountsPage(),
     const _PriceManagementView(),
-    const AdminTransactionsView(),
-    const AdminListingsView(),
     const ModerationQueueView(),
     const ModerationQueueView(violations: true),
     const AuditLogView(),
@@ -443,11 +431,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _isDark ? AdminPalette.dark : AdminPalette.light;
+    // The portal has one theme: light.
+    const palette = AdminPalette.light;
 
     return AdminThemeScope(
       palette: palette,
-      onToggleTheme: _toggleTheme,
       child: Theme(
         data: Theme.of(context).copyWith(
           colorScheme: Theme.of(context).colorScheme.copyWith(
@@ -465,6 +453,14 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           primaryTextTheme: Theme.of(
             context,
           ).primaryTextTheme.apply(fontFamily: kAdminFontFamily),
+          // System messages: the app's dark green, white-text bar, as a
+          // compact box centred at the bottom instead of a bar across the
+          // whole window (a narrow window keeps the full-width one).
+          snackBarTheme: Theme.of(context).snackBarTheme.copyWith(
+            width: MediaQuery.sizeOf(context).width >= 520 ? 460 : null,
+            contentTextStyle: Theme.of(context).snackBarTheme.contentTextStyle
+                ?.copyWith(fontFamily: kAdminFontFamily),
+          ),
           // Every button in the portal is pill-shaped (the sidebar's items
           // are tabs, not buttons). Elevated buttons already are, from the
           // app's own theme; this covers the rest, dialogs included.
@@ -658,9 +654,9 @@ class _AdminShellState extends State<_AdminShell> {
   final Set<int> _visited = {0};
 
   // Pages that read DashboardDataService's cached analytics fetch
-  // (Analytics Dashboard, Demand Heatmap, Farmer List, Price Management,
-  // Transactions).
-  static const Set<int> _cachedDataPages = {0, 1, 3, 4, 5, 6};
+  // (Analytics Dashboard, Demand Heatmap, User Accounts, Price
+  // Management).
+  static const Set<int> _cachedDataPages = {0, 1, 3, 4};
 
   // Switching between light and dark repaints every page that is being
   // kept alive in the background, not just the one on screen — tables,
@@ -682,18 +678,79 @@ class _AdminShellState extends State<_AdminShell> {
     _wasDark = isDark;
   }
 
+  // The Admin folded the full sidebar into the icon rail (its sidebar
+  // button, or Ctrl+Shift+S). Remembered on this browser.
+  bool _userCollapsed = false;
+  static const _collapsedKey = 'admin_sidebar_collapsed';
+  static const _toggleShortcut = 'Ctrl+Shift+S';
+
+  // The window's width at the last build, for the keyboard shortcut.
+  double _width = double.infinity;
+
   @override
   void initState() {
     super.initState();
     adminOpenPageRequest.addListener(_openRequestedPage);
+    HardwareKeyboard.instance.addHandler(_onKey);
+    _loadCollapsed();
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKey);
     adminOpenPageRequest.removeListener(_openRequestedPage);
     _selected.dispose();
     _shown.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadCollapsed() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final collapsed = prefs.getBool(_collapsedKey) ?? false;
+      if (mounted && collapsed != _userCollapsed) {
+        setState(() => _userCollapsed = collapsed);
+      }
+    } catch (_) {
+      // No saved choice: the sidebar starts open.
+    }
+  }
+
+  // Ctrl+Shift+S (Cmd+Shift+S on a Mac) opens or closes the sidebar.
+  bool _onKey(KeyEvent event) {
+    if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.keyS) {
+      return false;
+    }
+    final keys = HardwareKeyboard.instance;
+    if (!keys.isShiftPressed ||
+        !(keys.isControlPressed || keys.isMetaPressed) ||
+        keys.isAltPressed) {
+      return false;
+    }
+    _toggleSidebar();
+    return true;
+  }
+
+  // A wide window folds the sidebar into the rail or opens it back out,
+  // pushing the page over. A narrower one, where there is no room for
+  // both, opens the full sidebar over the page instead (and closes it).
+  void _toggleSidebar() {
+    final scaffold = _scaffoldKey.currentState;
+    if (scaffold != null && scaffold.isDrawerOpen) {
+      scaffold.closeDrawer();
+      return;
+    }
+    if (_width >= _sidebarFrom) {
+      setState(() => _userCollapsed = !_userCollapsed);
+      final collapsed = _userCollapsed;
+      unawaited(
+        SharedPreferences.getInstance()
+            .then((prefs) => prefs.setBool(_collapsedKey, collapsed))
+            .catchError((_) => false),
+      );
+    } else {
+      scaffold?.openDrawer();
+    }
   }
 
   // A notification was clicked: open the page it is about.
@@ -701,13 +758,15 @@ class _AdminShellState extends State<_AdminShell> {
     final target = adminOpenPageRequest.value;
     if (target == null) return;
     adminOpenPageRequest.value = null;
+    // About a farmer: User Accounts › Farmers, even if Buyers was open.
+    if (target == AdminNotificationTarget.farmers) {
+      AdminSubNav.accounts.value = UserAccountsSection.farmers;
+    }
     _goTo(switch (target) {
       AdminNotificationTarget.heatmap => _heatmapPage,
       AdminNotificationTarget.verification => _verificationPage,
-      AdminNotificationTarget.farmers => _farmersPage,
+      AdminNotificationTarget.farmers => _accountsPage,
       AdminNotificationTarget.moderation => _moderationPage,
-      AdminNotificationTarget.transactions => _transactionsPage,
-      AdminNotificationTarget.listings => _listingsPage,
       AdminNotificationTarget.auditLog => _auditLogPage,
     });
   }
@@ -772,7 +831,7 @@ class _AdminShellState extends State<_AdminShell> {
       child: ListenableBuilder(
         listenable: Listenable.merge([
           _selected,
-          AdminSubNav.verification,
+          AdminSubNav.accounts,
           AdminSubNav.moderation,
           AdminSubNav.violations,
           AdminSubNav.audit,
@@ -780,16 +839,27 @@ class _AdminShellState extends State<_AdminShell> {
         builder: (context, _) => AdminSidebar(
           entries: _sidebarEntries,
           selectedIndex: _selected.value,
-          // No footer: Logout and the Admin account are on the avatar in
-          // the header.
+          // The Admin account, with Logout in its menu, pinned at the
+          // bottom.
+          footer: Padding(
+            padding: collapsed
+                ? const EdgeInsets.fromLTRB(12, 10, 12, 12)
+                : const EdgeInsets.fromLTRB(10, 10, 10, 12),
+            child: _AdminAccountMenu(
+              onLogout: widget.onLogout,
+              collapsed: collapsed,
+            ),
+          ),
           selectedChildIndex: switch (_selected.value) {
-            _verificationPage => AdminSubNav.verification.value.index,
+            _accountsPage => AdminSubNav.accounts.value.index,
             _moderationPage => AdminSubNav.moderation.value.index,
             _violationsPage => AdminSubNav.violations.value.index,
             _auditLogPage => AdminSubNav.audit.value.index,
             _ => null,
           },
           collapsed: collapsed,
+          onToggleCollapsed: _toggleSidebar,
+          toggleShortcut: _toggleShortcut,
           onSelect: (index) {
             if (inDrawer) _scaffoldKey.currentState?.closeDrawer();
             _goTo(index);
@@ -797,9 +867,8 @@ class _AdminShellState extends State<_AdminShell> {
           onSelectChild: (index, child) {
             if (inDrawer) _scaffoldKey.currentState?.closeDrawer();
             switch (index) {
-              case _verificationPage:
-                AdminSubNav.verification.value =
-                    VerificationSection.values[child];
+              case _accountsPage:
+                AdminSubNav.accounts.value = UserAccountsSection.values[child];
               case _moderationPage:
                 AdminSubNav.moderation.value = ModerationSection.values[child];
               case _violationsPage:
@@ -819,16 +888,22 @@ class _AdminShellState extends State<_AdminShell> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth;
+        _width = width;
         final useDrawer = width < _railFrom;
+        // Too narrow for the full sidebar beside the page: the rail, whose
+        // sidebar button opens the full one over the page.
+        final narrow = width < _sidebarFrom;
         // One Scaffold in every shape, and the content keyed, so resizing
         // the window never rebuilds the pages.
         return Scaffold(
           key: _scaffoldKey,
           backgroundColor: Colors.transparent,
-          drawer: useDrawer
+          // Dragging from the edge opens it only where there is no rail.
+          drawerEnableOpenDragGesture: useDrawer,
+          drawer: narrow
               ? Drawer(
                   width: AdminSidebar.expandedWidth,
-                  backgroundColor: AdminSidebar.background,
+                  backgroundColor: AdminSidebarColors.light.background,
                   shape: const RoundedRectangleBorder(),
                   child: _sidebar(collapsed: false, inDrawer: true),
                 )
@@ -836,14 +911,13 @@ class _AdminShellState extends State<_AdminShell> {
           body: Row(
             children: [
               // Fixed: only the content to its right changes or scrolls.
-              if (!useDrawer) _sidebar(collapsed: width < _sidebarFrom),
+              if (!useDrawer) _sidebar(collapsed: narrow || _userCollapsed),
               Expanded(
                 key: const ValueKey('admin-content'),
                 child: Column(
                   children: [
                     _AdminUtilityBar(
                       selected: _selected,
-                      onLogout: widget.onLogout,
                       onGoHome: () => _goTo(0),
                       showBrand: width < _sidebarFrom,
                       onOpenMenu: useDrawer
@@ -1091,10 +1165,8 @@ const List<String> _topNavLabels = [
   'Dashboard',
   'Demand Heatmap',
   'Verification',
-  'Farmers',
+  'User Accounts',
   'Price Management',
-  'Transactions',
-  'Listings',
   'Moderation',
   'Violations',
   'Audit Log',
@@ -1106,10 +1178,8 @@ const List<String> _pageTitles = [
   'Analytics Dashboard',
   'Demand Heatmap',
   'Verification Queue',
-  'Farmer List',
+  'User Accounts',
   'Commodity Price Management',
-  'Transactions',
-  'Product Listings',
   'Moderation Queue',
   'Violations',
   'Audit Log',
@@ -1117,15 +1187,14 @@ const List<String> _pageTitles = [
 
 // Pages with several views of their own, by index into _navItems: the
 // sidebar lists those views as a submenu. Only views that exist — a
-// Moderation tab, an Audit Log section (see AdminSubNav).
+// User Accounts section, a Moderation tab, an Audit Log section (see
+// AdminSubNav).
 const int _verificationPage = 2;
-const int _moderationPage = 7;
-const int _violationsPage = 8;
-const int _auditLogPage = 9;
+const int _accountsPage = 3;
+const int _moderationPage = 5;
+const int _violationsPage = 6;
+const int _auditLogPage = 7;
 const int _heatmapPage = 1;
-const int _farmersPage = 3;
-const int _transactionsPage = 5;
-const int _listingsPage = 6;
 
 final List<AdminSidebarEntry> _sidebarEntries = [
   for (var i = 0; i < _navItems.length; i++)
@@ -1133,8 +1202,8 @@ final List<AdminSidebarEntry> _sidebarEntries = [
       _navItems[i].icon,
       _topNavLabels[i],
       children: switch (i) {
-        _verificationPage => [
-          for (final section in VerificationSection.values) section.label,
+        _accountsPage => [
+          for (final section in UserAccountsSection.values) section.label,
         ],
         _moderationPage => [
           for (final section in ModerationSection.values) section.label,
@@ -1162,14 +1231,11 @@ class _AdminUtilityBar extends StatelessWidget {
   /// drawer), so the header carries it instead.
   final bool showBrand;
 
-  final Future<bool> Function() onLogout;
-
   /// "Dashboard" in the breadcrumb was clicked.
   final VoidCallback onGoHome;
 
   const _AdminUtilityBar({
     required this.selected,
-    required this.onLogout,
     required this.onGoHome,
     this.onOpenMenu,
     this.showBrand = false,
@@ -1182,7 +1248,7 @@ class _AdminUtilityBar extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([
         selected,
-        AdminSubNav.verification,
+        AdminSubNav.accounts,
         AdminSubNav.moderation,
         AdminSubNav.violations,
         AdminSubNav.audit,
@@ -1220,7 +1286,7 @@ class _AdminUtilityBar extends StatelessWidget {
   // "Dashboard" goes back there; the last one is where they are now.
   Widget _breadcrumb(AdminPalette c, int page) {
     final section = switch (page) {
-      _verificationPage => AdminSubNav.verification.value.label,
+      _accountsPage => AdminSubNav.accounts.value.label,
       _moderationPage => AdminSubNav.moderation.value.label,
       _violationsPage => AdminSubNav.violations.value.label,
       _auditLogPage => AdminSubNav.audit.value.label,
@@ -1281,8 +1347,9 @@ class _AdminUtilityBar extends StatelessWidget {
         );
 
   // The same bar on every page: where the Admin is on the left, then the
-  // search, the notification bell and the Admin account on the right. The
-  // page's title is on its own line under it.
+  // search, Announce and the notification bell on the right (the Admin
+  // account is at the bottom of the sidebar). The page's title is on its
+  // own line under it.
   Widget _header(AdminPalette c, int page) {
     return Padding(
       padding: EdgeInsets.fromLTRB(onOpenMenu == null ? 24 : 10, 14, 24, 8),
@@ -1326,79 +1393,54 @@ class _AdminUtilityBar extends StatelessWidget {
           const AdminAnnounceButton(),
           const SizedBox(width: 8),
           const AdminNotificationBell(),
-          const SizedBox(width: 8),
-          const _AdminThemeToggle(),
-          const SizedBox(width: 8),
-          _AdminAccountMenu(onLogout: onLogout),
         ],
       ),
     );
   }
 }
 
-/// The light/dark switch in the header: a sun while the portal is light,
-/// a moon while it is dark. One click changes the whole portal.
-class _AdminThemeToggle extends StatelessWidget {
-  const _AdminThemeToggle();
+/// The Admin account at the bottom of the sidebar — avatar, name and
+/// "Administrator" (the avatar alone on the icon rail) — and its menu: who
+/// is signed in, Manage Account, Suspend Accounts, System Maintenance, the
+/// information popups (admin_info_dialogs.dart) and Logout. Account
+/// settings themselves are in Manage Account.
+class _AdminAccountMenu extends StatefulWidget {
+  final Future<bool> Function() onLogout;
+
+  /// On the icon rail: the avatar only, and the menu opens to its right.
+  final bool collapsed;
+
+  const _AdminAccountMenu({required this.onLogout, this.collapsed = false});
 
   @override
-  Widget build(BuildContext context) {
-    final scope = AdminThemeScope.of(context);
-    final c = scope.palette;
-    return Tooltip(
-      message: c.isDark ? 'Switch to light mode' : 'Switch to dark mode',
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: scope.onToggleTheme,
-        child: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: c.surfaceAlt,
-          ),
-          child: Icon(
-            c.isDark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
-            color: c.textSecondary,
-            size: 22,
-          ),
-        ),
-      ),
-    );
-  }
+  State<_AdminAccountMenu> createState() => _AdminAccountMenuState();
 }
 
-/// The Admin account in the header — avatar, "Admin" and a chevron — and
-/// its menu: who is signed in, Manage Account and Logout.
-/// Account settings themselves are in Manage Account; the theme is the
-/// sun/moon beside this.
-class _AdminAccountMenu extends StatelessWidget {
-  final Future<bool> Function() onLogout;
-  const _AdminAccountMenu({required this.onLogout});
+class _AdminAccountMenuState extends State<_AdminAccountMenu> {
+  bool _hovered = false;
+
+  // The menu's height (its header, seven 42 px items, three dividers and
+  // its padding), so it can open above the button at the bottom of the
+  // screen instead of covering it.
+  static const double _menuHeight = 420;
+  static const double _buttonHeight = 48;
+
+  Future<bool> Function() get onLogout => widget.onLogout;
 
   // Asks first; then keeps a "Logging out…" notice up while the logout is
   // recorded and the session ended, so the click is seen to have worked.
+  // The question is the mobile app's own logout popup (showAgriConfirm,
+  // as in Farmer Profile and the buyer's marketplace), so both look alike.
   Future<void> _confirmLogout(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAgriConfirm(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Log out?'),
-        content: const SizedBox(
-          width: 360,
-          child: Text('You will need to log in again to use the Admin Portal.'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Logout'),
-          ),
-        ],
-      ),
+      icon: Icons.logout,
+      tone: AgriTone.destructive,
+      title: 'Log Out',
+      message: 'Are you sure you want to log out?',
+      confirmLabel: 'Log Out',
     );
-    if (confirmed != true || !context.mounted) return;
+    if (!confirmed || !context.mounted) return;
 
     final navigator = Navigator.of(context, rootNavigator: true);
     showDialog<void>(
@@ -1429,26 +1471,43 @@ class _AdminAccountMenu extends StatelessWidget {
     if (!left && navigator.mounted) navigator.pop();
   }
 
-  // TODO: replace with the authenticated admin's real initials.
-  static const String _initials = 'AD';
-
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
     final email = FirebaseAuth.instance.currentUser?.email ?? '';
 
-    Widget avatar(double radius) => CircleAvatar(
-      radius: radius,
-      backgroundColor: c.greenBg,
-      child: Text(
-        _initials,
-        style: TextStyle(
-          color: c.green,
-          fontWeight: FontWeight.bold,
-          fontSize: radius * 0.66,
+    // The signed-in Admin's photo, or their initials ("AD" until their
+    // name is known, or when none is stored).
+    Widget avatar(double radius, AdminProfile? profile) {
+      final initials = profile == null || profile.name == 'Admin'
+          ? 'AD'
+          : adminInitials(profile.name);
+      final url = (profile?.photoUrl ?? '').trim();
+      return CircleAvatar(
+        radius: radius,
+        backgroundColor: c.greenBg,
+        foregroundImage: url.isEmpty ? null : NetworkImage(url),
+        onForegroundImageError: url.isEmpty ? null : (_, _) {},
+        child: Text(
+          initials.isEmpty ? 'AD' : initials,
+          style: TextStyle(
+            color: c.green,
+            fontWeight: FontWeight.bold,
+            fontSize: radius * 0.66,
+          ),
         ),
-      ),
-    );
+      );
+    }
+
+    // Asked again after Edit Profile, so a new name shows straight away.
+    Widget withProfile(Widget Function(AdminProfile? profile) builder) =>
+        ValueListenableBuilder<int>(
+          valueListenable: adminProfileChanged,
+          builder: (context, _, _) => FutureBuilder<AdminProfile>(
+            future: adminProfile(),
+            builder: (context, snapshot) => builder(snapshot.data),
+          ),
+        );
 
     PopupMenuItem<String> item(
       String value,
@@ -1476,10 +1535,18 @@ class _AdminAccountMenu extends StatelessWidget {
       );
     }
 
+    final collapsed = widget.collapsed;
     return PopupMenuButton<String>(
-      tooltip: 'Account',
-      position: PopupMenuPosition.under,
-      offset: const Offset(0, 8),
+      tooltip: collapsed ? 'Account' : '',
+      position: PopupMenuPosition.over,
+      // Above the button in the full sidebar; beside it, bottoms lined
+      // up, on the rail.
+      offset: collapsed
+          ? const Offset(
+              AdminSidebar.collapsedWidth - 4,
+              -(_menuHeight - _buttonHeight),
+            )
+          : const Offset(0, -(_menuHeight + 8)),
       constraints: const BoxConstraints(minWidth: 250, maxWidth: 290),
       onSelected: (value) {
         switch (value) {
@@ -1487,6 +1554,14 @@ class _AdminAccountMenu extends StatelessWidget {
             showAdminManageAccount(context);
           case 'suspend':
             showAdminSuspendAccounts(context);
+          case 'maintenance':
+            showAdminMaintenanceDialog(context);
+          case 'terms':
+            showAdminTermsPrivacy(context);
+          case 'help':
+            showAdminHelp(context);
+          case 'about':
+            showAdminAbout(context);
           case 'logout':
             _confirmLogout(context);
         }
@@ -1495,78 +1570,116 @@ class _AdminAccountMenu extends StatelessWidget {
         PopupMenuItem<String>(
           enabled: false,
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          child: Row(
-            children: [
-              avatar(21),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Admin',
-                      style: GoogleFonts.montserrat(
-                        color: c.textPrimary,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      'Administrator',
-                      style: GoogleFonts.montserrat(
-                        color: c.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                    if (email.isNotEmpty)
+          child: withProfile(
+            (profile) => Row(
+              children: [
+                avatar(21, profile),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        email,
+                        profile?.name ?? 'Admin',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: GoogleFonts.montserrat(
-                          color: c.textMuted,
-                          fontSize: 11.5,
+                          color: c.textPrimary,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                  ],
+                      Text(
+                        'Administrator',
+                        style: GoogleFonts.montserrat(
+                          color: c.textSecondary,
+                          fontSize: 12,
+                        ),
+                      ),
+                      if (email.isNotEmpty)
+                        Text(
+                          email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.montserrat(
+                            color: c.textMuted,
+                            fontSize: 11.5,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         const PopupMenuDivider(),
         item('manage', Icons.manage_accounts_outlined, 'Manage Account'),
         item('suspend', Icons.person_off_outlined, 'Suspend Accounts'),
+        item('maintenance', Icons.engineering_outlined, 'System Maintenance'),
+        const PopupMenuDivider(),
+        item('terms', Icons.policy_outlined, 'Terms & Privacy'),
+        item('help', Icons.help_outline_rounded, 'Help & Support'),
+        item('about', Icons.info_outline_rounded, 'About AgriTrade+'),
         const PopupMenuDivider(),
         item('logout', Icons.logout_rounded, 'Logout', color: c.red),
       ],
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(4, 4, 10, 4),
-        decoration: BoxDecoration(
-          color: c.surfaceAlt,
-          borderRadius: BorderRadius.circular(AdminRadii.pill),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            avatar(15),
-            const SizedBox(width: 8),
-            Text(
-              'Admin',
-              style: TextStyle(
-                color: c.textPrimary,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 2),
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 18,
-              color: c.textSecondary,
-            ),
-          ],
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          height: _buttonHeight,
+          padding: collapsed
+              ? EdgeInsets.zero
+              : const EdgeInsets.fromLTRB(8, 0, 6, 0),
+          alignment: collapsed ? Alignment.center : null,
+          decoration: BoxDecoration(
+            color: AppTheme.dark.withValues(alpha: _hovered ? 0.08 : 0),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: collapsed
+              ? withProfile((profile) => avatar(16, profile))
+              : withProfile(
+                  (profile) => Row(
+                    children: [
+                      avatar(16, profile),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              profile?.name ?? 'Admin',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.montserrat(
+                                color: c.textPrimary,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              'Administrator',
+                              maxLines: 1,
+                              style: GoogleFonts.montserrat(
+                                color: c.textSecondary,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        Icons.unfold_more_rounded,
+                        size: 18,
+                        color: c.textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
         ),
       ),
     );
@@ -2134,7 +2247,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
       required IconData icon,
       required String Function(T value) value,
       required String Function(T value) caption,
-      required VoidCallback onTap,
+      VoidCallback? onTap,
       bool attention = false,
     }) {
       if (metric.isLoading) {
@@ -2169,7 +2282,8 @@ class _AnalyticsDashboardView extends StatelessWidget {
       );
     }
 
-    // Each card opens the page its figure comes from.
+    // Each card opens the page its figure comes from — except Total
+    // Transaction Value, which has no page of its own.
     void open(AdminNotificationTarget page) =>
         adminOpenPageRequest.value = page;
 
@@ -2186,8 +2300,8 @@ class _AnalyticsDashboardView extends StatelessWidget {
               '${v.farmers} approved ${v.farmers == 1 ? 'farmer' : 'farmers'}'
               ' · ${v.buyers} ${v.buyers == 1 ? 'buyer' : 'buyers'}',
           onTap: () {
-            AdminSubNav.verification.value = VerificationSection.accounts;
-            open(AdminNotificationTarget.verification);
+            AdminSubNav.accounts.value = UserAccountsSection.farmers;
+            open(AdminNotificationTarget.farmers);
           },
         ),
         // Farmers who registered and are neither approved nor rejected yet.
@@ -2198,10 +2312,7 @@ class _AnalyticsDashboardView extends StatelessWidget {
           value: (v) => '$v',
           caption: (_) => 'Farmers awaiting admin review',
           attention: true,
-          onTap: () {
-            AdminSubNav.verification.value = VerificationSection.applications;
-            open(AdminNotificationTarget.verification);
-          },
+          onTap: () => open(AdminNotificationTarget.verification),
         ),
         // Reports not yet resolved or dismissed, whoever filed them.
         item(
@@ -2223,7 +2334,6 @@ class _AnalyticsDashboardView extends StatelessWidget {
           icon: Icons.payments_outlined,
           value: (v) => formatPeso(v),
           caption: (_) => 'Completed orders only',
-          onTap: () => open(AdminNotificationTarget.transactions),
         ),
       ],
     );
@@ -2260,29 +2370,28 @@ class _DashboardSectionsSkeleton extends StatelessWidget {
   }
 }
 
-/// The Verification page: farmers' applications (the Verification Queue),
-/// or every user account — chosen from the sidebar's submenu (see
-/// AdminSubNav.verification). Both stay alive, so switching back does not
-/// reload either.
-class _VerificationPage extends StatelessWidget {
-  const _VerificationPage();
+/// The User Accounts page: the farmers (the Farmer List), or the buyers'
+/// accounts — chosen from the sidebar's submenu (see AdminSubNav.accounts).
+/// Both stay alive, so switching back does not reload either.
+class _UserAccountsPage extends StatelessWidget {
+  const _UserAccountsPage();
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<VerificationSection>(
-      valueListenable: AdminSubNav.verification,
+    return ValueListenableBuilder<UserAccountsSection>(
+      valueListenable: AdminSubNav.accounts,
       builder: (context, section, _) => IndexedStack(
         index: section.index,
         sizing: StackFit.expand,
         children: [
-          const VerificationQueueView(),
+          const FarmerListView(),
           Padding(
             padding: const EdgeInsets.fromLTRB(24, 4, 24, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // The title is in the utility bar above.
-                const Expanded(child: AdminUserAccountsView()),
+                const Expanded(child: AdminUserAccountsView(buyersOnly: true)),
               ],
             ),
           ),
@@ -2770,7 +2879,6 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
           // AdminThemeScope.of(context) instead of losing the theme.
           return AdminThemeScope(
             palette: themeScope.palette,
-            onToggleTheme: themeScope.onToggleTheme,
             child: _FullscreenHeatmapPage(
               initialCamera: _camera,
               points: points,
@@ -4102,7 +4210,25 @@ class _PriceManagementView extends StatefulWidget {
   State<_PriceManagementView> createState() => _PriceManagementViewState();
 }
 
-class _PriceManagementViewState extends State<_PriceManagementView> {
+class _PriceManagementViewState extends State<_PriceManagementView>
+    with AdminPageSearch {
+  // Typed in the header's search box. It matches the table's text columns
+  // only — Commodity, Category, Status and Unit — not its prices or dates.
+  String get _search => pageSearch.trim().toLowerCase();
+
+  // A commodity's Status, as its column shows it.
+  static String _statusLabel(
+    Map<String, dynamic> data, {
+    required String? category,
+    required bool isActive,
+  }) {
+    if (!isActive) {
+      final reason = (data['archiveReason'] ?? '').toString().trim();
+      return reason.isEmpty ? 'Archived' : 'Archived — $reason';
+    }
+    return category == null ? 'No category' : 'Active';
+  }
+
   // The commodities whose box is ticked, by document id.
   final Set<String> _ticked = {};
   bool _archiving = false;
@@ -4695,6 +4821,8 @@ class _PriceManagementViewState extends State<_PriceManagementView> {
                   width: double.infinity,
                   padding: kAdminTablePadding,
                   decoration: adminTableCard(c),
+                  // The header band follows the rounded corners.
+                  clipBehavior: Clip.antiAlias,
                   child: const AdminEmptyState(
                     icon: Icons.price_change_outlined,
                     title: 'No admin reference prices set yet',
@@ -4707,20 +4835,47 @@ class _PriceManagementViewState extends State<_PriceManagementView> {
               // Two tables, never mixed: the commodities in use, and the
               // archive. An archived commodity leaves the first and is
               // found (and restored) in the second.
-              final rows = [
+              final inTable = [
                 for (final row in all)
                   if (row.isActive != _showArchived) row,
               ];
+              final query = _search;
+              final rows = query.isEmpty
+                  ? inTable
+                  : [
+                      for (final row in inTable)
+                        if ([
+                          row.name,
+                          row.category ?? '',
+                          _statusLabel(
+                            row.data,
+                            category: row.category,
+                            isActive: row.isActive,
+                          ),
+                          (row.data['unit'] ?? '').toString(),
+                        ].any((text) => text.toLowerCase().contains(query)))
+                          row,
+                    ];
               final secondary = TextStyle(color: c.textSecondary);
 
               return Container(
                 width: double.infinity,
                 padding: kAdminTablePadding,
                 decoration: adminTableCard(c),
+                // The header band follows the rounded corners.
+                clipBehavior: Clip.antiAlias,
                 // Sized to fit its content naturally (no fixed/bounded
                 // height here) — the page-level scroll above is what
                 // reveals rows past the viewport, not a clipped box.
-                child: rows.isEmpty
+                child: rows.isEmpty && inTable.isNotEmpty
+                    ? const AdminEmptyState(
+                        icon: Icons.search_off,
+                        title: 'No commodities match your search',
+                        subtitle:
+                            'The search looks at Commodity, Category, Status '
+                            'and Unit.',
+                      )
+                    : rows.isEmpty
                     ? AdminEmptyState(
                         icon: _showArchived
                             ? Icons.archive_outlined
@@ -4732,76 +4887,96 @@ class _PriceManagementViewState extends State<_PriceManagementView> {
                             ? 'A commodity you archive is kept here, and can be restored.'
                             : 'Add a commodity, or restore one from Archived.',
                       )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          AdminTableFit(
-                            table: DataTable(
-                              headingRowColor: WidgetStateProperty.all(
-                                adminTableHeaderColor(c),
-                              ),
-                              dataRowColor: adminTableRowColor(c),
-                              columnSpacing: kAdminTableColumnSpacing,
-                              horizontalMargin: kAdminTableMargin,
-                              headingTextStyle: adminTableHeaderStyle(c),
-                              dataTextStyle: TextStyle(
-                                fontFamily: kAdminFontFamily,
-                                color: c.textPrimary,
-                                fontSize: 13,
-                              ),
-                              columns: const [
-                                DataColumn(label: Text('Commodity')),
-                                DataColumn(label: Text('Category')),
-                                DataColumn(label: Text('Status')),
-                                DataColumn(
-                                  label: Text(
-                                    'Current Market Average (Retail)',
-                                  ),
+                    // 10 commodities a page; back to the first on a new
+                    // search or when switching to Archived.
+                    : AdminPaged<
+                        ({
+                          String id,
+                          Map<String, dynamic> data,
+                          String name,
+                          String? category,
+                          bool isActive,
+                        })
+                      >(
+                        items: rows,
+                        resetKey: (_showArchived, query),
+                        builder: (context, page) => Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            AdminTableFit(
+                              table: DataTable(
+                                headingRowColor: WidgetStateProperty.all(
+                                  adminTableHeaderColor(c),
                                 ),
-                                DataColumn(
-                                  label: Text('Admin Reference Price'),
+                                dataRowColor: adminTableRowColor(c),
+                                columnSpacing: kAdminTableColumnSpacing,
+                                horizontalMargin: kAdminTableMargin,
+                                headingTextStyle: adminTableHeaderStyle(c),
+                                dataTextStyle: TextStyle(
+                                  fontFamily: kAdminFontFamily,
+                                  color: c.textPrimary,
+                                  fontSize: 13,
                                 ),
-                                DataColumn(label: Text('Unit')),
-                                DataColumn(label: Text('Price Date')),
-                                DataColumn(label: Text('Actions')),
-                              ],
-                              rows: [
-                                for (final row in rows)
-                                  _commodityRow(
-                                    context,
-                                    c,
-                                    id: row.id,
-                                    data: row.data,
-                                    name: row.name,
-                                    category: row.category,
-                                    isActive: row.isActive,
-                                    products: products,
-                                    secondary: secondary,
-                                  ),
-                              ],
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${rows.length} '
-                                    '${rows.length == 1 ? 'commodity' : 'commodities'}',
-                                    style: TextStyle(
-                                      color: c.textSecondary,
-                                      fontSize: 12,
+                                columns: const [
+                                  DataColumn(label: Text('Commodity')),
+                                  DataColumn(label: Text('Category')),
+                                  DataColumn(label: Text('Status')),
+                                  DataColumn(
+                                    label: Text(
+                                      'Current Market Average (Retail)',
                                     ),
                                   ),
-                                ),
-                              ],
+                                  DataColumn(
+                                    label: Text('Admin Reference Price'),
+                                  ),
+                                  DataColumn(label: Text('Unit')),
+                                  DataColumn(label: Text('Price Date')),
+                                  DataColumn(label: Text('Actions')),
+                                ],
+                                rows: [
+                                  for (final row in page)
+                                    _commodityRow(
+                                      context,
+                                      c,
+                                      id: row.id,
+                                      data: row.data,
+                                      name: row.name,
+                                      category: row.category,
+                                      isActive: row.isActive,
+                                      products: products,
+                                      secondary: secondary,
+                                    ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                            // The count; the pager says it on a longer list.
+                            if (rows.length <= kAdminRowsPerPage)
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        query.isEmpty
+                                            ? '${rows.length} '
+                                                  '${rows.length == 1 ? 'commodity' : 'commodities'}'
+                                            : 'Showing ${rows.length} of '
+                                                  '${inTable.length} '
+                                                  '${inTable.length == 1 ? 'commodity' : 'commodities'}',
+                                        style: TextStyle(
+                                          color: c.textSecondary,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
               );
             },
@@ -4851,13 +5026,7 @@ class _PriceManagementViewState extends State<_PriceManagementView> {
         DataCell(Text(category ?? '—', style: secondary)),
         DataCell(
           Text(
-            !isActive
-                ? ((data['archiveReason'] ?? '').toString().trim().isEmpty
-                      ? 'Archived'
-                      : 'Archived — ${data['archiveReason']}')
-                : category == null
-                ? 'No category'
-                : 'Active',
+            _statusLabel(data, category: category, isActive: isActive),
             style: TextStyle(
               color: category != null && isActive
                   ? c.textPrimary
@@ -5121,11 +5290,77 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
         ? widget.initialPrice!.toStringAsFixed(2)
         : '',
   );
+  // Adding: the unit is typed. Updating: it is chosen from the units the
+  // app knows (kCommodityUnitOptions), so a misspelling cannot slip in.
   late final TextEditingController _unitController = TextEditingController(
     text: (widget.initialUnit == null || widget.initialUnit!.isEmpty)
         ? 'kg'
         : widget.initialUnit,
   );
+  bool get _editing => widget.commodityId != null;
+
+  /// [text] as one of the known units, ignoring capitals and extra
+  /// spaces; null when it is none of them.
+  static String? _knownUnit(String? text) {
+    final wanted = (text ?? '').trim().toLowerCase().replaceAll(
+      RegExp(r'\s+'),
+      ' ',
+    );
+    for (final unit in kCommodityUnitOptions) {
+      if (unit == wanted) return unit;
+    }
+    return null;
+  }
+
+  // The unit chosen while updating. A saved unit the app does not know
+  // (a misspelling) is not offered: one of the known units must be chosen.
+  // None saved at all reads as the default unit, as it always has.
+  late String? _unitChoice = (widget.initialUnit ?? '').trim().isEmpty
+      ? kDefaultUnit
+      : _knownUnit(widget.initialUnit);
+
+  Future<void> _chooseUnit(BuildContext plateContext) async {
+    final plate = plateContext.findRenderObject();
+    final overlay = Navigator.of(context).overlay?.context.findRenderObject();
+    if (plate is! RenderBox || overlay is! RenderBox) return;
+    final corner = plate.localToGlobal(
+      Offset(0, plate.size.height + 4),
+      ancestor: overlay,
+    );
+    final chosen = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        corner.dx,
+        corner.dy,
+        overlay.size.width - corner.dx - plate.size.width,
+        0,
+      ),
+      constraints: BoxConstraints(
+        minWidth: plate.size.width,
+        maxWidth: plate.size.width,
+      ),
+      items: [
+        for (final unit in kCommodityUnitOptions)
+          PopupMenuItem(
+            value: unit,
+            child: Text(
+              unit,
+              style: TextStyle(
+                fontWeight: unit == _unitChoice
+                    ? FontWeight.w700
+                    : FontWeight.w500,
+              ),
+            ),
+          ),
+      ],
+    );
+    if (chosen != null && mounted) {
+      setState(() {
+        _unitChoice = chosen;
+        _error = null;
+      });
+    }
+  }
 
   // The category farmers and buyers see this commodity under, and whether
   // farmers may choose it for a new product. Together with the name and
@@ -5202,7 +5437,12 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
   Future<void> _save() async {
     final name = _nameController.text.trim();
     final price = double.tryParse(_priceController.text.trim());
-    final unit = _unitController.text.trim();
+    // Typed when adding: a known unit is saved in its own spelling ("KG"
+    // → "kg"), anything else as typed.
+    final typedUnit = _unitController.text.trim();
+    final unit = _editing
+        ? (_unitChoice ?? '')
+        : (_knownUnit(typedUnit) ?? typedUnit);
     final category = _categoryController.text.trim();
 
     if (name.isEmpty) {
@@ -5215,6 +5455,10 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
     }
     if (price == null || price <= 0) {
       setState(() => _error = 'Enter a valid price.');
+      return;
+    }
+    if (_editing && _unitChoice == null) {
+      setState(() => _error = 'Choose a unit.');
       return;
     }
 
@@ -5355,14 +5599,30 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 14),
-              AdminField(
-                controller: _unitController,
-                icon: Icons.straighten_rounded,
-                decoration: const InputDecoration(
-                  labelText: 'Unit',
-                  hintText: 'e.g. kg, piece, kg liveweight',
+              if (_editing)
+                Builder(
+                  builder: (plateContext) => AdminFieldPlate(
+                    label: 'Unit',
+                    icon: Icons.straighten_rounded,
+                    value: _unitChoice ?? 'Choose a unit',
+                    helper: _unitChoice == null
+                        ? 'The saved unit "${widget.initialUnit}" is not one '
+                              'the app knows. Choose one.'
+                        : null,
+                    onTap: _saving ? null : () => _chooseUnit(plateContext),
+                  ),
+                )
+              else
+                AdminField(
+                  controller: _unitController,
+                  icon: Icons.straighten_rounded,
+                  decoration: InputDecoration(
+                    labelText: 'Unit',
+                    hintText: 'e.g. kg, piece, kg liveweight',
+                    helperText:
+                        'Known units: ${kCommodityUnitOptions.join(', ')}',
+                  ),
                 ),
-              ),
               const SizedBox(height: 14),
               // The date this price applies from. Every price is kept under
               // its date, so a history builds up month by month.

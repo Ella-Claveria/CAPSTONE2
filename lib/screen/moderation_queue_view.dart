@@ -14,8 +14,6 @@ import '../services/dashboard_data_service.dart';
 import '../services/market_price_helpers.dart';
 import '../services/moderation_model.dart';
 import 'admin_account_dialog.dart';
-import 'admin_notifications.dart'
-    show AdminNotificationTarget, adminOpenPageRequest;
 import 'admin_user_accounts_view.dart' show maskEmail;
 import 'admin_dashboard_screen.dart'
     show
@@ -468,6 +466,8 @@ class _ModerationQueueViewState extends State<ModerationQueueView>
                           child: Container(
                             width: double.infinity,
                             decoration: adminTableCard(c, tabbed: true),
+                            // The header band follows the rounded corners.
+                            clipBehavior: Clip.antiAlias,
                             padding: kAdminTablePadding,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -484,79 +484,55 @@ class _ModerationQueueViewState extends State<ModerationQueueView>
                       );
                     }
 
-                    return SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _ReportFilterBar(
-                            c: c,
-                            targetTypeFilter: _targetTypeFilter,
-                            onTargetTypeChanged: (v) =>
-                                setState(() => _targetTypeFilter = v),
-                            reasonOptions: reasonOptions,
-                            reasonFilter: _reasonFilter,
-                            onReasonChanged: (v) =>
-                                setState(() => _reasonFilter = v),
-                          ),
-                          const SizedBox(height: 16),
-                          AdminTabbedTable<ModerationSection>(
-                            selected: _tab,
-                            onSelected: (t) => AdminSubNav.moderation.value = t,
-                            trailing: selectionNote,
-                            tabs: [
-                              (
-                                value: ModerationSection.pending,
-                                label: 'Pending',
-                                count: pendingCount,
-                                icon: Icons.inbox_outlined,
-                              ),
-                              (
-                                value: ModerationSection.underReview,
-                                label: 'Under Review',
-                                count: underReviewCount,
-                                icon: Icons.manage_search_rounded,
-                              ),
-                              (
-                                value: ModerationSection.resolved,
-                                label: 'Resolved',
-                                count: resolvedCount,
-                                icon: Icons.task_alt_rounded,
+                    final filters = _ReportFilterBar(
+                      c: c,
+                      targetTypeFilter: _targetTypeFilter,
+                      onTargetTypeChanged: (v) =>
+                          setState(() => _targetTypeFilter = v),
+                      reasonOptions: reasonOptions,
+                      reasonFilter: _reasonFilter,
+                      onReasonChanged: (v) => setState(() => _reasonFilter = v),
+                    );
+
+                    return LayoutBuilder(
+                      // On a window wide enough, the filters sit level with
+                      // the tabs, at the right; otherwise on a row above.
+                      builder: (context, constraints) {
+                        final inline =
+                            constraints.maxWidth >=
+                            _ReportFilterBar.widthFor(reasonOptions) +
+                                _tabsRoom;
+                        return SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!inline) ...[
+                                filters,
+                                const SizedBox(height: 16),
+                              ],
+                              _reportTabs(
+                                c,
+                                trailing: inline
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          selectionNote,
+                                          if (_ticked.isNotEmpty)
+                                            const SizedBox(width: 12),
+                                          filters.inline(),
+                                        ],
+                                      )
+                                    : selectionNote,
+                                pendingCount: pendingCount,
+                                underReviewCount: underReviewCount,
+                                resolvedCount: resolvedCount,
+                                bucketRows: bucketRows,
+                                rows: rows,
                               ),
                             ],
-                            child: Container(
-                              width: double.infinity,
-                              decoration: adminTableCard(c, tabbed: true),
-                              padding: kAdminTablePadding,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  if (bucketRows.isEmpty)
-                                    AdminEmptyState(
-                                      icon: Icons.fact_check_outlined,
-                                      title: _emptyTitleFor(_tab),
-                                      subtitle: _emptySubtitleFor(_tab),
-                                    )
-                                  else if (rows.isEmpty)
-                                    AdminEmptyState(
-                                      icon: Icons.search_off,
-                                      title:
-                                          'No matches for the current search/filters.',
-                                      subtitle:
-                                          'Try clearing the search or filters above.',
-                                    )
-                                  else
-                                    _ReportTable(
-                                      c: c,
-                                      rows: rows,
-                                      ticked: _ticked,
-                                      onTicked: _tick,
-                                    ),
-                                ],
-                              ),
-                            ),
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 );
@@ -564,6 +540,83 @@ class _ModerationQueueViewState extends State<ModerationQueueView>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // Room the three tabs take at the left of their row, with a gap before
+  // the filters beside them.
+  static const double _tabsRoom = 560;
+
+  Widget _reportTabs(
+    AdminPalette c, {
+    required Widget trailing,
+    required int pendingCount,
+    required int underReviewCount,
+    required int resolvedCount,
+    required List<_ReportRow> bucketRows,
+    required List<_ReportRow> rows,
+  }) {
+    return AdminTabbedTable<ModerationSection>(
+      selected: _tab,
+      onSelected: (t) => AdminSubNav.moderation.value = t,
+      trailing: trailing,
+      tabs: [
+        (
+          value: ModerationSection.pending,
+          label: 'Pending',
+          count: pendingCount,
+          icon: Icons.inbox_outlined,
+        ),
+        (
+          value: ModerationSection.underReview,
+          label: 'Under Review',
+          count: underReviewCount,
+          icon: Icons.manage_search_rounded,
+        ),
+        (
+          value: ModerationSection.resolved,
+          label: 'Resolved',
+          count: resolvedCount,
+          icon: Icons.task_alt_rounded,
+        ),
+      ],
+      child: Container(
+        width: double.infinity,
+        decoration: adminTableCard(c, tabbed: true),
+        // The header band follows the rounded corners.
+        clipBehavior: Clip.antiAlias,
+        padding: kAdminTablePadding,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (bucketRows.isEmpty)
+              AdminEmptyState(
+                icon: Icons.fact_check_outlined,
+                title: _emptyTitleFor(_tab),
+                subtitle: _emptySubtitleFor(_tab),
+              )
+            else if (rows.isEmpty)
+              AdminEmptyState(
+                icon: Icons.search_off,
+                title: 'No matches for the current search/filters.',
+                subtitle: 'Try clearing the search or filters above.',
+              )
+            else
+              // 10 reports a page; back to the first on a new tab, filter
+              // or search.
+              AdminPaged<_ReportRow>(
+                items: rows,
+                resetKey: (_tab, _targetTypeFilter, _reasonFilter, pageSearch),
+                builder: (context, page) => _ReportTable(
+                  c: c,
+                  rows: page,
+                  ticked: _ticked,
+                  onTicked: _tick,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -631,11 +684,12 @@ class _ModerationQueueViewState extends State<ModerationQueueView>
           ),
         );
 
-    return _ViolationsTable(
-      c: c,
-      rows: summaries,
-      ticked: _ticked,
-      onTicked: _tick,
+    // 10 accounts a page.
+    return AdminPaged<_ViolationSummary>(
+      items: summaries,
+      resetKey: pageSearch,
+      builder: (context, page) =>
+          _ViolationsTable(c: c, rows: page, ticked: _ticked, onTicked: _tick),
     );
   }
 }
@@ -652,6 +706,10 @@ class _ReportFilterBar extends StatelessWidget {
   final String reasonFilter;
   final ValueChanged<String> onReasonChanged;
 
+  /// On one line, level with the tabs, instead of wrapping on a row of
+  /// its own.
+  final bool oneLine;
+
   const _ReportFilterBar({
     required this.c,
     required this.targetTypeFilter,
@@ -659,7 +717,39 @@ class _ReportFilterBar extends StatelessWidget {
     required this.reasonOptions,
     required this.reasonFilter,
     required this.onReasonChanged,
+    this.oneLine = false,
   });
+
+  /// The same filters, on one line.
+  _ReportFilterBar inline() => _ReportFilterBar(
+    c: c,
+    targetTypeFilter: targetTypeFilter,
+    onTargetTypeChanged: onTargetTypeChanged,
+    reasonOptions: reasonOptions,
+    reasonFilter: reasonFilter,
+    onReasonChanged: onReasonChanged,
+    oneLine: true,
+  );
+
+  static const double _targetWidth = 130;
+  static const double _reasonWidth = 160;
+  static const double _spacing = 12;
+
+  // Reasons on record that neither reporter's list has: review reports,
+  // older chat reports.
+  static List<String> _otherReasons(List<String> reasonOptions) => [
+    for (final r in reasonOptions)
+      if (r != 'All' &&
+          !kBuyerReportReasons.contains(r) &&
+          !kFarmerReportReasons.contains(r))
+        r,
+  ];
+
+  /// How wide the filters are on one line.
+  static double widthFor(List<String> reasonOptions) {
+    final reasons = _otherReasons(reasonOptions).isEmpty ? 2 : 3;
+    return _targetWidth + reasons * (_reasonWidth + _spacing);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -668,17 +758,11 @@ class _ReportFilterBar extends StatelessWidget {
     // for any other reason actually on record (review reports, older chat
     // reports). One reason is filtered by at a time: choosing in one
     // dropdown puts the others back on their "all" line.
-    final otherReasons = [
-      for (final r in reasonOptions)
-        if (r != 'All' &&
-            !kBuyerReportReasons.contains(r) &&
-            !kFarmerReportReasons.contains(r))
-          r,
-    ];
+    final otherReasons = _otherReasons(reasonOptions);
     Widget reasonDropdown(String all, IconData icon, List<String> reasons) =>
         AdminPillDropdown<String>(
           value: reasons.contains(reasonFilter) ? reasonFilter : 'All',
-          width: 280,
+          width: _reasonWidth,
           icon: icon,
           items: [
             DropdownMenuItem(value: 'All', child: Text(all)),
@@ -688,41 +772,54 @@ class _ReportFilterBar extends StatelessWidget {
           onChanged: onReasonChanged,
         );
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 12,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        AdminPillDropdown<String>(
-          value: targetTypeFilter,
-          width: 190,
-          icon: Icons.category_outlined,
-          items: const [
-            DropdownMenuItem(value: 'All', child: Text('All target types')),
-            DropdownMenuItem(value: 'Listing', child: Text('Listing')),
-            DropdownMenuItem(value: 'Farmer', child: Text('Farmer')),
-            DropdownMenuItem(value: 'Buyer', child: Text('Buyer')),
-            DropdownMenuItem(value: 'Review', child: Text('Review')),
+    final dropdowns = [
+      AdminPillDropdown<String>(
+        value: targetTypeFilter,
+        width: _targetWidth,
+        icon: Icons.category_outlined,
+        items: const [
+          DropdownMenuItem(value: 'All', child: Text('All')),
+          DropdownMenuItem(value: 'Listing', child: Text('Listing')),
+          DropdownMenuItem(value: 'Farmer', child: Text('Farmer')),
+          DropdownMenuItem(value: 'Buyer', child: Text('Buyer')),
+          DropdownMenuItem(value: 'Review', child: Text('Review')),
+        ],
+        onChanged: onTargetTypeChanged,
+      ),
+      reasonDropdown(
+        'Buyer',
+        Icons.shopping_basket_outlined,
+        kBuyerReportReasons,
+      ),
+      reasonDropdown(
+        'Farmer',
+        Icons.agriculture_outlined,
+        kFarmerReportReasons,
+      ),
+      if (otherReasons.isNotEmpty)
+        reasonDropdown(
+          'Other',
+          Icons.report_gmailerrorred_outlined,
+          otherReasons,
+        ),
+    ];
+
+    if (oneLine) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < dropdowns.length; i++) ...[
+            if (i > 0) const SizedBox(width: _spacing),
+            dropdowns[i],
           ],
-          onChanged: onTargetTypeChanged,
-        ),
-        reasonDropdown(
-          'Buyer reporting a farmer',
-          Icons.shopping_basket_outlined,
-          kBuyerReportReasons,
-        ),
-        reasonDropdown(
-          'Farmer reporting a buyer',
-          Icons.agriculture_outlined,
-          kFarmerReportReasons,
-        ),
-        if (otherReasons.isNotEmpty)
-          reasonDropdown(
-            'Other reasons',
-            Icons.report_gmailerrorred_outlined,
-            otherReasons,
-          ),
-      ],
+        ],
+      );
+    }
+    return Wrap(
+      spacing: _spacing,
+      runSpacing: _spacing,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: dropdowns,
     );
   }
 }
@@ -949,33 +1046,37 @@ class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
               count: _ticked.length,
               onClear: () => setState(_ticked.clear),
             ),
-            AdminTableFit(
-              table: DataTable(
-                headingRowColor: WidgetStateProperty.all(
-                  adminTableHeaderColor(c),
+            // 10 flagged prices a page.
+            AdminPaged<DataRow>(
+              items: rows,
+              builder: (context, page) => AdminTableFit(
+                table: DataTable(
+                  headingRowColor: WidgetStateProperty.all(
+                    adminTableHeaderColor(c),
+                  ),
+                  dataRowColor: adminTableRowColor(c),
+                  columnSpacing: kAdminTableColumnSpacing,
+                  horizontalMargin: kAdminTableMargin,
+                  headingTextStyle: adminTableHeaderStyle(c),
+                  dataTextStyle: TextStyle(
+                    fontFamily: kAdminFontFamily,
+                    color: c.textPrimary,
+                    fontSize: 13,
+                  ),
+                  columns: const [
+                    DataColumn(label: Text('Product')),
+                    DataColumn(label: Text('Farmer')),
+                    DataColumn(label: Text('Price Type')),
+                    DataColumn(label: Text('Entered Price')),
+                    DataColumn(label: Text('Suggested Range')),
+                    DataColumn(label: Text('Above Range')),
+                    DataColumn(label: Text('Data Availability')),
+                    DataColumn(label: Text('Reason')),
+                    DataColumn(label: Text('Status')),
+                    DataColumn(label: Text('Flagged')),
+                  ],
+                  rows: page,
                 ),
-                dataRowColor: adminTableRowColor(c),
-                columnSpacing: kAdminTableColumnSpacing,
-                horizontalMargin: kAdminTableMargin,
-                headingTextStyle: adminTableHeaderStyle(c),
-                dataTextStyle: TextStyle(
-                  fontFamily: kAdminFontFamily,
-                  color: c.textPrimary,
-                  fontSize: 13,
-                ),
-                columns: const [
-                  DataColumn(label: Text('Product')),
-                  DataColumn(label: Text('Farmer')),
-                  DataColumn(label: Text('Price Type')),
-                  DataColumn(label: Text('Entered Price')),
-                  DataColumn(label: Text('Suggested Range')),
-                  DataColumn(label: Text('Above Range')),
-                  DataColumn(label: Text('Data Availability')),
-                  DataColumn(label: Text('Reason')),
-                  DataColumn(label: Text('Status')),
-                  DataColumn(label: Text('Flagged')),
-                ],
-                rows: rows,
               ),
             ),
           ],
@@ -1473,6 +1574,96 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog>
     }
   }
 
+  // Listings restored from this dialog: the listing above is read once, so
+  // its status is shown from here after a restore.
+  final Set<String> _restoredListings = {};
+
+  /// Clears an Admin's hide on the reported listing — the only place a
+  /// hidden listing is brought back. The same change the Listings page's
+  /// Restore made: nothing else about the listing is touched, and the
+  /// farmer account, stock and archive status still decide whether buyers
+  /// see it.
+  Future<void> _restoreListing(String productId, String name) async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Restore "$name"?'),
+        content: const SizedBox(
+          width: 420,
+          child: Text(
+            'The admin restriction is cleared. The farmer account, stock and '
+            'archive status still decide whether buyers see it.',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    if (!await _ensureOnline(context)) return;
+    setState(() => _busy = true);
+    try {
+      final adminUid = FirebaseAuth.instance.currentUser?.uid;
+      final firestore = FirebaseFirestore.instance;
+      final ref = firestore.collection('products').doc(productId);
+      await firestore.runTransaction<void>((tx) async {
+        final current = await tx.get(ref);
+        if (!current.exists || current.data()?['isSuspended'] != true) {
+          throw StateError(
+            'This listing has already been restored or deleted.',
+          );
+        }
+        tx.update(ref, {
+          'isSuspended': false,
+          'moderationStatus': 'restored',
+          'moderationReason': FieldValue.delete(),
+          'moderatedBy': adminUid,
+          'moderatedAt': FieldValue.serverTimestamp(),
+        });
+        tx.set(
+          firestore
+              .collection('reports')
+              .doc(widget.reportId)
+              .collection('history')
+              .doc(),
+          {
+            'action': 'listing_restored',
+            'adminId': adminUid,
+            'createdAt': FieldValue.serverTimestamp(),
+          },
+        );
+      });
+      AuditLogService.log(
+        AuditAction.restoreListing,
+        'Restored listing $productId: $name '
+        '(report ${_shortId(widget.reportId)}).',
+      );
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _restoredListings.add(productId);
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Listing restored.')));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e is StateError ? e.message : 'Error: $e')),
+      );
+    }
+  }
+
   Future<void> _openActionDialog({
     required Map<String, dynamic> report,
     required String title,
@@ -1717,12 +1908,6 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog>
       violation: chosen,
       reportedRole: role,
     );
-  }
-
-  // Opens one of the portal's pages from the popup, which closes first.
-  void _openPage(AdminNotificationTarget page) {
-    Navigator.of(context).pop();
-    adminOpenPageRequest.value = page;
   }
 
   @override
@@ -2016,21 +2201,65 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog>
                       orderId.isNotEmpty ||
                       conversationId.isNotEmpty) ...[
                     _sectionLabel('Related Records'),
+                    // A listing an Admin hid is brought back from here:
+                    // the portal has no separate Listings page.
                     if (productId != null && productId.isNotEmpty)
-                      _linkRow(
-                        'Related Listing',
-                        (report['productName'] ?? _shortId(productId))
-                            .toString(),
-                        'Open Listings',
-                        () => _openPage(AdminNotificationTarget.listings),
+                      FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                        future: readOnce(
+                          'product/$productId',
+                          () => FirebaseFirestore.instance
+                              .collection('products')
+                              .doc(productId)
+                              .get(),
+                        ),
+                        builder: (context, productSnap) {
+                          final product = productSnap.data?.data();
+                          final name =
+                              (product?['name'] ??
+                                      report['productName'] ??
+                                      _shortId(productId))
+                                  .toString();
+                          final hidden =
+                              product?['isSuspended'] == true &&
+                              !_restoredListings.contains(productId);
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 160,
+                                  child: Text(
+                                    'Related Listing',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w600,
+                                      color: Colors.grey[700],
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    hidden ? '$name (hidden by Admin)' : name,
+                                  ),
+                                ),
+                                if (hidden)
+                                  TextButton.icon(
+                                    onPressed: _busy
+                                        ? null
+                                        : () =>
+                                              _restoreListing(productId, name),
+                                    icon: const Icon(
+                                      Icons.visibility_outlined,
+                                      size: 16,
+                                    ),
+                                    label: const Text('Restore listing'),
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
                       ),
                     if (orderId.isNotEmpty)
-                      _linkRow(
-                        'Related Order',
-                        _shortId(orderId),
-                        'Open Transactions',
-                        () => _openPage(AdminNotificationTarget.transactions),
-                      ),
+                      _detailRow('Related Order', _shortId(orderId)),
                     if (conversationId.isNotEmpty)
                       _detailRow(
                         'Related Conversation',
@@ -2096,9 +2325,11 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog>
                               : null,
                         ]);
                         final isArchived = product['isArchived'] == true;
-                        final isSuspended = product['isSuspended'] == true;
+                        final isSuspended =
+                            product['isSuspended'] == true &&
+                            !_restoredListings.contains(productId);
                         final listingStatus = isSuspended
-                            ? 'Suspended'
+                            ? 'Hidden by Admin'
                             : (isArchived ? 'Archived' : 'Active');
 
                         return Column(
@@ -2322,33 +2553,4 @@ class _ReportDetailDialogState extends State<_ReportDetailDialog>
       },
     );
   }
-}
-
-// A row whose value opens something.
-Widget _linkRow(
-  String label,
-  String value,
-  String linkLabel,
-  VoidCallback onOpen,
-) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(vertical: 2),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        SizedBox(
-          width: 160,
-          child: Text(
-            label,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[700],
-            ),
-          ),
-        ),
-        Expanded(child: Text(value)),
-        TextButton(onPressed: onOpen, child: Text(linkLabel)),
-      ],
-    ),
-  );
 }

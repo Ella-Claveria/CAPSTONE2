@@ -520,6 +520,8 @@ class _AdminListingsViewState extends State<AdminListingsView>
     return Container(
       width: double.infinity,
       decoration: adminTableCard(c, tabbed: true),
+      // The header band follows the rounded corners.
+      clipBehavior: Clip.antiAlias,
       padding: kAdminTablePadding,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

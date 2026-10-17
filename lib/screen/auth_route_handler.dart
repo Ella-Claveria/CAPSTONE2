@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_routing_service.dart';
 import '../services/auth_service.dart';
 import '../services/session_timeout_service.dart';
+import '../services/sign_in_alert_service.dart';
 import 'admin_dashboard_screen.dart';
 import 'buyer_marketplace_screen.dart';
 import 'farmer_home_screen.dart';
@@ -23,21 +24,28 @@ import 'email_verification_screen.dart';
 /// Always clears the navigation stack (pushAndRemoveUntil) so the device's
 /// back button can never return to a screen that belonged to a role/session
 /// that's no longer valid.
+///
+/// [announceSignIn]: this follows a login the user just made (not an app
+/// reopened while still signed in), so a farmer or buyer who gets into the
+/// app is emailed "You logged in to AgriTrade+" (SignInAlertService).
 Future<void> applyAuthRouteResult(
   BuildContext context,
-  AuthRouteResult result,
-) async {
+  AuthRouteResult result, {
+  bool announceSignIn = false,
+}) async {
   if (result.isSignedIn) {
     SessionTimeoutService.instance.recordActivity();
   }
   switch (result.decision) {
     case AuthRouteDecision.farmerHome:
+      if (announceSignIn) SignInAlertService.announce();
       _replaceWith(context, const FarmerHomeScreen());
       return;
     case AuthRouteDecision.farmerPendingReview:
       _replaceWith(context, const PendingApprovalScreen());
       return;
     case AuthRouteDecision.buyerHome:
+      if (announceSignIn) SignInAlertService.announce();
       _replaceWith(context, const BuyerMarketplaceScreen());
       return;
     case AuthRouteDecision.emailVerificationRequired:
@@ -99,7 +107,7 @@ Future<void> _blockAndReturnToLogin(
     builder: (dialogContext) => AgriDialog(
       icon: Icons.lock_outline,
       tone: AgriTone.warning,
-      title: const Text('Unable to Log In'),
+      title: Text(result.title ?? 'Unable to Log In'),
       content: Text(
         message ?? 'You are not able to access this at the moment.',
       ),

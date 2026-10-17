@@ -1,5 +1,5 @@
 // The "allow notifications" explanation uses the app's own popup, and its
-// two buttons are the same size even when one label wraps.
+// two buttons are stacked, the same size, with the main choice on top.
 import 'package:agritrade/widgets/agri_dialog.dart';
 import 'package:agritrade/widgets/permission_rationale_dialog.dart';
 import 'package:flutter/material.dart';
@@ -12,8 +12,9 @@ void main() {
   testWidgets('Not Now and Enable Notifications are the same size', (
     tester,
   ) async {
-    // A small phone, where "Enable Notifications" does not fit on one line.
-    tester.view.physicalSize = const Size(340, 700);
+    // Wide enough for the test font (much wider than Montserrat) to fit
+    // "Enable Notifications" on one line, as Montserrat does on a phone.
+    tester.view.physicalSize = const Size(480, 700);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
@@ -55,6 +56,18 @@ void main() {
     );
     expect(notNow.width, enable.width);
     expect(notNow.height, enable.height);
+    // Stacked: the main choice on top, each label on one line.
+    expect(
+      tester.getTopLeft(find.widgetWithText(AgriDialogButton, 'Not Now')).dy,
+      greaterThan(
+        tester
+            .getBottomLeft(
+              find.widgetWithText(AgriDialogButton, 'Enable Notifications'),
+            )
+            .dy,
+      ),
+    );
+    expect(enable.height, lessThan(60));
 
     await tester.tap(find.text('Not Now'));
     await tester.pumpAndSettle();

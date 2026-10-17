@@ -1,13 +1,14 @@
-import '../l10n/app_localizations.dart';
-import '../theme/app_theme.dart';
-import 'agri_dialog.dart';
 import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// One stop of a coach-mark tour: a widget to spotlight (via [targetKey])
-/// plus the tip shown next to it.
+import '../theme/app_theme.dart';
+
+/// One stop of a first-time tour: a widget to point at (via [targetKey])
+/// plus the short hint shown next to it.
 class CoachMarkStep {
   final GlobalKey targetKey;
   final String title;
@@ -20,11 +21,17 @@ class CoachMarkStep {
   });
 }
 
-/// Shows a subtle spotlighted walkthrough over up to a couple of key
-/// buttons — once ever per device per [prefsKey]. Call this after the
-/// screen's first frame (e.g. from a post-frame callback in initState), by
-/// which point every step's [CoachMarkStep.targetKey] must already be
-/// attached to a laid-out widget.
+/// A light first-time tour, once ever per device per [prefsKey]: a small
+/// bouncing arrow and a short label pointing at each button in turn. It
+/// never darkens or blocks the screen — every tap still does what it
+/// always does — and it is the user's own taps that move it along: any tap
+/// anywhere puts the next hint up, and the last one away. While a popup or
+/// another screen is in front of [context]'s screen (the Market tab guide,
+/// a page opened from the tour), the hints wait, hidden, and taps there do
+/// not count. Completes when the tour is over.
+///
+/// Call it after the screen's first frame (e.g. from a post-frame callback
+/// in initState).
 Future<void> showCoachMarksOnce({
   required BuildContext context,
   required String prefsKey,
@@ -42,141 +49,223 @@ Future<void> showCoachMarksOnce({
   // Give the frame a moment to settle (layout/animations) before measuring.
   await Future.delayed(const Duration(milliseconds: 500));
   if (!context.mounted) return;
-  await _CoachMarkOverlay.show(context, steps);
-}
 
-class _CoachMarkOverlay {
-  static Future<void> show(BuildContext context, List<CoachMarkStep> steps) {
-    final completer = Completer<void>();
-    late OverlayEntry entry;
-    var index = 0;
-
-    void close() {
-      entry.remove();
-      if (!completer.isCompleted) completer.complete();
-    }
-
-    void advance() {
-      if (index < steps.length - 1) {
-        index++;
-        entry.markNeedsBuild();
-      } else {
-        close();
-      }
-    }
-
-    entry = OverlayEntry(
-      builder: (overlayContext) {
-        final step = steps[index];
-        final box =
-            step.targetKey.currentContext?.findRenderObject() as RenderBox?;
-        if (box == null || !box.attached) {
-          // Target isn't on screen (e.g. a different tab is showing) — bail
-          // out quietly rather than drawing a spotlight pointing at nothing.
-          WidgetsBinding.instance.addPostFrameCallback((_) => close());
-          return const SizedBox.shrink();
-        }
-
-        final topLeft = box.localToGlobal(Offset.zero);
-        final size = box.size;
-        final center = topLeft + Offset(size.width / 2, size.height / 2);
-        final radius = (size.longestSide / 2) + 14;
-        final screenSize = MediaQuery.of(overlayContext).size;
-        final calloutBelow = center.dy < screenSize.height / 2;
-
-        return Stack(
-          children: [
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: advance,
-                child: CustomPaint(
-                  size: screenSize,
-                  painter: _SpotlightPainter(center: center, radius: radius),
-                ),
-              ),
-            ),
-            Positioned(
-              left: 32,
-              right: 32,
-              top: calloutBelow ? (center.dy + radius + 16) : null,
-              bottom: calloutBelow
-                  ? null
-                  : (screenSize.height - (center.dy - radius) + 16),
-              child: _CoachMarkCard(
-                step: step,
-                stepNumber: index + 1,
-                totalSteps: steps.length,
-                onNext: advance,
-                onSkip: close,
-              ),
-            ),
-          ],
-        );
+  final done = Completer<void>();
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => _CoachHints(
+      host: context,
+      steps: steps,
+      onDone: () {
+        entry.remove();
+        if (!done.isCompleted) done.complete();
       },
+    ),
+  );
+  Overlay.of(context, rootOverlay: true).insert(entry);
+  return done.future;
+}
+
+class _CoachHints extends StatefulWidget {
+  /// The screen the tour belongs to.
+  final BuildContext host;
+  final List<CoachMarkStep> steps;
+  final VoidCallback onDone;
+
+  const _CoachHints({
+    required this.host,
+    required this.steps,
+    required this.onDone,
+  });
+
+  @override
+  State<_CoachHints> createState() => _CoachHintsState();
+}
+
+class _CoachHintsState extends State<_CoachHints>
+    with SingleTickerProviderStateMixin {
+  // The arrow's gentle bounce; it also redraws the hint every frame, so it
+  // follows its button and notices when the screen is covered.
+  late final AnimationController _bounce = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  )..repeat(reverse: true);
+
+  var _index = 0;
+  var _finished = false;
+
+  @override
+  void initState() {
+    super.initState();
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onPointer);
+  }
+
+  @override
+  void dispose() {
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
+    _bounce.dispose();
+    super.dispose();
+  }
+
+  bool get _hostShowing {
+    if (!widget.host.mounted) return false;
+    return ModalRoute.of(widget.host)?.isCurrent ?? true;
+  }
+
+  // Fingers that went down while the hint was showing. A tap is judged by
+  // where it started: one on a popup's button closes the popup before
+  // the tour sees it lift, and must not count as a step.
+  final _downWhileShowing = <int>{};
+
+  // Any tap — a lifted finger — while a hint is up moves the tour along.
+  // The tap itself still reaches whatever was under it.
+  void _onPointer(PointerEvent event) {
+    if (event is PointerDownEvent) {
+      if (_hostShowing) _downWhileShowing.add(event.pointer);
+      return;
+    }
+    if (event is PointerCancelEvent) {
+      _downWhileShowing.remove(event.pointer);
+      return;
+    }
+    if (event is! PointerUpEvent) return;
+    final counts = _downWhileShowing.remove(event.pointer);
+    if (!counts || _finished || !_hostShowing) return;
+    if (_index < widget.steps.length - 1) {
+      setState(() => _index++);
+    } else {
+      _finish();
+    }
+  }
+
+  void _finish() {
+    if (_finished) return;
+    _finished = true;
+    // Not while the pointer event is still being handled.
+    WidgetsBinding.instance.addPostFrameCallback((_) => widget.onDone());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_finished) return const SizedBox.shrink();
+    if (!widget.host.mounted) {
+      _finish();
+      return const SizedBox.shrink();
+    }
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _bounce,
+        builder: (context, _) {
+          if (!_hostShowing) return const SizedBox.shrink();
+          final step = widget.steps[_index];
+          final box =
+              step.targetKey.currentContext?.findRenderObject() as RenderBox?;
+          if (box == null || !box.attached || !box.hasSize) {
+            return const SizedBox.shrink();
+          }
+          final target = box.localToGlobal(Offset.zero) & box.size;
+          return _hint(context, step, target);
+        },
+      ),
+    );
+  }
+
+  Widget _hint(BuildContext context, CoachMarkStep step, Rect target) {
+    final screen = MediaQuery.sizeOf(context);
+    // Above a button in the lower half of the screen, below one higher up.
+    final above = target.center.dy > screen.height / 2;
+    const bubbleWidth = 250.0;
+    const arrowSize = 30.0;
+    const gap = 6.0;
+    final lift = Curves.easeInOut.transform(_bounce.value) * 7;
+    final left = (target.center.dx - bubbleWidth / 2)
+        .clamp(16.0, math.max(16.0, screen.width - bubbleWidth - 16))
+        .toDouble();
+
+    final arrow = Icon(
+      above ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded,
+      size: arrowSize,
+      color: AppTheme.accent,
+      shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
+    );
+    final bubble = _HintBubble(
+      title: step.title,
+      message: step.message,
+      stepNumber: _index + 1,
+      totalSteps: widget.steps.length,
     );
 
-    Overlay.of(context, rootOverlay: true).insert(entry);
-    return completer.future;
+    return Stack(
+      children: [
+        // A soft ring around the button.
+        Positioned.fromRect(
+          rect: Rect.fromCircle(
+            center: target.center,
+            radius: target.shortestSide / 2 + 8 + lift * 0.4,
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: AppTheme.accent.withValues(alpha: 0.9),
+                width: 2.5,
+              ),
+            ),
+          ),
+        ),
+        // The arrow, nudging toward the button.
+        Positioned(
+          left: target.center.dx - arrowSize / 2,
+          top: above
+              ? target.top - gap - arrowSize - lift
+              : target.bottom + gap + lift,
+          child: arrow,
+        ),
+        Positioned(
+          left: left,
+          width: bubbleWidth,
+          top: above ? null : target.bottom + gap + arrowSize + 12,
+          bottom: above
+              ? screen.height - target.top + gap + arrowSize + 12
+              : null,
+          child: bubble,
+        ),
+      ],
+    );
   }
 }
 
-class _SpotlightPainter extends CustomPainter {
-  final Offset center;
-  final double radius;
-  const _SpotlightPainter({required this.center, required this.radius});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final overlayPath = Path()
-      ..addRect(Rect.fromLTWH(0, 0, size.width, size.height));
-    final holePath = Path()
-      ..addOval(Rect.fromCircle(center: center, radius: radius));
-    final scrim = Path.combine(PathOperation.difference, overlayPath, holePath);
-    canvas.drawPath(
-      scrim,
-      Paint()..color = Colors.black.withValues(alpha: 0.68),
-    );
-    canvas.drawCircle(
-      center,
-      radius,
-      Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _SpotlightPainter oldDelegate) =>
-      oldDelegate.center != center || oldDelegate.radius != radius;
-}
-
-/// The tip itself, in the app's one popup design (see agri_dialog.dart):
-/// the frosted card, Montserrat, a dark green title and the popup buttons —
-/// kept compact and to the right rather than full-width, since a tip is
-/// lighter than a dialog.
-class _CoachMarkCard extends StatelessWidget {
-  final CoachMarkStep step;
+/// The hint's label: dark green, small, with the step count.
+class _HintBubble extends StatelessWidget {
+  final String title;
+  final String message;
   final int stepNumber;
   final int totalSteps;
-  final VoidCallback onNext;
-  final VoidCallback onSkip;
 
-  const _CoachMarkCard({
-    required this.step,
+  const _HintBubble({
+    required this.title,
+    required this.message,
     required this.stepNumber,
     required this.totalSteps,
-    required this.onNext,
-    required this.onSkip,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isLast = stepNumber == totalSteps;
-    return AgriFrostedCard(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 11, 14, 11),
+        decoration: BoxDecoration(
+          color: AppTheme.dark,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x40000000),
+              blurRadius: 14,
+              offset: Offset(0, 4),
+            ),
+          ],
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -185,67 +274,51 @@ class _CoachMarkCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    step.title,
-                    style: GoogleFonts.montserrat(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.dark,
+                    title,
+                    style: const TextStyle(
+                      fontFamily: 'Montserrat',
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
                     ),
                   ),
                 ),
                 if (totalSteps > 1)
                   Text(
                     '$stepNumber/$totalSteps',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 12,
-                      color: Colors.grey[600],
+                    style: TextStyle(
+                      fontFamily: 'Montserrat',
+                      fontSize: 11,
+                      color: Colors.white.withValues(alpha: 0.7),
                     ),
                   ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 3),
             Text(
-              step.message,
-              style: GoogleFonts.montserrat(
-                fontSize: 13,
-                color: Colors.black87,
-                height: 1.45,
+              message,
+              style: TextStyle(
+                fontFamily: 'Montserrat',
+                fontSize: 12,
+                height: 1.4,
+                color: Colors.white.withValues(alpha: 0.9),
               ),
             ),
-            const SizedBox(height: 16),
-            // A single tip has nothing to skip: just the one button.
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                if (totalSteps > 1) ...[
-                  _action(label: 'Skip', onPressed: onSkip),
-                  const SizedBox(width: 10),
-                ],
-                _action(
-                  label: isLast
-                      ? (AppLocalizations.of(context)?.coachGotIt ?? 'Got it')
-                      : 'Next',
-                  onPressed: onNext,
-                  primary: true,
-                ),
-              ],
+            const SizedBox(height: 6),
+            Text(
+              stepNumber < totalSteps
+                  ? 'Tap anywhere to continue'
+                  : 'Tap anywhere to close',
+              style: TextStyle(
+                fontFamily: 'Montserrat',
+                fontSize: 10.5,
+                fontStyle: FontStyle.italic,
+                color: AppTheme.accent.withValues(alpha: 0.85),
+              ),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _action({
-    required String label,
-    required VoidCallback onPressed,
-    bool primary = false,
-  }) {
-    return AgriDialogButton(
-      label: label,
-      onPressed: onPressed,
-      compact: true,
-      kind: primary ? AgriButtonKind.primary : AgriButtonKind.secondary,
     );
   }
 }

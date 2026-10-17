@@ -26,7 +26,6 @@ Future<void> pump(WidgetTester tester, Widget child, {double width = 1400}) {
     MaterialApp(
       home: AdminThemeScope(
         palette: AdminPalette.light,
-        onToggleTheme: () {},
         child: Scaffold(
           body: SingleChildScrollView(
             child: Padding(padding: const EdgeInsets.all(24), child: child),

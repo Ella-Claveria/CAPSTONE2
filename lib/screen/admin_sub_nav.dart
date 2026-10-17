@@ -9,14 +9,14 @@ import '../services/audit_log_service.dart';
 /// Only pages that really have several views are here: a submenu item
 /// always opens something that exists.
 
-/// The Verification page's views: farmers' applications, and every user
-/// account.
-enum VerificationSection { applications, accounts }
+/// The User Accounts page's views: the farmers (the Farmer List), and the
+/// buyers' accounts.
+enum UserAccountsSection { farmers, buyers }
 
-extension VerificationSectionLabel on VerificationSection {
+extension UserAccountsSectionLabel on UserAccountsSection {
   String get label => switch (this) {
-    VerificationSection.applications => 'Farmer Applications',
-    VerificationSection.accounts => 'User Accounts',
+    UserAccountsSection.farmers => 'Farmers',
+    UserAccountsSection.buyers => 'Buyers',
   };
 }
 
@@ -63,6 +63,7 @@ extension AuditSectionInfo on AuditSection {
       AuditAction.newDeviceLogin,
       AuditAction.sessionReplaced,
       AuditAction.sessionForcedLogout,
+      AuditAction.sessionRevoked,
       AuditAction.passwordResetRequested,
     ],
     AuditSection.adminActions => const [
@@ -97,8 +98,8 @@ extension AuditSectionInfo on AuditSection {
 class AdminSubNav {
   AdminSubNav._();
 
-  static final ValueNotifier<VerificationSection> verification = ValueNotifier(
-    VerificationSection.applications,
+  static final ValueNotifier<UserAccountsSection> accounts = ValueNotifier(
+    UserAccountsSection.farmers,
   );
 
   static final ValueNotifier<ModerationSection> moderation = ValueNotifier(

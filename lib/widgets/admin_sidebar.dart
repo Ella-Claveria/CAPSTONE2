@@ -14,9 +14,47 @@ class AdminSidebarEntry {
   const AdminSidebarEntry(this.icon, this.label, {this.children = const []});
 }
 
-/// The Admin Portal's navigation: a dark green column with the AgriTrade+
-/// logo and wordmark on top and the pages under it, one item each. A page
-/// with [AdminSidebarEntry.children] has a small chevron and a submenu.
+/// The sidebar's colours.
+class AdminSidebarColors {
+  final Color background;
+  // The text and icons of every page that isn't open.
+  final Color foreground;
+  // The open page's tab, and its icon and text.
+  final Color activeBackground;
+  final Color activeForeground;
+  // The open submenu item's text and marker.
+  final Color accent;
+  // The line between the sidebar and the page.
+  final Color edge;
+  final bool lightWordmark;
+
+  const AdminSidebarColors._({
+    required this.background,
+    required this.foreground,
+    required this.activeBackground,
+    required this.activeForeground,
+    required this.accent,
+    required this.edge,
+    required this.lightWordmark,
+  });
+
+  // White, with the app's main dark green — the same as the portal's
+  // buttons — for the text, icons and the open page's tab.
+  static const light = AdminSidebarColors._(
+    background: Colors.white,
+    foreground: AppTheme.dark,
+    activeBackground: AppTheme.dark,
+    activeForeground: Colors.white,
+    accent: AppTheme.dark,
+    // Separates the white sidebar from the near-white page beside it.
+    edge: Color(0xFFE2E5E9),
+    lightWordmark: false,
+  );
+}
+
+/// The Admin Portal's navigation: a white column with the AgriTrade+ logo
+/// and wordmark on top and the pages under it, one item each. A page with [AdminSidebarEntry.children] has a small
+/// chevron and a submenu.
 ///
 /// The same widget is the full sidebar on a desktop window, the icon-only
 /// rail on a tablet-sized one ([collapsed]) and the contents of the
@@ -41,6 +79,14 @@ class AdminSidebar extends StatefulWidget {
   /// Icon-only rail: labels become tooltips.
   final bool collapsed;
 
+  /// Opens or closes the sidebar. When set, the expanded sidebar has a
+  /// sidebar button beside the logo, and on the rail the logo turns into
+  /// that button while the pointer is over it.
+  final VoidCallback? onToggleCollapsed;
+
+  /// The keyboard shortcut for [onToggleCollapsed], shown in its tooltip.
+  final String? toggleShortcut;
+
   const AdminSidebar({
     super.key,
     required this.entries,
@@ -50,14 +96,10 @@ class AdminSidebar extends StatefulWidget {
     this.onSelectChild,
     this.footer,
     this.collapsed = false,
+    this.onToggleCollapsed,
+    this.toggleShortcut,
   });
 
-  // The app's main dark green, the same as the portal's buttons.
-  static const Color background = AppTheme.dark;
-  // The active page: a cream tab growing out of the sidebar's left edge,
-  // with the sidebar's own green for its icon and text.
-  static const Color activeBackground = Color(0xFFF2F3E9);
-  static const Color activeForeground = background;
   static const double expandedWidth = 248;
   static const double collapsedWidth = 72;
 
@@ -66,8 +108,12 @@ class AdminSidebar extends StatefulWidget {
 }
 
 class _AdminSidebarState extends State<AdminSidebar> {
-  // The entries whose submenu is open. The open page's own starts open.
-  late final Set<int> _expanded = {widget.selectedIndex};
+  // The entries whose submenu is open. Every submenu starts open, so all
+  // the sub-pages are in view without a click.
+  late final Set<int> _expanded = {
+    for (var i = 0; i < widget.entries.length; i++)
+      if (widget.entries[i].children.isNotEmpty) i,
+  };
 
   @override
   void didUpdateWidget(AdminSidebar oldWidget) {
@@ -76,6 +122,7 @@ class _AdminSidebarState extends State<AdminSidebar> {
     if (widget.selectedIndex != oldWidget.selectedIndex) {
       _expanded.add(widget.selectedIndex);
     }
+    if (widget.collapsed != oldWidget.collapsed) _brandHovered = false;
   }
 
   void _toggle(int index) => setState(() {
@@ -97,8 +144,10 @@ class _AdminSidebarState extends State<AdminSidebar> {
   Widget build(BuildContext context) {
     final collapsed = widget.collapsed;
     final entries = widget.entries;
+    final colors = AdminSidebarColors.light;
     return Material(
-      color: AdminSidebar.background,
+      color: colors.background,
+      shape: Border(right: BorderSide(color: colors.edge)),
       child: SizedBox(
         width: collapsed
             ? AdminSidebar.collapsedWidth
@@ -129,7 +178,7 @@ class _AdminSidebarState extends State<AdminSidebar> {
                   thickness: 1,
                   indent: collapsed ? 12 : 14,
                   endIndent: collapsed ? 12 : 14,
-                  color: Colors.white.withValues(alpha: 0.14),
+                  color: colors.edge,
                 ),
                 widget.footer!,
               ],
@@ -143,12 +192,14 @@ class _AdminSidebarState extends State<AdminSidebar> {
   List<Widget> _entry(int i) {
     final entry = widget.entries[i];
     final selected = i == widget.selectedIndex;
+    final colors = AdminSidebarColors.light;
     final hasChildren = entry.children.isNotEmpty && !widget.collapsed;
     if (!hasChildren) {
       return [
         _AdminSidebarItem(
           icon: entry.icon,
           label: entry.label,
+          colors: colors,
           selected: selected,
           collapsed: widget.collapsed,
           onTap: () => widget.onSelect(i),
@@ -161,6 +212,7 @@ class _AdminSidebarState extends State<AdminSidebar> {
       _AdminSidebarItem(
         icon: entry.icon,
         label: entry.label,
+        colors: colors,
         selected: selected,
         collapsed: false,
         expanded: open,
@@ -182,6 +234,7 @@ class _AdminSidebarState extends State<AdminSidebar> {
                     for (var j = 0; j < entry.children.length; j++)
                       _AdminSidebarSubItem(
                         label: entry.children[j],
+                        colors: colors,
                         selected: selected && j == widget.selectedChildIndex,
                         onTap: () => widget.onSelectChild?.call(i, j),
                       ),
@@ -193,45 +246,182 @@ class _AdminSidebarState extends State<AdminSidebar> {
     ];
   }
 
-  // The original logo asset and the app's own wordmark widget, in its
-  // white on-dark version.
+  // The pointer is over the rail's logo, which then shows the sidebar
+  // button in its place.
+  bool _brandHovered = false;
+
+  // The original logo asset and the app's own wordmark widget, with the
+  // sidebar button: at the end of the row when expanded, and in place of
+  // the logo on the rail while it is hovered.
   Widget _brand() {
     final collapsed = widget.collapsed;
+    final colors = AdminSidebarColors.light;
+    final onToggle = widget.onToggleCollapsed;
     final logo = Image.asset(
       'assets/images/logo.png',
       height: 38,
       fit: BoxFit.contain,
       errorBuilder: (_, _, _) =>
-          const Icon(Icons.agriculture_rounded, color: Colors.white, size: 28),
+          Icon(Icons.agriculture_rounded, color: colors.foreground, size: 28),
     );
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        collapsed ? 0 : 14,
-        20,
-        collapsed ? 0 : 14,
-        18,
-      ),
-      child: collapsed
-          ? Center(child: logo)
-          : Row(
-              children: [
-                logo,
-                const SizedBox(width: 4),
-                const Flexible(
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: AgriTradeText(fontSize: 21, light: true),
+
+    if (collapsed) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(0, 20, 0, 18),
+        child: Center(
+          child: onToggle == null
+              ? logo
+              : MouseRegion(
+                  onEnter: (_) => setState(() => _brandHovered = true),
+                  onExit: (_) => setState(() => _brandHovered = false),
+                  child: SizedBox(
+                    height: 38,
+                    child: Center(
+                      child: _brandHovered
+                          ? _SidebarToggleButton(
+                              colors: colors,
+                              tooltip: 'Open sidebar',
+                              shortcut: widget.toggleShortcut,
+                              onTap: () {
+                                setState(() => _brandHovered = false);
+                                onToggle();
+                              },
+                            )
+                          : logo,
+                    ),
                   ),
                 ),
-              ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(14, 20, onToggle == null ? 14 : 10, 18),
+      child: Row(
+        children: [
+          logo,
+          const SizedBox(width: 4),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: AgriTradeText(fontSize: 21, light: colors.lightWordmark),
             ),
+          ),
+          if (onToggle != null) ...[
+            const SizedBox(width: 4),
+            _SidebarToggleButton(
+              colors: colors,
+              tooltip: 'Close sidebar',
+              shortcut: widget.toggleShortcut,
+              onTap: onToggle,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
 
+/// The square button that opens or closes the sidebar, with the sidebar
+/// icon on it and a tooltip naming its keyboard shortcut. Light grey on
+/// hover, like the sidebar's rows.
+class _SidebarToggleButton extends StatefulWidget {
+  final AdminSidebarColors colors;
+  final String tooltip;
+  final String? shortcut;
+  final VoidCallback onTap;
+
+  const _SidebarToggleButton({
+    required this.colors,
+    required this.tooltip,
+    required this.onTap,
+    this.shortcut,
+  });
+
+  @override
+  State<_SidebarToggleButton> createState() => _SidebarToggleButtonState();
+}
+
+class _SidebarToggleButtonState extends State<_SidebarToggleButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = widget.colors;
+    final shortcut = widget.shortcut;
+    return Tooltip(
+      richMessage: TextSpan(
+        text: widget.tooltip,
+        children: [
+          if (shortcut != null)
+            TextSpan(
+              text: '   $shortcut',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.65)),
+            ),
+        ],
+      ),
+      waitDuration: const Duration(milliseconds: 300),
+      child: Semantics(
+        button: true,
+        label: widget.tooltip,
+        excludeSemantics: true,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              width: 36,
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: colors.foreground.withValues(alpha: _hovered ? 0.08 : 0),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: CustomPaint(
+                size: const Size(20, 18),
+                painter: _SidebarIconPainter(colors.foreground),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A rounded window with a narrow panel on its left: the usual "sidebar"
+/// sign.
+class _SidebarIconPainter extends CustomPainter {
+  final Color color;
+  const _SidebarIconPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.7;
+    final box = Rect.fromLTWH(1, 1.5, size.width - 2, size.height - 3);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(box, const Radius.circular(4)),
+      paint,
+    );
+    final x = box.left + box.width * 0.36;
+    canvas.drawLine(Offset(x, box.top), Offset(x, box.bottom), paint);
+  }
+
+  @override
+  bool shouldRepaint(_SidebarIconPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 /// One row of the sidebar. Transparent until hovered or selected; the
-/// selected page becomes a cream tab attached to the sidebar's left edge,
+/// selected page becomes a green tab attached to the sidebar's left edge,
 /// rounded on the right. Both fade over 160 ms.
 ///
 /// With [onToggle], the row is a submenu's parent: it ends in a small
@@ -239,6 +429,7 @@ class _AdminSidebarState extends State<AdminSidebar> {
 class _AdminSidebarItem extends StatefulWidget {
   final IconData icon;
   final String label;
+  final AdminSidebarColors colors;
   final bool selected;
   final bool collapsed;
   final VoidCallback? onTap;
@@ -248,6 +439,7 @@ class _AdminSidebarItem extends StatefulWidget {
   const _AdminSidebarItem({
     required this.icon,
     required this.label,
+    required this.colors,
     required this.selected,
     required this.collapsed,
     this.onTap,
@@ -267,9 +459,10 @@ class _AdminSidebarItemState extends State<_AdminSidebarItem> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = widget.colors;
     final color = widget.selected
-        ? AdminSidebar.activeForeground
-        : Colors.white.withValues(alpha: _hovered ? 0.95 : 0.78);
+        ? colors.activeForeground
+        : colors.foreground.withValues(alpha: _hovered ? 1 : 0.85);
 
     final Widget content = widget.collapsed
         ? Center(
@@ -345,8 +538,8 @@ class _AdminSidebarItemState extends State<_AdminSidebarItem> {
                   ),
             decoration: BoxDecoration(
               color: widget.selected
-                  ? AdminSidebar.activeBackground
-                  : Colors.white.withValues(alpha: _hovered ? 0.08 : 0),
+                  ? colors.activeBackground
+                  : colors.foreground.withValues(alpha: _hovered ? 0.08 : 0),
               // Square against the edge, rounded on the right only.
               borderRadius: const BorderRadius.horizontal(
                 right: Radius.circular(18),
@@ -378,15 +571,17 @@ class _AdminSidebarItemState extends State<_AdminSidebarItem> {
 }
 
 /// One submenu row: smaller text, indented to line up under its parent's
-/// label. The open one is white and semi-bold on a soft highlight, with a
-/// cream marker in front of it.
+/// label. The open one is semi-bold on a soft highlight, with a solid green
+/// marker in front of it.
 class _AdminSidebarSubItem extends StatefulWidget {
   final String label;
+  final AdminSidebarColors colors;
   final bool selected;
   final VoidCallback onTap;
 
   const _AdminSidebarSubItem({
     required this.label,
+    required this.colors,
     required this.selected,
     required this.onTap,
   });
@@ -401,6 +596,7 @@ class _AdminSidebarSubItemState extends State<_AdminSidebarSubItem> {
   @override
   Widget build(BuildContext context) {
     final selected = widget.selected;
+    final colors = widget.colors;
     return Semantics(
       button: true,
       selected: selected,
@@ -421,14 +617,14 @@ class _AdminSidebarSubItemState extends State<_AdminSidebarSubItem> {
             margin: const EdgeInsets.only(left: 40, bottom: 2),
             padding: const EdgeInsets.only(left: 10, right: 10),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(
+              color: colors.accent.withValues(
                 alpha: selected ? 0.14 : (_hovered ? 0.07 : 0),
               ),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
-                // The marker: cream and solid on the open view.
+                // The marker: solid green on the open view.
                 AnimatedContainer(
                   duration: const Duration(milliseconds: 160),
                   width: 5,
@@ -436,8 +632,8 @@ class _AdminSidebarSubItemState extends State<_AdminSidebarSubItem> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: selected
-                        ? AdminSidebar.activeBackground
-                        : Colors.white.withValues(alpha: 0.35),
+                        ? colors.accent
+                        : colors.foreground.withValues(alpha: 0.35),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -449,9 +645,11 @@ class _AdminSidebarSubItemState extends State<_AdminSidebarSubItem> {
                     style: GoogleFonts.montserrat(
                       fontSize: 12.5,
                       fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                      color: Colors.white.withValues(
-                        alpha: selected ? 1 : (_hovered ? 0.92 : 0.72),
-                      ),
+                      color: selected
+                          ? colors.accent
+                          : colors.foreground.withValues(
+                              alpha: _hovered ? 0.92 : 0.75,
+                            ),
                     ),
                   ),
                 ),

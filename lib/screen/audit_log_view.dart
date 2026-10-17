@@ -7,8 +7,9 @@ import 'package:intl/intl.dart';
 import '../services/admin_perf.dart';
 import 'admin_filter_controls.dart';
 import '../services/audit_log_service.dart';
-import '../services/pdf_report_service.dart';
+import '../services/audit_report_service.dart';
 import 'admin_sub_nav.dart';
+import 'audit_export_dialog.dart';
 import 'admin_dashboard_screen.dart'
     show
         AdminThemeScope,
@@ -92,6 +93,13 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
   // Typed in the header's search box.
   String get _search => pageSearch;
   bool _reloadQueued = false;
+
+  // The open page of the table (10 entries each), from 0. Back to the
+  // first on a new search or filter.
+  int _page = 0;
+
+  @override
+  void onPageSearchChanged() => _page = 0;
 
   // The entries whose box is ticked.
   final Set<String> _ticked = {};
@@ -209,6 +217,7 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
     setState(() {
       _loading = true;
       if (reset) {
+        _page = 0;
         _entries.clear();
         _cursor = null;
         _hasMore = true;
@@ -264,10 +273,13 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
     }
   }
 
-  List<_AuditEntry> get _visibleEntries {
+  List<_AuditEntry> get _visibleEntries => _searched(_entries);
+
+  // [entries] narrowed by the header's search box.
+  List<_AuditEntry> _searched(List<_AuditEntry> entries) {
     final q = _search.trim().toLowerCase();
-    if (q.isEmpty) return _entries;
-    return _entries
+    if (q.isEmpty) return entries;
+    return entries
         .where(
           (e) =>
               e.who.toLowerCase().contains(q) ||
@@ -301,25 +313,124 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
     _fetchPage(reset: true);
   }
 
+  // The most entries "All entries matching the filters" puts in a report.
+  static const int _exportCap = 2000;
+
+  /// Every entry matching the page's filters and search, newest first, up
+  /// to [_exportCap] — read in large pages rather than the table's 20.
+  Future<List<_AuditEntry>> _fetchAllMatching() async {
+    final needsClientAdminFilter =
+        (_actionFilter != null || AdminSubNav.audit.value.actions != null) &&
+        _adminFilter != null;
+    final found = <_AuditEntry>[];
+    DocumentSnapshot<Map<String, dynamic>>? cursor;
+    while (found.length < _exportCap) {
+      var query = _baseQuery().limit(500);
+      if (cursor != null) query = query.startAfterDocument(cursor);
+      final snap = await query.get();
+      if (snap.docs.isEmpty) break;
+      cursor = snap.docs.last;
+      for (final doc in snap.docs) {
+        if (needsClientAdminFilter && doc.data()['adminId'] != _adminFilter) {
+          continue;
+        }
+        found.add(_AuditEntry.fromDoc(doc));
+      }
+      if (snap.docs.length < 500) break;
+    }
+    return _searched(found.take(_exportCap).toList());
+  }
+
+  // The page's filters in words, for the report and its menu.
+  Future<String> _filtersLabel() async {
+    final parts = <String>[AdminSubNav.audit.value.label];
+    if (_actionFilter != null) parts.add(auditActionLabel(_actionFilter!));
+    if (_adminFilter != null) {
+      String? name;
+      try {
+        final admins = await _adminsFuture;
+        final admin = admins.where((d) => d.id == _adminFilter).firstOrNull;
+        name =
+            (admin?.data()['name'] ??
+                    admin?.data()['fullName'] ??
+                    admin?.data()['email'])
+                ?.toString();
+      } catch (_) {}
+      parts.add('Admin: ${name ?? 'selected admin'}');
+    }
+    if (_dateRange != null) {
+      parts.add(_rangeLabel(_dateRange!.start, _dateRange!.end));
+    }
+    if (_search.trim().isNotEmpty) parts.add('Search: "${_search.trim()}"');
+    return parts.join(' · ');
+  }
+
+  static String _rangeLabel(DateTime start, DateTime end) =>
+      '${DateFormat('MMM d, y').format(start)} – ${DateFormat('MMM d, y').format(end)}';
+
+  static AuditReportRow _reportRow(_AuditEntry e) => AuditReportRow(
+    at: e.timestamp,
+    admin: e.who,
+    actionCode: e.action,
+    action: e.actionLabel,
+    details: e.details,
+    device: e.device,
+    location: e.location,
+  );
+
+  // Export Report: the menu to choose what the report holds, then the
+  // report itself (see AuditReportService).
   Future<void> _export() async {
-    final rows = _visibleEntries
-        .map(
-          (e) => (
-            when: e.whenLabel,
-            admin: e.who,
-            action: e.actionLabel,
-            details: e.details,
-            device: e.device,
-            location: e.location,
-          ),
-        )
-        .toList();
-    final bytes = await PdfReportService.buildAuditLogReport(entries: rows);
+    final c = AdminThemeScope.of(context).palette;
+    final filters = await _filtersLabel();
     if (!mounted) return;
-    await PdfReportService.share(bytes, 'agritrade_audit_log.pdf');
-    AuditLogService.log(
-      AuditAction.exportReport,
-      'Exported the Audit Log (${rows.length} entries).',
+    final onScreen = _visibleEntries;
+    final selected = [
+      for (final e in _entries)
+        if (_ticked.contains(e.id)) e,
+    ];
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AuditExportDialog(
+        palette: c,
+        filtersLabel: filters,
+        onScreenCount: onScreen.length,
+        selectedCount: selected.length,
+        exporter: (scope, options, onProgress) async {
+          final List<_AuditEntry> chosen;
+          switch (scope) {
+            case AuditExportScope.allMatching:
+              onProgress('Loading the matching entries…');
+              chosen = await _fetchAllMatching();
+            case AuditExportScope.onScreen:
+              chosen = onScreen;
+            case AuditExportScope.selected:
+              chosen = selected;
+          }
+          // The period: the date filter, or else the dates the entries span.
+          final dates = [
+            for (final e in chosen)
+              if (e.timestamp != null) e.timestamp!,
+          ]..sort();
+          final period = _dateRange != null
+              ? _rangeLabel(_dateRange!.start, _dateRange!.end)
+              : dates.isEmpty
+              ? 'All dates'
+              : _rangeLabel(dates.first, dates.last);
+          return AuditReportService.export(
+            rows: [for (final e in chosen) _reportRow(e)],
+            options: options,
+            periodLabel: period,
+            filtersLabel: filters,
+            scopeLabel: switch (scope) {
+              AuditExportScope.allMatching => 'All matching entries',
+              AuditExportScope.onScreen => 'Entries shown on screen',
+              AuditExportScope.selected => 'Selected entries',
+            },
+            onProgress: onProgress,
+          );
+        },
+      ),
     );
   }
 
@@ -340,6 +451,12 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
     final entries = _visibleEntries;
+    // Ten a page. The page after the last loaded one stands for the
+    // entries not loaded yet: opening it loads them.
+    final loadedPages = adminPageCount(entries.length);
+    final page = _page.clamp(0, loadedPages - 1);
+    final pageEntries = adminPageOf(entries, page);
+    final pageCount = loadedPages + (_hasMore && entries.isNotEmpty ? 1 : 0);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
@@ -376,10 +493,12 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
                 onClear: () => setState(_ticked.clear),
               ),
               const SizedBox(width: 12),
+              // Opens the menu; with nothing loaded yet the report can still
+              // gather every matching entry itself.
               AdminQuickActionButton(
-                icon: Icons.picture_as_pdf_outlined,
+                icon: Icons.file_download_outlined,
                 label: 'Export Report',
-                onPressed: entries.isEmpty ? () {} : _export,
+                onPressed: _export,
               ),
             ],
           ),
@@ -388,6 +507,8 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
             width: double.infinity,
             padding: kAdminTablePadding,
             decoration: adminTableCard(c),
+            // The header band follows the rounded corners.
+            clipBehavior: Clip.antiAlias,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -434,7 +555,7 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
                         DataColumn(label: Text('Device/Browser')),
                         DataColumn(label: Text('Location')),
                       ],
-                      rows: entries.map((e) {
+                      rows: pageEntries.map((e) {
                         final (color, bg) = _badgeColors(c, e.action);
                         return DataRow(
                           selected: _ticked.contains(e.id),
@@ -485,18 +606,17 @@ class _AuditLogViewState extends State<AuditLogView> with AdminPageSearch {
                   ),
                 if (_loading)
                   const AdminLoadingSpinner()
-                else if (_hasMore && !_loadError && entries.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: Center(
-                      child: OutlinedButton(
-                        onPressed: () => _fetchPage(),
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: c.border),
-                        ),
-                        child: const Text('Load more'),
-                      ),
-                    ),
+                else if (!_loadError && pageCount > 1)
+                  AdminTablePager(
+                    page: page,
+                    pageCount: pageCount,
+                    total: entries.length,
+                    more: _hasMore,
+                    onPage: (p) async {
+                      // Past what is loaded: load the next entries first.
+                      if (p >= loadedPages) await _fetchPage();
+                      if (mounted) setState(() => _page = p);
+                    },
                   ),
               ],
             ),

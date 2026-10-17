@@ -6,9 +6,7 @@ import '../services/dashboard_data_service.dart';
 import '../services/rsba_number.dart';
 import 'admin_dashboard_screen.dart' show AdminThemeScope;
 import 'admin_filter_controls.dart';
-import 'admin_listings_view.dart';
 import 'admin_notifications.dart';
-import 'admin_transactions_view.dart';
 
 /// One match of the header search: what it is, and the page it is on.
 class AdminSearchHit {
@@ -27,13 +25,11 @@ class AdminSearchHit {
   });
 }
 
-/// Farmers, listings and transactions matching [query] — a few of each, in
-/// that order. Pure, so it can be tested without Firestore.
+/// Approved farmers matching [query] — a few of them. Pure, so it can be
+/// tested without Firestore.
 List<AdminSearchHit> searchAdminRecords(
   String query, {
   required Iterable<AdminRecord> users,
-  required Iterable<AdminRecord> products,
-  required Iterable<AdminRecord> orders,
   int perGroup = 4,
 }) {
   final q = query.trim().toLowerCase();
@@ -67,54 +63,18 @@ List<AdminSearchHit> searchAdminRecords(
     if (++found == perGroup) break;
   }
 
-  for (final row in buildListingRows(
-    products,
-  ).where((r) => r.matches(q)).take(perGroup)) {
-    hits.add(
-      AdminSearchHit(
-        icon: Icons.inventory_2_outlined,
-        group: 'Listing',
-        title: row.name.isEmpty ? 'Unnamed listing' : row.name,
-        detail: [
-          if (row.category.isNotEmpty) row.category,
-          if (row.farmer.isNotEmpty) row.farmer,
-        ].join(' · '),
-        target: AdminNotificationTarget.listings,
-      ),
-    );
-  }
-
-  for (final row in buildTransactionRows(
-    orders,
-  ).where((r) => r.matches(q)).take(perGroup)) {
-    hits.add(
-      AdminSearchHit(
-        icon: Icons.receipt_long_outlined,
-        group: 'Transaction',
-        title: row.product.isEmpty ? 'Order' : row.product,
-        detail: [
-          if (row.buyer.isNotEmpty) row.buyer,
-          if (row.seller.isNotEmpty) row.seller,
-          row.statusLabel,
-        ].join(' · '),
-        target: AdminNotificationTarget.transactions,
-      ),
-    );
-  }
   return hits;
 }
 
 /// What the header's search does on each page, by the page's place in
 /// the sidebar: on a page with a table it filters that table (the hint
-/// says what by); anywhere else it finds farmers, listings and
-/// transactions and opens the page of the one picked.
+/// says what by); anywhere else it finds farmers and opens User Accounts
+/// › Farmers.
 const Map<int, String> kAdminPageSearchHints = {
-  2: 'Search name, email or area…',
   3: 'Search name, email, RSBA No. or barangay…',
-  5: 'Search order ID, buyer, farmer or product…',
-  6: 'Search product, farmer or category…',
-  7: 'Search farmer, listing, report ID or reporter…',
-  9: 'Search loaded entries…',
+  4: 'Search commodity, category, status or unit…',
+  5: 'Search farmer, listing, report ID or reporter…',
+  7: 'Search loaded entries…',
 };
 
 /// The one search box of the portal, in its header.
@@ -215,12 +175,7 @@ class _AdminGlobalSearchState extends State<AdminGlobalSearch> {
             // is no list of results to pick from.
             optionsBuilder: (value) => _filtersPage
                 ? const <AdminSearchHit>[]
-                : searchAdminRecords(
-                    value.text,
-                    users: _users,
-                    products: _records(data.products),
-                    orders: _records(data.allOrders),
-                  ),
+                : searchAdminRecords(value.text, users: _users),
             onSelected: (hit) {
               adminOpenPageRequest.value = hit.target;
               FocusManager.instance.primaryFocus?.unfocus();
@@ -233,8 +188,7 @@ class _AdminGlobalSearchState extends State<AdminGlobalSearch> {
                   decoration: adminPillDecoration(
                     c,
                     hint:
-                        kAdminPageSearchHints[widget.page] ??
-                        'Search farmers, listings, transactions…',
+                        kAdminPageSearchHints[widget.page] ?? 'Search farmers…',
                     icon: Icons.search,
                   ),
                   onSubmitted: (_) => onSubmitted(),

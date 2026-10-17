@@ -3,10 +3,12 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'admin_device_location.dart';
+import 'auth_service.dart' show cleanFunctionMessage;
 
 /// How this browser's Admin session stands against the one on record.
 enum AdminSessionStanding {
@@ -67,6 +69,108 @@ AdminSessionStanding adminSessionStanding(
   return localId != null
       ? AdminSessionStanding.endedHere
       : AdminSessionStanding.free;
+}
+
+/// One Admin session as Active Sessions lists it, from
+/// `adminSessions/{uid}/history/{id}` (written by the adminSession Cloud
+/// Function).
+class AdminSessionEntry {
+  final String id;
+
+  /// "Chrome on Windows".
+  final String device;
+  final String platform;
+
+  /// Approximate: the place the browser reported when it signed in.
+  final String? location;
+  final DateTime? startedAt;
+
+  /// The last time it was heard from: the account's record for the active
+  /// session (its heartbeat), else when it started.
+  final DateTime? lastActiveAt;
+  final DateTime? endedAt;
+
+  /// Still signed in.
+  final bool active;
+
+  /// 'logout', 'replaced', 'superseded' or 'revoked' once ended.
+  final String? endReason;
+
+  /// This browser's own session.
+  final bool isCurrent;
+
+  const AdminSessionEntry({
+    required this.id,
+    required this.device,
+    required this.platform,
+    required this.location,
+    required this.startedAt,
+    required this.lastActiveAt,
+    required this.endedAt,
+    required this.active,
+    required this.endReason,
+    required this.isCurrent,
+  });
+
+  bool get onPhone {
+    final p = platform.toLowerCase();
+    return p.contains('android') || p.contains('ios');
+  }
+
+  /// How an ended session ended.
+  String get endLabel => switch (endReason) {
+    'logout' => 'Logged out',
+    'revoked' => 'Signed out from Active Sessions',
+    'replaced' || 'superseded' => 'Ended by a newer login',
+    _ => 'Ended',
+  };
+}
+
+DateTime? _dateOf(Object? value) => value is Timestamp
+    ? value.toDate()
+    : value is DateTime
+    ? value
+    : null;
+
+/// The account's sessions, newest first, from its session [history] and
+/// its session [record] (`adminSessions/{uid}`); [localId] is this
+/// browser's own session. Pure, so it can be tested.
+List<AdminSessionEntry> buildAdminSessionEntries({
+  required Map<String, dynamic>? record,
+  required List<({String id, Map<String, dynamic> data})> history,
+  required String? localId,
+}) {
+  final activeId = (record?['activeSessionId'] ?? '').toString();
+  final entries = [
+    for (final doc in history)
+      AdminSessionEntry(
+        id: doc.id,
+        device: (doc.data['deviceName'] ?? '').toString().trim().isEmpty
+            ? 'Unknown device'
+            : doc.data['deviceName'].toString(),
+        platform: (doc.data['platform'] ?? '').toString(),
+        location: () {
+          final place = (doc.data['location'] ?? '').toString().trim();
+          return place.isEmpty || place == 'Unknown' ? null : place;
+        }(),
+        startedAt: _dateOf(doc.data['startedAt']),
+        lastActiveAt: doc.id == activeId
+            ? _dateOf(record?['lastActiveAt']) ??
+                  _dateOf(doc.data['lastActiveAt'])
+            : _dateOf(doc.data['lastActiveAt']) ??
+                  _dateOf(doc.data['startedAt']),
+        endedAt: _dateOf(doc.data['endedAt']),
+        active: (doc.data['status'] ?? 'active') == 'active',
+        endReason: doc.data['endReason']?.toString(),
+        isCurrent: localId != null && doc.id == localId,
+      ),
+  ];
+  entries.sort(
+    (a, b) => (b.startedAt?.millisecondsSinceEpoch ?? 0).compareTo(
+      a.startedAt?.millisecondsSinceEpoch ?? 0,
+    ),
+  );
+  return entries;
 }
 
 /// The Admin Portal's single active session: one browser at a time per
@@ -227,12 +331,96 @@ class AdminSessionService {
   }
 
   /// This account's recent sessions, newest first — the bell's "new
-  /// sign-in" notices.
+  /// sign-in" notices, and Active Sessions ([limit] of them).
   static Stream<QuerySnapshot<Map<String, dynamic>>> recentSessions(
-    String uid,
-  ) => _record(uid)
+    String uid, {
+    int limit = 10,
+  }) => _record(uid)
       .collection('history')
       .orderBy('startedAt', descending: true)
-      .limit(10)
+      .limit(limit)
       .snapshots();
+
+  /// The account's session record, live.
+  static Stream<DocumentSnapshot<Map<String, dynamic>>> watchRecord(
+    String uid,
+  ) => _record(uid).snapshots();
+
+  /// Active Sessions > Revoke Session: signs out the session [sessionId] —
+  /// or, when it is null, every session but this browser's. Null when it
+  /// was done, or a message to show.
+  ///
+  /// Firebase Authentication cannot sign out a single device, so the
+  /// revokeAdminSession Cloud Function revokes the account's sign-ins and
+  /// refuses every token older than this password entry (see
+  /// functions/admin_session.js). Every other signed-in device is signed
+  /// out with it. This browser then signs in again with the same password,
+  /// so it keeps working.
+  static Future<String?> revoke({
+    required String password,
+    String? sessionId,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    final email = user?.email;
+    if (user == null || email == null) return 'Please log in again.';
+    final credential = EmailAuthProvider.credential(
+      email: email,
+      password: password,
+    );
+
+    // 1. It is you: the server only revokes within minutes of this.
+    try {
+      await user.reauthenticateWithCredential(credential);
+    } on FirebaseAuthException catch (e) {
+      return switch (e.code) {
+        'wrong-password' ||
+        'invalid-credential' ||
+        'invalid-login-credentials' => 'Incorrect password.',
+        'too-many-requests' =>
+          'Too many attempts. Please wait a bit and try again.',
+        'network-request-failed' =>
+          'No internet connection. Please check your connection and try again.',
+        _ => 'Your password could not be checked. Please try again.',
+      };
+    }
+
+    // 2. The server signs the session out.
+    try {
+      await _functions
+          .httpsCallable('revokeAdminSession')
+          .call({
+            'sessionId': sessionId,
+            'currentSessionId': await localId(user.uid),
+            // For the Audit Log entry.
+            'location': ?await AdminDeviceLocation.current(
+              wait: const Duration(seconds: 2),
+            ),
+          })
+          .timeout(const Duration(seconds: 30));
+    } on FirebaseFunctionsException catch (e) {
+      debugPrint('[AdminSession] revoke failed: ${e.code} ${e.message}');
+      final own = cleanFunctionMessage(e.message) ?? '';
+      return switch (e.code) {
+        'failed-precondition' ||
+        'not-found' ||
+        'permission-denied' when own.isNotEmpty => own,
+        'unauthenticated' => 'Your session has expired. Please log in again.',
+        'unavailable' ||
+        'deadline-exceeded' => 'Check your internet connection and try again.',
+        _ => 'The session could not be signed out. Please try again.',
+      };
+    } catch (e) {
+      debugPrint('[AdminSession] revoke failed: $e');
+      return 'The session could not be signed out. Please try again.';
+    }
+
+    // 3. This browser's own sign-in was revoked with the others: renew it,
+    //    so it does not end when its token next expires.
+    try {
+      await user.reauthenticateWithCredential(credential);
+    } catch (e) {
+      debugPrint('[AdminSession] could not renew this sign-in: $e');
+    }
+    return null;
+  }
 }

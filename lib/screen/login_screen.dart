@@ -22,12 +22,17 @@ class LoginScreen extends StatefulWidget {
   /// device: says so in a popup once the page is up.
   final bool adminSessionEnded;
 
+  /// With [adminSessionEnded]: this browser was signed out from Active
+  /// Sessions on another device, and the popup says that instead.
+  final bool adminSessionRevoked;
+
   const LoginScreen({
     super.key,
     this.role,
     this.flashMessage,
     this.disableBackNavigation = false,
     this.adminSessionEnded = false,
+    this.adminSessionRevoked = false,
   });
 
   @override
@@ -42,7 +47,12 @@ class _LoginScreenState extends State<LoginScreen> {
     super.initState();
     if (widget.adminSessionEnded) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) showAdminSessionEndedDialog(context);
+        if (mounted) {
+          showAdminSessionEndedDialog(
+            context,
+            revoked: widget.adminSessionRevoked,
+          );
+        }
       });
     }
   }
@@ -72,7 +82,9 @@ class _LoginScreenState extends State<LoginScreen> {
     final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     final heroHeight = keyboardOpen
         ? 120.0
-        : (screenHeight * 0.33).clamp(200.0, 290.0);
+        // Room for the typed-out headline between the logo and the sheet.
+        : (screenHeight * 0.36).clamp(210.0, 310.0);
+    final showBack = !kIsWeb && !widget.disableBackNavigation;
 
     return PopScope(
       canPop: !widget.disableBackNavigation,
@@ -81,21 +93,25 @@ class _LoginScreenState extends State<LoginScreen> {
         body: Stack(
           children: [
             // ---- Hero: farm landscape photo + the AgriTrade+ lockup ----
-            // Swap assets/images/login_landscape.png for another photo whenever
-            // you like — it just sits behind the logo lockup below.
+            // The photo is set in LoginHero (bg_adminside.png, the Admin
+            // login's too) — it just sits behind the logo lockup below.
             AnimatedPositioned(
               duration: const Duration(milliseconds: 200),
               top: 0,
               left: 0,
               right: 0,
               height: heroHeight,
-              child: LoginHero(showBranding: !keyboardOpen),
+              child: LoginHero(
+                showBranding: !keyboardOpen,
+                // Beside the Back button in the same corner.
+                leadingInset: showBack ? AppBackButton.size + 12 : 0,
+              ),
             ),
 
             // ---- White sheet, overlapping the photo ----
             AnimatedPositioned(
               duration: const Duration(milliseconds: 200),
-              top: heroHeight - 32,
+              top: heroHeight - LoginHero.sheetOverlap,
               left: 0,
               right: 0,
               bottom: 0,
@@ -218,7 +234,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             ),
 
-            if (!kIsWeb && !widget.disableBackNavigation)
+            if (showBack)
               const SafeArea(
                 child: Padding(
                   padding: EdgeInsets.only(top: 8, left: 12),

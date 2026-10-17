@@ -107,7 +107,7 @@ class DeviceTrustService {
       return;
     }
 
-    final (platform, deviceName) = await _describeDevice();
+    final (platform, deviceName) = await describeDevice();
     // New for this account. Creating the record is what triggers the
     // alert email, server-side.
     await ref.set({
@@ -135,8 +135,9 @@ class DeviceTrustService {
   }
 
   // Platform and a general model name only — e.g. ("Android", "samsung
-  // SM-A166P"). Nothing that identifies the individual unit.
-  Future<(String, String)> _describeDevice() async {
+  // SM-A166P"). Nothing that identifies the individual unit. Also what the
+  // login alert email shows (SignInAlertService).
+  Future<(String, String)> describeDevice() async {
     try {
       final info = DeviceInfoPlugin();
       if (kIsWeb) {

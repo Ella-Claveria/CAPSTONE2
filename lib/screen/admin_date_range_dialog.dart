@@ -20,9 +20,7 @@ Future<DateTimeRange?> showAdminDateRangePicker(
   final c =
       palette ??
       context.getInheritedWidgetOfExactType<AdminThemeScope>()?.palette ??
-      (Theme.of(context).brightness == Brightness.dark
-          ? AdminPalette.dark
-          : AdminPalette.light);
+      AdminPalette.light;
   return showDialog<DateTimeRange>(
     context: context,
     builder: (_) => AdminDateRangeDialog(
@@ -47,9 +45,7 @@ Future<DateTime?> showAdminDatePicker(
   final c =
       palette ??
       context.getInheritedWidgetOfExactType<AdminThemeScope>()?.palette ??
-      (Theme.of(context).brightness == Brightness.dark
-          ? AdminPalette.dark
-          : AdminPalette.light);
+      AdminPalette.light;
   final picked = await showDialog<DateTimeRange>(
     context: context,
     builder: (_) => AdminDateRangeDialog(
@@ -185,12 +181,6 @@ class _AdminDateRangeDialogState extends State<AdminDateRangeDialog> {
                       widget.title,
                       style: _text(c.textPrimary, 16, FontWeight.w700),
                     ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: Icon(Icons.close, size: 20, color: c.textSecondary),
                   ),
                 ],
               ),

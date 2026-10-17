@@ -339,7 +339,14 @@ class _FarmerListViewState extends State<FarmerListView> with AdminPageSearch {
                                   'Try clearing the search or filters above.',
                             )
                           else
-                            _FarmerListTable(c: c, rows: rows),
+                            // 10 farmers a page; back to the first page on
+                            // a new search, barangay or sort.
+                            AdminPaged<_FarmerListRow>(
+                              items: rows,
+                              resetKey: (_barangayFilter, _sort, pageSearch),
+                              builder: (context, page) =>
+                                  _FarmerListTable(c: c, rows: page),
+                            ),
                         ],
                       ),
                     );
@@ -423,12 +430,10 @@ class _FarmerListTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: c.border),
-      ),
-      padding: const EdgeInsets.all(8),
+      decoration: adminTableCard(c),
+      // The header band follows the rounded corners.
+      clipBehavior: Clip.antiAlias,
+      padding: kAdminTablePadding,
       child: AdminTableFit(
         table: DataTable(
           headingRowColor: WidgetStateProperty.all(adminTableHeaderColor(c)),
@@ -757,11 +762,6 @@ class _FarmerListDetailDialogState extends State<_FarmerListDetailDialog>
                         ),
                       ],
                     ),
-                  ),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: Icon(Icons.close, size: 20, color: muted),
                   ),
                 ],
               ),

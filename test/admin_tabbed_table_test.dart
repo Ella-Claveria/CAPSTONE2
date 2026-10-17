@@ -15,7 +15,6 @@ void main() {
         home: Scaffold(
           body: AdminThemeScope(
             palette: AdminPalette.light,
-            onToggleTheme: () {},
             child: AdminTabbedTable<String>(
               selected: 'all',
               onSelected: (tab) => opened = tab,

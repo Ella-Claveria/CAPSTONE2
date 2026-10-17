@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../widgets/agri_dialog.dart';
 
 import '../main.dart' show rootNavigatorKey;
@@ -9,6 +10,7 @@ import '../screen/chat_screen.dart';
 import '../screen/farmer_home_screen.dart';
 import '../screen/order_details_screen.dart';
 import '../screen/pending_approval_screen.dart';
+import 'auth_routing_service.dart' show suspensionEndOf;
 import 'connectivity_service.dart';
 import 'order_format.dart';
 import '../screen/sign_in_activity_screen.dart';
@@ -147,9 +149,13 @@ class NotificationNavigationService {
     final String title;
     final String message;
     if (stillSuspended) {
+      final until = suspensionEndOf(user);
       title = 'Account Suspended';
-      message =
-          'Your AgriTrade+ account has been temporarily suspended following an Admin review.';
+      message = until == null
+          ? 'Your AgriTrade+ account has been suspended following an Admin '
+                'review, until an Admin reactivates it.'
+          : 'Your AgriTrade+ account has been suspended following an Admin '
+                'review, until ${DateFormat('MMM d, y · h:mm a').format(until)}.';
     } else if (stillBanned) {
       title = 'Account Deactivated';
       message =

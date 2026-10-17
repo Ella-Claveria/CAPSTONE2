@@ -47,6 +47,36 @@ void main() {
       expect(banned.message, contains('Repeated fake listings'));
     });
 
+    test('a suspension for a set time says why and until when, and is over '
+        'once that time has passed', () {
+      final now = DateTime(2026, 10, 16, 10, 51);
+      final account = {
+        'role': 'buyer',
+        'accountStatus': 'suspended',
+        'suspensionReason': 'Many reports from other users',
+        'suspendedUntil': DateTime(2026, 10, 17, 10, 51),
+      };
+      final during = AuthRoutingService.decideFromData(account, now: now);
+      expect(during.decision, AuthRouteDecision.accountRestricted);
+      expect(during.title, 'Account Suspended');
+      expect(during.message, contains('Oct 17, 2026'));
+      expect(during.message, contains('Many reports from other users'));
+
+      final after = AuthRoutingService.decideFromData(
+        account,
+        now: DateTime(2026, 10, 17, 10, 52),
+      );
+      expect(after.decision, AuthRouteDecision.buyerHome);
+
+      // No end set: until an Admin reactivates it.
+      final open = AuthRoutingService.decideFromData({
+        'role': 'buyer',
+        'accountStatus': 'suspended',
+      }, now: now);
+      expect(open.decision, AuthRouteDecision.accountRestricted);
+      expect(open.message, contains('until an Admin reactivates it'));
+    });
+
     test('a farmer who is no longer approved does not reach Farmer Home', () {
       for (final status in ['pending', 'rejected', null]) {
         expect(

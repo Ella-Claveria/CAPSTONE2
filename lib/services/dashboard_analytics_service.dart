@@ -416,6 +416,23 @@ class DashboardAnalyticsService {
     return total;
   }
 
+  // How many orders platformTransactionTotal counts: completed, and
+  // completed within [range].
+  static int completedOrderCount(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> orders, {
+    DateTimeRange? range,
+  }) {
+    var count = 0;
+    for (final doc in orders) {
+      final data = doc.data();
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') {
+        continue;
+      }
+      if (_inRange(_completionDate(data), range)) count++;
+    }
+    return count;
+  }
+
   // Compact Retail/Wholesale breakdown (Orders + Revenue) — see class doc.
   // Not a second dashboard: this backs one small summary row alongside
   // Total Transaction Value / Sales Overview, not a duplicate set of

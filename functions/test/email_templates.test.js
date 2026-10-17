@@ -55,6 +55,23 @@ test("new-device email shows the login details and escapes them", () => {
   assert.ok(mail.html.includes("October 3, 2026 at 9:15 AM (Philippine time)"));
 });
 
+test("login email says you logged in, with the details, escaped", () => {
+  const mail = templates.signInEmail({
+    name: "Ana",
+    deviceName: "Pixel 8 <i>",
+    platform: "Android",
+    when: "October 16, 2026 at 10:00 AM",
+  });
+  assert.strictEqual(mail.subject, "You logged in to AgriTrade+");
+  assert.ok(mail.text.startsWith("Hello Ana,"));
+  assert.ok(mail.text.includes("Device: Pixel 8 <i>"));
+  assert.ok(mail.html.includes("Pixel 8 &lt;i&gt;"));
+  assert.ok(mail.html.includes("October 16, 2026 at 10:00 AM (Philippine time)"));
+  // Unknown details are said plainly.
+  const bare = templates.signInEmail({ name: "", deviceName: "Unknown", platform: "", when: "now" });
+  assert.ok(bare.text.includes("Device: Not recognized"));
+});
+
 test("every email is sent as AgriTrade+ <agritrade.team@gmail.com>", async () => {
   const { MAIL_FROM } = require("../mailer");
   const transport = nodemailer.createTransport({ jsonTransport: true });

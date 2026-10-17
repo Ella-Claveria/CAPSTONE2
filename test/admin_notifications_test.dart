@@ -58,10 +58,8 @@ void main() {
       'New order',
     ]);
     expect(items.last.detail, 'Cara ordered Corn from Ben');
-    expect(
-      items.every((i) => i.target == AdminNotificationTarget.transactions),
-      isTrue,
-    );
+    // Orders have no page in the portal: their notifications open nothing.
+    expect(items.every((i) => i.target == null), isTrue);
   });
 
   test('farmer applications, approvals and rejections are listed; admin '

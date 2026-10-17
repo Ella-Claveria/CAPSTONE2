@@ -4,6 +4,7 @@
  *   sendVerificationEmail   callable, signed-in user   — email verification
  *   sendPasswordResetEmail  callable, no sign-in       — forgot password
  *   onNewTrustedDevice      Firestore trigger          — new-device alert
+ *   notifySignIn            callable, signed-in user   — login alert
  *
  * Firebase Authentication still creates and validates the verification and
  * reset links (generateEmailVerificationLink / generatePasswordResetLink);
@@ -20,6 +21,8 @@ const { getAuth } = require("firebase-admin/auth");
 const { MAIL_SECRETS, sendMail } = require("./mailer");
 const templates = require("./email_templates");
 const { resetPageLink } = require("./reset_link");
+const { suspensionEndText } = require("./suspension_logic");
+const { isValidDeviceId, signInAlertDecision, cleanDeviceText } = require("./sign_in_alert_logic");
 
 const db = getFirestore();
 
@@ -249,6 +252,79 @@ exports.onNewTrustedDevice = onDocumentCreated(
 );
 
 // ---------------------------------------------------------------
+// Login Alert — "You logged in to AgriTrade+".
+//
+// The mobile app calls this once a farmer or buyer has logged in and is
+// in the app (SignInAlertService in the app) — not when an already
+// signed-in app is reopened. Sent to the account's own verified email, so
+// after a Change Email it goes to the new address.
+//
+// A login from a new device is already emailed by onNewTrustedDevice, so
+// this sends nothing for it (sign_in_alert_logic.js decides). Admins get
+// their own alert from the Admin Portal (adminSession).
+//
+//   data: { deviceId: <trusted-device hash>, deviceName, platform }
+//
+// Best effort: it never fails the login, and one per account per resend
+// window, so a double tap or a retry does not send two.
+// ---------------------------------------------------------------
+exports.notifySignIn = onCall(
+  { region: REGION, secrets: MAIL_SECRETS },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Log in first.");
+    }
+    const uid = request.auth.uid;
+    const data = request.data || {};
+    const deviceId = isValidDeviceId(data.deviceId) ? data.deviceId : null;
+
+    const [authUser, profileSnap, deviceSnap, devices] = await Promise.all([
+      getAuth().getUser(uid),
+      db.collection("users").doc(uid).get(),
+      deviceId
+        ? db.collection("users").doc(uid).collection("trustedDevices").doc(deviceId).get()
+        : Promise.resolve(null),
+      db.collection("users").doc(uid).collection("trustedDevices").limit(3).get(),
+    ]);
+    const profile = profileSnap.exists ? profileSnap.data() : {};
+    const firstSeen = deviceSnap && deviceSnap.exists ? deviceSnap.get("firstSeenAt") : null;
+
+    const decision = signInAlertDecision({
+      role: profile.role,
+      signInAlerts: profile.signInAlerts,
+      email: authUser.email,
+      emailVerified: authUser.emailVerified,
+      deviceKnown: deviceId != null,
+      deviceFirstSeenMs: firstSeen && firstSeen.toMillis ? firstSeen.toMillis() : null,
+      otherDevices: devices.docs.filter((d) => d.id !== deviceId).length,
+    });
+    if (decision !== "send") return { sent: false, reason: decision };
+
+    const key = `sign-in-${uid}`;
+    if (!(await claimSend(key))) return { sent: false, reason: "recently-sent" };
+
+    const message = templates.signInEmail({
+      name: await profileName(uid, authUser),
+      deviceName: cleanDeviceText(data.deviceName, "Unknown"),
+      platform: cleanDeviceText(data.platform, "Unknown"),
+      when: new Date().toLocaleString("en-US", {
+        timeZone: "Asia/Manila",
+        dateStyle: "long",
+        timeStyle: "short",
+      }),
+    });
+    try {
+      await sendMail(authUser.email, message);
+    } catch (err) {
+      await releaseSend(key);
+      console.error(`notifySignIn(${uid}) failed to send:`, err.message);
+      return { sent: false, reason: "failed" };
+    }
+    return { sent: true };
+  }
+);
+
+// ---------------------------------------------------------------
 // A farmer's application was approved or rejected -> email them.
 //
 // The in-app notification and the push for the same change are sent by
@@ -367,7 +443,7 @@ exports.emailAccountModeration = onDocumentUpdated(
     await sendAccountNotice(event.params.uid, event.id, {
       title: suspended ? "Account Suspended" : "Account Deactivated",
       message: suspended
-        ? "Your AgriTrade+ account has been suspended until an Admin reactivates it."
+        ? `Your AgriTrade+ account has been suspended ${suspensionEndText(after)}.`
         : "Your AgriTrade+ account has been deactivated following an Admin review.",
       reason: suspended ? after.suspensionReason : after.banReason,
     });

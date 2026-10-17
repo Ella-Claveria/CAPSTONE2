@@ -46,7 +46,6 @@ Future<void> pump(WidgetTester tester, Widget child) {
     MaterialApp(
       home: AdminThemeScope(
         palette: AdminPalette.light,
-        onToggleTheme: () {},
         child: Scaffold(
           body: Padding(padding: const EdgeInsets.all(16), child: child),
         ),

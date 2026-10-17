@@ -14,16 +14,34 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(uid);
     }
 
+    // Active, or suspended for a set time that has already passed (the
+    // account is marked active again by liftExpiredSuspensions in
+    // functions/suspension.js, within a few minutes).
     function activeAccount(uid) {
-      return exists(userPath(uid)) &&
-        get(userPath(uid)).data.get('accountStatus', 'active') == 'active';
+      return exists(userPath(uid)) && (
+        get(userPath(uid)).data.get('accountStatus', 'active') == 'active' ||
+        (get(userPath(uid)).data.get('accountStatus', 'active') == 'suspended' &&
+          get(userPath(uid)).data.get('suspendedUntil', null) is timestamp &&
+          get(userPath(uid)).data.suspendedUntil <= request.time)
+      );
     }
 
     function isAdmin() {
       return signedIn() && activeAccount(request.auth.uid) &&
         get(userPath(request.auth.uid)).data.role == 'admin' &&
         (request.auth.token.email_verified == true ||
-          request.auth.token.email == 'admin@agritrade.com');
+          request.auth.token.email == 'admin@agritrade.com') &&
+        adminSessionNotRevoked(request.auth.uid);
+    }
+
+    // Active Sessions > Revoke Session sets sessionsValidAfter on the
+    // Admin's users/{uid} (functions/admin_session.js): a browser signed in
+    // before it — the one signed out — is refused at once, without waiting
+    // for its token to expire.
+    function adminSessionNotRevoked(uid) {
+      return get(userPath(uid)).data.get('sessionsValidAfter', null) == null ||
+        request.auth.token.auth_time * 1000 >=
+          get(userPath(uid)).data.sessionsValidAfter.toMillis();
     }
 
     function isBuyer() {
@@ -74,6 +92,13 @@ service cloud.firestore {
     // not even to an account's own record: it holds the hash of a 6-digit
     // code, which is only safe while it cannot be read.
     match /emailVerifications/{userId} {
+      allow read, write: if false;
+    }
+
+    // ---- Email change codes ----
+    // The same, for the code sent to an Admin's new email by the
+    // requestEmailChangeOtp / confirmEmailChangeOtp Cloud Functions.
+    match /emailChangeVerifications/{userId} {
       allow read, write: if false;
     }
 
@@ -743,6 +768,36 @@ service cloud.firestore {
           isAdmin();
         allow write: if false;
       }
+    }
+
+    // ---- Admin Portal Help & Support FAQ (lib/services/admin_faq.dart) ----
+    // Read by the portal's Help & Support and its Support Assistant, and
+    // edited in FAQ Management — by an active Admin only. Nobody else can
+    // read or change it.
+    match /adminFaqs/{faqId} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() &&
+        request.resource.data.keys().hasOnly([
+          'category', 'question', 'answer', 'keywords', 'published',
+          'needsReview', 'order', 'createdAt', 'updatedAt', 'updatedBy'
+        ]) &&
+        request.resource.data.category in [
+          'account', 'users', 'listings', 'transactions', 'pricing',
+          'security', 'maintenance', 'general'
+        ] &&
+        request.resource.data.question is string &&
+        request.resource.data.question.size() > 0 &&
+        request.resource.data.question.size() <= 300 &&
+        request.resource.data.answer is string &&
+        request.resource.data.answer.size() > 0 &&
+        request.resource.data.answer.size() <= 4000 &&
+        request.resource.data.keywords is list &&
+        request.resource.data.keywords.size() <= 30 &&
+        request.resource.data.published is bool &&
+        request.resource.data.needsReview is bool &&
+        request.resource.data.order is int &&
+        request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if isAdmin();
     }
 
     match /market_prices/{commodityId} {

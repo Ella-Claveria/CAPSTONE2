@@ -6,6 +6,7 @@ import 'screen/app_bootstrap.dart';
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_controller.dart';
 import 'widgets/connectivity_banner.dart';
+import 'services/account_status_watcher.dart';
 import 'services/session_timeout_service.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -18,6 +19,10 @@ void main() {
   // SessionTimeoutService for why this is the only thing that should ever
   // force a signed-in user back to login (a normal close/reopen must not).
   SessionTimeoutService.instance.start(rootNavigatorKey);
+
+  // Signs a buyer or farmer out, with the reason, as soon as an Admin
+  // suspends or bans the account while the app is open.
+  AccountStatusWatcher.instance.start(rootNavigatorKey);
 
   // Draws the first frame immediately (the branded loading screen) instead
   // of waiting on Firebase.initializeApp() first — AppBootstrap does that
