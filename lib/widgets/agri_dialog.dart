@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
+import '../l10n/tr.dart';
 
 /// The one popup design for the whole AgriTrade+ mobile app (Farmer and
 /// Buyer): a frosted card — ~88% white over a light blur, thin light
@@ -256,7 +257,7 @@ enum AgriButtonKind {
   /// White/transparent with a dark green outline.
   secondary,
 
-  /// Soft red fill with red text — for delete/remove/log out.
+  /// Soft red fill, red outline and red text — for delete/remove/log out.
   destructive,
 }
 
@@ -288,15 +289,16 @@ class AgriDialogButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(30),
     );
     final textStyle = GoogleFonts.montserrat(
-      fontSize: compact ? 12.5 : 13.5,
+      fontSize: compact ? 12.5 : 13,
       fontWeight: FontWeight.w600,
     );
+    // A slim pill (about 40 high): a popup's buttons should not outweigh
+    // its message.
     final padding = compact
         ? const EdgeInsets.symmetric(vertical: 6, horizontal: 16)
-        : const EdgeInsets.symmetric(vertical: 12, horizontal: 20);
-    // Null leaves the theme's own minimum size and tap target.
-    final minimumSize = compact ? const Size(0, 32) : null;
-    final tapTargetSize = compact ? MaterialTapTargetSize.shrinkWrap : null;
+        : const EdgeInsets.symmetric(vertical: 9, horizontal: 18);
+    final minimumSize = compact ? const Size(0, 32) : const Size(0, 40);
+    const tapTargetSize = MaterialTapTargetSize.shrinkWrap;
     final Widget child = loading
         ? SizedBox(
             width: 18,
@@ -350,6 +352,9 @@ class AgriDialogButton extends StatelessWidget {
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade50,
             foregroundColor: Colors.red.shade700,
+            // A red outline, like the green one on the secondary button,
+            // so it reads as a button (Remove, Log Out, Delete…).
+            side: BorderSide(color: Colors.red.shade700, width: 1.2),
             elevation: 0,
             padding: padding,
             minimumSize: minimumSize,
@@ -384,7 +389,8 @@ Future<bool> showAgriConfirm({
   required String title,
   required String message,
   required String confirmLabel,
-  String cancelLabel = 'Cancel',
+  // Defaults to "Cancel" in the app's language.
+  String? cancelLabel,
   AgriTone tone = AgriTone.normal,
   IconData? icon,
   bool barrierDismissible = true,
@@ -399,7 +405,7 @@ Future<bool> showAgriConfirm({
       content: Text(message),
       actions: [
         AgriDialogButton(
-          label: cancelLabel,
+          label: cancelLabel ?? (tr(dialogContext).cancel),
           onPressed: () => Navigator.pop(dialogContext, false),
         ),
         AgriDialogButton(

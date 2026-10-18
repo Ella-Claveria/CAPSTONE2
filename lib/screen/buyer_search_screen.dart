@@ -20,6 +20,8 @@ import '../widgets/retry_message.dart';
 import 'product_detail_screen.dart';
 import 'farmer_storefront_screen.dart';
 import '../widgets/agri_empty_state.dart';
+import '../services/personal_recommendations.dart';
+import '../services/order_service.dart';
 
 /// The dedicated Buyer Search experience — opened by tapping the (non-
 /// editable) search bar on Explore, never an inline field on the
@@ -89,6 +91,69 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   Map<String, bool> _verifiedByFarmerUid = {};
   StreamSubscription? _usersSub;
 
+  // This buyer's own orders — what they buy, for Recommended Products.
+  List<Map<String, dynamic>> _myOrders = const [];
+  StreamSubscription? _ordersSub;
+
+  // Every listing, for Recommended Products and the results alike: read
+  // once when Search opens — first the copy already on this phone, so
+  // something shows at once, then kept live — never again per rebuild.
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>? _allProducts;
+  bool _productsFailed = false;
+  StreamSubscription? _productsSub;
+
+  // The buyer's town, and what buyers there bought (for a buyer with no
+  // history of their own yet).
+  String _myTown = '';
+  List<Map<String, dynamic>> _areaSales = const [];
+
+  void _listenToProducts() {
+    _productsSub?.cancel();
+    if (_productsFailed && mounted) setState(() => _productsFailed = false);
+    FirebaseFirestore.instance
+        .collection('products')
+        .get(const GetOptions(source: Source.cache))
+        .then((snap) {
+          if (mounted && _allProducts == null && snap.docs.isNotEmpty) {
+            setState(() => _allProducts = snap.docs);
+          }
+        })
+        .catchError((Object _) {});
+    _productsSub = _productService.allProductsStream().listen(
+      (snap) {
+        if (mounted) setState(() => _allProducts = snap.docs);
+      },
+      onError: (Object _) {
+        if (mounted && _allProducts == null) {
+          setState(() => _productsFailed = true);
+        }
+      },
+    );
+  }
+
+  Future<void> _loadAreaSales(String uid) async {
+    try {
+      final me = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      final town = (me.data()?['municipality'] ?? '').toString().trim();
+      if (town.isEmpty) return;
+      final sales = await FirebaseFirestore.instance
+          .collection('market_sales')
+          .where('buyerArea', isEqualTo: town)
+          .limit(300)
+          .get();
+      if (!mounted) return;
+      setState(() {
+        _myTown = town;
+        _areaSales = [for (final d in sales.docs) d.data()];
+      });
+    } catch (_) {
+      // Then the newest listings are recommended instead.
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -125,8 +190,16 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     // orderBy paired with the equality filter (avoids needing a composite
     // Firestore index) — sorted and deduplicated client-side instead.
     final uid = FirebaseAuth.instance.currentUser?.uid;
+    _listenToProducts();
+
     if (uid != null) {
       _loadRecentClearedAt(uid);
+      _loadAreaSales(uid);
+
+      _ordersSub = OrderService().buyerOrdersStream().listen((snap) {
+        if (!mounted) return;
+        setState(() => _myOrders = [for (final d in snap.docs) d.data()]);
+      }, onError: (_) {});
 
       // Liked products (shared state — also draws the hearts on the cards).
       LikedProducts.instance
@@ -201,6 +274,8 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   void dispose() {
     _trendingSub?.cancel();
     _recentSub?.cancel();
+    _ordersSub?.cancel();
+    _productsSub?.cancel();
     LikedProducts.instance.removeListener(_onLikesChanged);
     _usersSub?.cancel();
     _controller.dispose();
@@ -319,7 +394,7 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   Widget build(BuildContext context) {
     final showingResults = _activeQuery != null;
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F9F6),
+      backgroundColor: AppTheme.surface,
       body: SafeArea(
         child: Column(
           children: [
@@ -466,7 +541,6 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
           const SizedBox(height: 22),
         ],
         _sectionHeading('Recommended Products'),
-        const SizedBox(height: 10),
         _buildRecommendedProducts(),
       ],
     );
@@ -498,22 +572,37 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
     return sorted;
   }
 
-  // Ranked by real marketplace performance — completed orders (50%),
-  // rating (30%) and review count (20%) — among listings that are active
-  // and in stock; see ProductRecommendationService. Where there is no
-  // sales or review history yet, the most viewed and newest real listings
-  // come first. Never random, never hardcoded.
-  List<QueryDocumentSnapshot<Map<String, dynamic>>> _recommended(
+  // This buyer's own search terms, newest first.
+  List<String> get _mySearchTerms => [for (final (term, _) in _recentRaw) term];
+
+  // Made for this buyer (see PersonalRecommendations): their own orders,
+  // likes and searches; with no history yet, what buyers in their town
+  // buy; failing that, the newest listings. Only active, in-stock ones.
+  ({
     List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-  ) {
+    RecommendationBasis basis,
+  })
+  _recommended(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
     final byId = {for (final doc in docs) doc.id: doc};
-    return [
-      for (final id in ProductRecommendationService.rank({
-        for (final doc in docs) doc.id: doc.data(),
-      }).take(8))
-        byId[id]!,
-    ];
+    final result = PersonalRecommendations.recommend(
+      products: {for (final doc in docs) doc.id: doc.data()},
+      orders: _myOrders,
+      likedIds: LikedProducts.instance.orderedIds,
+      searches: _mySearchTerms,
+      areaSales: _areaSales,
+    );
+    return (
+      docs: [for (final id in result.ids.take(8)) byId[id]!],
+      basis: result.basis,
+    );
   }
+
+  String _basisLabel(RecommendationBasis basis) => switch (basis) {
+    RecommendationBasis.personal =>
+      'Based on what you buy, like and search for',
+    RecommendationBasis.area => 'Popular with buyers in $_myTown',
+    RecommendationBasis.newest => 'Newest from farmers',
+  };
 
   // The same two-column cards as Explore, sized the same way (height from
   // the column width and text size — see ExploreProductCard.extentFor).
@@ -560,23 +649,23 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
   }
 
   Widget _buildRecommendedProducts() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _productService.allProductsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return RetryMessage(
-            message:
-                'Could not load recommended products. Check your connection and try again.',
-            onRetry: () => setState(() {}),
-          );
-        }
-        if (!snapshot.hasData) {
+    return Builder(
+      builder: (context) {
+        final all = _allProducts;
+        if (all == null) {
+          if (_productsFailed) {
+            return RetryMessage(
+              message:
+                  'Could not load recommended products. Check your connection and try again.',
+              onRetry: _listenToProducts,
+            );
+          }
           return const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
             child: Center(child: CircularProgressIndicator(color: _dark)),
           );
         }
-        final docs = snapshot.data!.docs
+        final docs = all
             .where(
               (d) =>
                   d.data()['isArchived'] != true &&
@@ -592,26 +681,38 @@ class _BuyerSearchScreenState extends State<BuyerSearchScreen> {
             ),
           );
         }
-        return _productGrid(_recommended(docs));
+        final recommended = _recommended(docs);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 2),
+            Text(
+              _basisLabel(recommended.basis),
+              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            _productGrid(recommended.docs),
+          ],
+        );
       },
     );
   }
 
   Widget _buildResults() {
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _productService.allProductsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+    return Builder(
+      builder: (context) {
+        final all = _allProducts;
+        if (all == null) {
+          if (_productsFailed) {
+            return RetryMessage(
+              message:
+                  'Could not load products. Check your connection and try again.',
+              onRetry: _listenToProducts,
+            );
+          }
           return const Center(child: CircularProgressIndicator(color: _dark));
         }
-        if (snapshot.hasError) {
-          return RetryMessage(
-            message:
-                'Could not load products. Check your connection and try again.',
-            onRetry: () => setState(() {}),
-          );
-        }
-        var docs = snapshot.data?.docs ?? [];
+        var docs = [...all];
         docs = docs
             .where(
               (d) =>

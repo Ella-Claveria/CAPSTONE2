@@ -178,7 +178,7 @@ class ExploreProductCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      name,
+                      withSellingOption(name, data),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -221,7 +221,7 @@ class ExploreProductCard extends StatelessWidget {
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFE8F5E9),
+                          color: AppTheme.tint,
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: const Text(

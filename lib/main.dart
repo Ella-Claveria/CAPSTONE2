@@ -4,7 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'theme/app_theme.dart';
 import 'screen/app_bootstrap.dart';
 import 'l10n/app_localizations.dart';
-import 'l10n/locale_controller.dart';
+import 'widgets/app_scaffold_messenger.dart';
 import 'widgets/connectivity_banner.dart';
 import 'services/account_status_watcher.dart';
 import 'services/session_timeout_service.dart';
@@ -36,74 +36,70 @@ class AgriTradeApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Rebuilds the whole app when the language picker changes the locale.
-    return ListenableBuilder(
-      listenable: Listenable.merge([
-        LocaleController.instance,
-        ThemeController.instance,
-      ]),
-      builder: (context, _) {
-        return MaterialApp(
-          title: 'AgriTrade+',
-          navigatorKey: rootNavigatorKey,
+    return MaterialApp(
+      title: 'AgriTrade+',
+      navigatorKey: rootNavigatorKey,
 
-          // Hides the red "DEBUG" ribbon in the corner.
-          debugShowCheckedModeBanner: false,
+      // Hides the red "DEBUG" ribbon in the corner.
+      debugShowCheckedModeBanner: false,
 
-          // One line = Montserrat everywhere, plus your green theme.
-          theme: AppTheme.themeData(),
-          darkTheme: AppTheme.darkThemeData(),
-          themeMode: ThemeController.instance.isDark
-              ? ThemeMode.dark
-              : ThemeMode.light,
+      // One line = Montserrat everywhere, plus your green theme.
+      theme: AppTheme.themeData(),
+      // Light only — the app has no dark mode.
+      themeMode: ThemeMode.light,
 
-          locale: LocaleController.instance.locale,
-          localizationsDelegates: const [
-            AppLocalizations.delegate,
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: const AppBootstrap(),
-          // `builder` wraps whatever route the Navigator is currently
-          // showing — unlike `home` (which only wraps the FIRST route ever
-          // pushed), this keeps running for every screen reached via
-          // Navigator.push/pushReplacement/pushAndRemoveUntil afterward,
-          // which in practice is almost the entire app (login, role
-          // selection, Farmer/Buyer Home, ...). Both ConnectivityBanner and
-          // the activity-tracking Listener/Focus below used to live inside
-          // `home` instead, which meant they only ever saw AppBootstrap's
-          // own brief splash screen — the connectivity banner could never
-          // show once the user navigated past boot, and recordActivity()
-          // never fired again after the very first route change, so
-          // SessionTimeoutService's 15-minute idle timer kept counting
-          // down from that single call no matter how much the user kept
-          // actively using the app, eventually signing them out from
-          // right in the middle of a session. Wrapping the Navigator's
-          // own current child here, instead of one specific route's
-          // content, is what actually makes both of these span every
-          // screen.
-          builder: (context, child) {
-            return ConnectivityBanner(
-              child: Listener(
-                onPointerDown: (_) =>
-                    SessionTimeoutService.instance.recordActivity(),
-                onPointerMove: (_) =>
-                    SessionTimeoutService.instance.recordActivity(),
-                onPointerSignal: (_) =>
-                    SessionTimeoutService.instance.recordActivity(),
-                child: Focus(
-                  autofocus: true,
-                  onKeyEvent: (node, event) {
-                    SessionTimeoutService.instance.recordActivity();
-                    return KeyEventResult.ignored;
-                  },
-                  child: child ?? const SizedBox.shrink(),
-                ),
+      // English only. The texts still come from the translation files
+      // (lib/l10n), so a Filipino version can be added later by
+      // translating app_tl.arb and offering a language choice again.
+      locale: const Locale('en'),
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: const AppBootstrap(),
+      // `builder` wraps whatever route the Navigator is currently
+      // showing — unlike `home` (which only wraps the FIRST route ever
+      // pushed), this keeps running for every screen reached via
+      // Navigator.push/pushReplacement/pushAndRemoveUntil afterward,
+      // which in practice is almost the entire app (login, role
+      // selection, Farmer/Buyer Home, ...). Both ConnectivityBanner and
+      // the activity-tracking Listener/Focus below used to live inside
+      // `home` instead, which meant they only ever saw AppBootstrap's
+      // own brief splash screen — the connectivity banner could never
+      // show once the user navigated past boot, and recordActivity()
+      // never fired again after the very first route change, so
+      // SessionTimeoutService's 15-minute idle timer kept counting
+      // down from that single call no matter how much the user kept
+      // actively using the app, eventually signing them out from
+      // right in the middle of a session. Wrapping the Navigator's
+      // own current child here, instead of one specific route's
+      // content, is what actually makes both of these span every
+      // screen.
+      builder: (context, child) {
+        return ConnectivityBanner(
+          child: Listener(
+            onPointerDown: (_) =>
+                SessionTimeoutService.instance.recordActivity(),
+            onPointerMove: (_) =>
+                SessionTimeoutService.instance.recordActivity(),
+            onPointerSignal: (_) =>
+                SessionTimeoutService.instance.recordActivity(),
+            child: Focus(
+              autofocus: true,
+              onKeyEvent: (node, event) {
+                SessionTimeoutService.instance.recordActivity();
+                return KeyEventResult.ignored;
+              },
+              // Every message (SnackBar): 2 seconds, and the newest
+              // replaces the one showing (AppScaffoldMessenger).
+              child: AppScaffoldMessenger(
+                child: child ?? const SizedBox.shrink(),
               ),
-            );
-          },
+            ),
+          ),
         );
       },
     );

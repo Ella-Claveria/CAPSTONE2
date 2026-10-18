@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import '../widgets/agri_dialog.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -17,6 +19,7 @@ import '../widgets/agri_refresh_indicator.dart';
 import '../theme/app_theme.dart';
 import '../widgets/notification_bell.dart';
 import 'add_product_screen.dart';
+import '../l10n/tr.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 //
@@ -27,6 +30,31 @@ import 'add_product_screen.dart';
 //   MarketTab(onNavigateToTab: (i) => setState(() => _selectedIndex = i))
 // Index assumption, matching the rest of this build: 2=Orders, 3=Profile —
 // adjust _ordersTabIndex/_profileTabIndex below if your order differs.
+/// The first name of [fullName] ("Daniella Claveria" → "Daniella"), for
+/// the Market welcome card; "Farmer" when there is no name.
+String firstNameOf(String fullName) {
+  final words = fullName.trim().split(RegExp(r'\s+'));
+  return words.first.isEmpty ? 'Farmer' : words.first;
+}
+
+/// The Sales Performance chart's y-axis: a round [step] — 1, 2, 2.5 or 5
+/// times a power of ten — giving about three steps up to the month's best
+/// day, and a [max] that is a whole number of steps with a little room
+/// above that day.
+({double max, double step}) salesChartScale(double maxRevenue) {
+  if (maxRevenue <= 0) return (max: 100, step: 25);
+  final rough = maxRevenue / 3;
+  final magnitude = math.pow(10, (math.log(rough) / math.ln10).floor());
+  final step = [
+    1,
+    2,
+    2.5,
+    5,
+    10,
+  ].map((m) => m * magnitude).firstWhere((s) => s >= rough).toDouble();
+  return (max: (maxRevenue * 1.05 / step).ceil() * step, step: step);
+}
+
 class MarketTab extends StatefulWidget {
   final ValueChanged<int>? onNavigateToTab;
 
@@ -57,19 +85,43 @@ class _MarketTabState extends State<MarketTab> {
     return DateTime(month.year, month.month);
   }
 
+  // The live data this tab shows, each opened once (and again only on
+  // Retry) — never on every rebuild. One stream per card: a stream that
+  // another card is already listening to does not repeat its latest data
+  // to a card that starts listening later, which would then wait forever.
+  late Stream<DocumentSnapshot<Map<String, dynamic>>> _salesProfile =
+      _profileStream();
+  late Stream<DocumentSnapshot<Map<String, dynamic>>> _welcomeProfile =
+      _profileStream();
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _salesOrders = OrderService()
+      .farmerOrdersStream();
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _statOrders = OrderService()
+      .farmerOrdersStream();
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _products = ProductService()
+      .myProductsStream();
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _profileStream() =>
+      FirebaseFirestore.instance
+          .collection('users')
+          .doc(FirebaseAuth.instance.currentUser?.uid ?? '_')
+          .snapshots();
+
+  void _reconnect() => setState(() {
+    _salesProfile = _profileStream();
+    _welcomeProfile = _profileStream();
+    _salesOrders = OrderService().farmerOrdersStream();
+    _statOrders = OrderService().farmerOrdersStream();
+    _products = ProductService().myProductsStream();
+  });
+
   int _lastProductCount = 0;
   // Until the product list has loaded, a count of 0 means "unknown", not
   // "no products".
   bool _productsLoaded = false;
-  @override
-  void initState() {
-    super.initState();
-    // A first-time farmer is told which cards are their own sales and
-    // which are the whole marketplace, once.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) showMarketTabGuideOnce(context);
-    });
-  }
+  // A first-time farmer is told which cards are their own sales and which
+  // are the whole marketplace — a small hint at each card as they scroll
+  // to it, one at a time (MarketTabHints), instead of a popup up front.
+  final _hints = MarketTabHints();
 
   Widget _salesPerformanceLineCard(int productCount) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -78,10 +130,7 @@ class _MarketTabState extends State<MarketTab> {
     }
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .snapshots(),
+      stream: _salesProfile,
       builder: (context, userSnapshot) {
         if (userSnapshot.connectionState == ConnectionState.waiting &&
             !userSnapshot.hasData) {
@@ -91,7 +140,7 @@ class _MarketTabState extends State<MarketTab> {
           return RetryMessage(
             message:
                 'Could not load your verification date. Check your connection and retry.',
-            onRetry: () => setState(() {}),
+            onRetry: _reconnect,
           );
         }
 
@@ -129,7 +178,7 @@ class _MarketTabState extends State<MarketTab> {
         );
 
         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: OrderService().farmerOrdersStream(),
+          stream: _salesOrders,
           builder: (context, ordersSnapshot) {
             if (ordersSnapshot.connectionState == ConnectionState.waiting &&
                 !ordersSnapshot.hasData) {
@@ -139,7 +188,7 @@ class _MarketTabState extends State<MarketTab> {
               return RetryMessage(
                 message:
                     'Could not load completed orders. Check your connection and retry.',
-                onRetry: () => setState(() {}),
+                onRetry: _reconnect,
               );
             }
             final orders =
@@ -161,7 +210,11 @@ class _MarketTabState extends State<MarketTab> {
               0,
               (max, day) => day.revenue > max ? day.revenue : max,
             );
-            final chartMax = maxRevenue <= 0 ? 100.0 : maxRevenue * 1.2;
+            // A round step (₱50, ₱100, ₱200, ₱250…) and a top that is a
+            // whole number of steps, so every axis label sits on a grid
+            // line and the top one never lands on top of another.
+            final scale = salesChartScale(maxRevenue);
+            final chartMax = scale.max;
             final firstEligibleDate = DateTime(
               selectedMonth.year,
               selectedMonth.month,
@@ -193,23 +246,7 @@ class _MarketTabState extends State<MarketTab> {
                 children: [
                   Row(
                     children: [
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            _SectionTitle('Sales Performance'),
-                            SizedBox(height: 3),
-                            Text(
-                              'Completed-order revenue',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.normal,
-                                color: Colors.black54,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      const Expanded(child: _SalesHeading()),
                       _monthPill(
                         MaterialLocalizations.of(
                           context,
@@ -269,7 +306,7 @@ class _MarketTabState extends State<MarketTab> {
                           maxY: chartMax,
                           gridData: FlGridData(
                             drawVerticalLine: false,
-                            horizontalInterval: chartMax / 3,
+                            horizontalInterval: scale.step,
                             getDrawingHorizontalLine: (_) => const FlLine(
                               color: Color(0xFFE9EEE6),
                               strokeWidth: 1,
@@ -286,6 +323,7 @@ class _MarketTabState extends State<MarketTab> {
                               sideTitles: SideTitles(
                                 showTitles: true,
                                 reservedSize: 44,
+                                interval: scale.step,
                                 getTitlesWidget: (value, meta) => Text(
                                   '₱${value >= 1000 ? '${(value / 1000).toStringAsFixed(0)}k' : value.toStringAsFixed(0)}',
                                   style: TextStyle(
@@ -325,6 +363,10 @@ class _MarketTabState extends State<MarketTab> {
                             LineChartBarData(
                               spots: spots,
                               isCurved: true,
+                              // A smooth line that never swings below ₱0
+                              // (or past a day's real total) before a
+                              // sudden jump in sales.
+                              preventCurveOverShooting: true,
                               color: _dark,
                               barWidth: 3,
                               dotData: const FlDotData(show: false),
@@ -361,7 +403,7 @@ class _MarketTabState extends State<MarketTab> {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F8EF),
+        color: AppTheme.tint,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
@@ -652,9 +694,7 @@ class _MarketTabState extends State<MarketTab> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: _dark,
                           side: const BorderSide(color: Color(0xFFDDE5DB)),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                          shape: const StadiumBorder(),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                         child: const Text('Cancel'),
@@ -669,9 +709,7 @@ class _MarketTabState extends State<MarketTab> {
                           backgroundColor: AppTheme.dark,
                           foregroundColor: Colors.white,
                           elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                          shape: const StadiumBorder(),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                         child: const Text('Apply'),
@@ -700,7 +738,7 @@ class _MarketTabState extends State<MarketTab> {
         height: 34,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: enabled ? const Color(0xFFEAF4E7) : const Color(0xFFF3F4F3),
+          color: enabled ? AppTheme.tint : const Color(0xFFF3F4F3),
           shape: BoxShape.circle,
         ),
         child: Icon(icon, size: 20, color: enabled ? _dark : Colors.black26),
@@ -747,19 +785,7 @@ class _MarketTabState extends State<MarketTab> {
     ),
     child: const Row(
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _SectionTitle('Sales Performance'),
-              SizedBox(height: 3),
-              Text(
-                'Completed-order revenue',
-                style: TextStyle(fontSize: 11, color: Colors.black54),
-              ),
-            ],
-          ),
-        ),
+        Expanded(child: _SalesHeading()),
         AgriLogoLoader(),
       ],
     ),
@@ -821,59 +847,83 @@ class _MarketTabState extends State<MarketTab> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: ProductService().myProductsStream(),
+      stream: _products,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return RetryMessage(
             message:
                 'Could not load your products. Check your connection and try again.',
-            onRetry: () => setState(() {}),
+            onRetry: _reconnect,
           );
         }
+        // Active listings only — archived ones are not "listed", the same
+        // count Inventory shows as Active Products.
         if (snapshot.hasData) {
-          _lastProductCount = snapshot.data!.docs.length;
+          _lastProductCount = snapshot.data!.docs
+              .where((doc) => doc.data()['isArchived'] != true)
+              .length;
           _productsLoaded = true;
         }
-        final productCount = snapshot.hasData
-            ? snapshot.data!.docs.length
-            : _lastProductCount;
+        final productCount = _lastProductCount;
 
         return AgriRefreshIndicator(
           onRefresh: _refresh,
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.only(bottom: 90),
-            children: [
-              // Same title row as Messages, Orders and Profile.
-              PageHeader(
-                title: 'Market',
-                trailing: widget.onNotificationsPressed == null
-                    ? null
-                    : NotificationBell(
-                        onPressed: widget.onNotificationsPressed!,
-                        color: AppTheme.dark,
-                      ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _welcomeHeader(productCount),
-                    const SizedBox(height: 16),
-                    _statRow(productCount),
-                    const SizedBox(height: 16),
-                    _salesPerformanceLineCard(productCount),
-                    const SizedBox(height: 16),
-                    // What supported products are selling for right now.
-                    const MarketAverageCard(),
-                    const SizedBox(height: 16),
-                    // Same month as the Sales Performance card above.
-                    MarketDemandCards(month: _analyticsMonth),
-                  ],
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (n) {
+              if (n is ScrollUpdateNotification || n is ScrollEndNotification) {
+                _hints.onScroll(
+                  context,
+                  userScroll:
+                      n is ScrollUpdateNotification && n.dragDetails != null,
+                );
+              }
+              return false;
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(bottom: 90),
+              children: [
+                // Same title row as Messages, Orders and Profile.
+                PageHeader(
+                  title: tr(context).navMarket,
+                  trailing: widget.onNotificationsPressed == null
+                      ? null
+                      : NotificationBell(
+                          onPressed: widget.onNotificationsPressed!,
+                          color: PageHeader.onBandColor,
+                        ),
                 ),
-              ),
-            ],
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _welcomeHeader(productCount),
+                      const SizedBox(height: 16),
+                      _statRow(productCount),
+                      const SizedBox(height: 16),
+                      KeyedSubtree(
+                        key: _hints.keys[0],
+                        child: _salesPerformanceLineCard(productCount),
+                      ),
+                      const SizedBox(height: 16),
+                      // What supported products are selling for right now.
+                      KeyedSubtree(
+                        key: _hints.keys[1],
+                        child: const MarketAverageCard(),
+                      ),
+                      const SizedBox(height: 16),
+                      // Same month as the Sales Performance card above.
+                      MarketDemandCards(
+                        month: _analyticsMonth,
+                        bestSellersKey: _hints.keys[2],
+                        locationsKey: _hints.keys[3],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -885,15 +935,15 @@ class _MarketTabState extends State<MarketTab> {
     if (user == null) return const SizedBox.shrink();
 
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .snapshots(),
+      stream: _welcomeProfile,
       builder: (context, snapshot) {
         final data = snapshot.data?.data() ?? const <String, dynamic>{};
-        final name =
+        final fullName =
             (data['name'] ?? data['fullName'] ?? user.displayName ?? 'Farmer')
-                .toString();
+                .toString()
+                .trim();
+        // First name only: "Welcome, Daniella".
+        final name = firstNameOf(fullName);
         final photoUrl = data['photoUrl']?.toString() ?? '';
         final imageProvider = photoUrl.isNotEmpty
             ? NetworkImage(photoUrl)
@@ -907,7 +957,10 @@ class _MarketTabState extends State<MarketTab> {
             onTap: () => widget.onNavigateToTab?.call(_profileTabIndex),
             child: Container(
               height: 106,
-              padding: const EdgeInsets.fromLTRB(30, 14, 22, 14),
+              // The text a little further in from the left edge, and the
+              // photo a little further in from the right, both clear of the
+              // banner's rounded corners.
+              padding: const EdgeInsets.fromLTRB(40, 14, 34, 14),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
                 image: const DecorationImage(
@@ -922,8 +975,8 @@ class _MarketTabState extends State<MarketTab> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Welcome back,',
+                        Text(
+                          tr(context).welcomeBack,
                           style: TextStyle(
                             color: Color(0xFF52614F),
                             fontSize: 12,
@@ -944,7 +997,7 @@ class _MarketTabState extends State<MarketTab> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '$productCount product${productCount == 1 ? '' : 's'} listed',
+                          tr(context).productsListed(productCount),
                           style: const TextStyle(
                             color: Color(0xFF52614F),
                             fontSize: 11,
@@ -972,7 +1025,7 @@ class _MarketTabState extends State<MarketTab> {
 
   Widget _statRow(int productCount) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: OrderService().farmerOrdersStream(),
+      stream: _statOrders,
       builder: (context, snapshot) {
         final today = DateTime.now();
         final totalOrdersToday = (snapshot.data?.docs ?? const []).where((doc) {
@@ -993,7 +1046,8 @@ class _MarketTabState extends State<MarketTab> {
             children: [
               Expanded(
                 child: _statCard(
-                  'TOTAL ORDERS',
+                  // Today's new and confirmed orders — what it counts.
+                  tr(context).ordersToday,
                   '$totalOrdersToday',
                   onTap: () => widget.onNavigateToTab?.call(_ordersTabIndex),
                 ),
@@ -1001,7 +1055,7 @@ class _MarketTabState extends State<MarketTab> {
               const SizedBox(width: 12),
               Expanded(
                 child: _statCard(
-                  'TOTAL PRODUCTS',
+                  tr(context).totalProductsCard,
                   '$productCount',
                   onTap: () => widget.onNavigateToTab?.call(_profileTabIndex),
                 ),
@@ -1068,6 +1122,27 @@ class _MarketTabState extends State<MarketTab> {
 /// Products"): Montserrat SemiBold. Built with GoogleFonts so the real
 /// semibold face is used — a plain TextStyle(fontWeight: bold) only gets a
 /// synthesized bold of the regular face, which reads noticeably weaker.
+/// "Sales Performance" with "Completed-order revenue" under it.
+class _SalesHeading extends StatelessWidget {
+  const _SalesHeading();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tr(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionTitle(t.salesPerformance),
+        const SizedBox(height: 3),
+        Text(
+          t.completedOrderRevenue,
+          style: const TextStyle(fontSize: 11, color: Colors.black54),
+        ),
+      ],
+    );
+  }
+}
+
 class _SectionTitle extends StatelessWidget {
   final String text;
 

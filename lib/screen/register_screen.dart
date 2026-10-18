@@ -21,10 +21,10 @@ import '../widgets/password_requirements.dart';
 import '../widgets/public_location_preview.dart';
 import '../widgets/role_toggle.dart';
 import 'page_transitions.dart';
-import '../l10n/app_localizations.dart';
 import 'privacy_policy_screen.dart';
 import 'supported_products_screen.dart';
 import 'terms_and_conditions_screen.dart';
+import '../l10n/tr.dart';
 
 class RegisterScreen extends StatefulWidget {
   // Which role the toggle at the top starts on. Defaults to buyer; the
@@ -394,8 +394,8 @@ class _RegisterScreenState extends State<RegisterScreen>
   Widget _roleToggle() => RoleToggle(
     selected: _selectedRole,
     onChanged: _selectRole,
-    buyerLabel: AppLocalizations.of(context)!.roleBuyer,
-    farmerLabel: AppLocalizations.of(context)!.roleFarmer,
+    buyerLabel: tr(context).roleBuyer,
+    farmerLabel: tr(context).roleFarmer,
   );
 
   // ==========================================================
@@ -748,10 +748,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                   color: Colors.white,
                 ),
               )
-            : Text(
-                AppLocalizations.of(context)!.registerButton,
-                style: AppTheme.buttonText(),
-              ),
+            : Text(tr(context).registerButton, style: AppTheme.buttonText()),
       ),
     );
   }
@@ -794,13 +791,9 @@ class _RegisterScreenState extends State<RegisterScreen>
                     text: TextSpan(
                       style: AppTheme.body(color: Colors.black87, size: 13.5),
                       children: [
+                        TextSpan(text: tr(context).alreadyHaveAccount),
                         TextSpan(
-                          text: AppLocalizations.of(
-                            context,
-                          )!.alreadyHaveAccount,
-                        ),
-                        TextSpan(
-                          text: AppLocalizations.of(context)!.logIn,
+                          text: tr(context).logIn,
                           style: AppTheme.body(
                             color: AppTheme.dark,
                             size: 13.5,
@@ -885,7 +878,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                       const SizedBox(height: 6),
                       Center(
                         child: Text(
-                          AppLocalizations.of(context)!.registerTitle,
+                          tr(context).registerTitle,
                           style: AppTheme.heading(20),
                         ),
                       ),
@@ -899,7 +892,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
                       // ---- Full name ----
                       _buildField(
-                        label: AppLocalizations.of(context)!.fullName,
+                        label: tr(context).fullName,
                         controller: _fullNameController,
                         hint: 'Juan F. Santos',
                         icon: Icons.person_outline,
@@ -911,7 +904,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
                       // ---- Email ----
                       _buildField(
-                        label: AppLocalizations.of(context)!.emailAddress,
+                        label: tr(context).emailAddress,
                         controller: _emailController,
                         hint: 'juansantos@gmail.com',
                         icon: Icons.email_outlined,
@@ -939,7 +932,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
                       // ---- Password ----
                       _buildField(
-                        label: AppLocalizations.of(context)!.password,
+                        label: tr(context).password,
                         controller: _passwordController,
                         hint: 'At least 12 characters',
                         icon: Icons.lock_outline,
@@ -961,7 +954,7 @@ class _RegisterScreenState extends State<RegisterScreen>
 
                       // ---- Confirm password ----
                       _buildField(
-                        label: AppLocalizations.of(context)!.confirmPassword,
+                        label: tr(context).confirmPassword,
                         controller: _confirmController,
                         hint: 'Re-enter your password',
                         icon: Icons.lock_reset_outlined,

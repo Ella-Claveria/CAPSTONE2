@@ -448,7 +448,7 @@ class _ChangeEmailDialogState extends State<_ChangeEmailDialog> {
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFF6F8F5),
+        color: AppTheme.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE3E8E1)),
       ),

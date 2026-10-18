@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/order_contact_service.dart';
 import '../services/support_request_service.dart';
 import '../theme/app_theme.dart';
+import 'agri_dialog.dart';
 
 /// What Order Details shows about phone contact, for one side of an order.
 ///
@@ -103,28 +104,18 @@ class _OrderContactSectionState extends State<OrderContactSection> {
   }
 
   Future<void> _report() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAgriConfirm(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Report incorrect number?'),
-        content: Text(
+      icon: Icons.phone_disabled_outlined,
+      tone: AgriTone.warning,
+      title: 'Report incorrect number?',
+      message:
           "This tells AgriTrade+ support that the $_other's contact number "
           'on this order is wrong or cannot be reached. You can keep using '
           'Messages to reach them.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Report'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Report',
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     setState(() => _reporting = true);
     // The number itself is left out: support looks it up from the order.

@@ -312,19 +312,32 @@ class _HelpCenterDialogState extends State<_HelpCenterDialog> {
 
   // The support team's confirmed contacts (or that they are coming soon),
   // then Close.
-  Widget _footer(AdminPalette c, bool narrow) => Padding(
-    padding: const EdgeInsets.fromLTRB(24, 10, 24, 14),
-    child: Row(
-      children: [
-        Expanded(child: AdminSupportContacts(palette: c)),
-        const SizedBox(width: 12),
-        OutlinedButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Close'),
-        ),
-      ],
-    ),
-  );
+  // On a narrow window the contacts go above Close instead of beside it.
+  Widget _footer(AdminPalette c, bool narrow) {
+    final close = OutlinedButton(
+      onPressed: () => Navigator.of(context).pop(),
+      child: const Text('Close'),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 10, 24, 14),
+      child: narrow
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                AdminSupportContacts(palette: c),
+                const SizedBox(height: 8),
+                Align(alignment: Alignment.centerRight, child: close),
+              ],
+            )
+          : Row(
+              children: [
+                Expanded(child: AdminSupportContacts(palette: c)),
+                const SizedBox(width: 12),
+                close,
+              ],
+            ),
+    );
+  }
 }
 
 /// The support team's confirmed email and number ([adminSupportContacts]),
@@ -339,6 +352,18 @@ class AdminSupportContacts extends StatelessWidget {
     final c = palette;
     final contacts = adminSupportContacts;
     if (contacts.isEmpty) return const SizedBox.shrink();
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          _contacts(context, c, contacts, constraints.maxWidth),
+    );
+  }
+
+  Widget _contacts(
+    BuildContext context,
+    AdminPalette c,
+    List<({String label, String value})> contacts,
+    double maxWidth,
+  ) {
     return Wrap(
       spacing: 8,
       runSpacing: 6,
@@ -354,6 +379,9 @@ class AdminSupportContacts extends StatelessWidget {
         ),
         for (final contact in contacts)
           Container(
+            // Never wider than the footer; a long address is cut short
+            // (Copy still copies all of it).
+            constraints: BoxConstraints(maxWidth: maxWidth),
             padding: const EdgeInsets.fromLTRB(10, 2, 2, 2),
             decoration: BoxDecoration(
               color: c.surfaceAlt,
@@ -371,12 +399,15 @@ class AdminSupportContacts extends StatelessWidget {
                   color: AppTheme.dark,
                 ),
                 const SizedBox(width: 6),
-                SelectableText(
-                  contact.value,
-                  style: TextStyle(
-                    color: c.textPrimary,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
+                Flexible(
+                  child: SelectableText(
+                    contact.value,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: c.textPrimary,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 IconButton(

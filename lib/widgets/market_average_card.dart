@@ -6,6 +6,7 @@ import '../data/commodity_master_list.dart';
 import '../services/market_price_helpers.dart';
 import '../theme/app_theme.dart';
 import 'market_card_shell.dart';
+import '../l10n/tr.dart';
 
 /// One supported commodity's Current Market Average.
 typedef MarketAverageRow = ({String commodity, String unit, double average});
@@ -36,16 +37,16 @@ class _MarketAverageCardState extends State<MarketAverageCard> {
   final Stream<QuerySnapshot<Map<String, dynamic>>> _products =
       FirebaseFirestore.instance.collection('products').snapshots();
 
-  // Tiles shown before "View All": three rows of two.
+  // Rows shown before "View All".
   static const int _collapsedTiles = 6;
   bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     return MarketCardShell(
-      title: 'Current Market Average',
-      subtitle: 'Average retail price of active marketplace listings',
-      tag: 'Live',
+      title: tr(context).currentMarketAverage,
+      subtitle: tr(context).marketAverageSubtitle,
+      tag: tr(context).live,
       child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _products,
         builder: (context, snapshot) {
@@ -81,20 +82,12 @@ class _MarketAverageCardState extends State<MarketAverageCard> {
     final shown = _expanded ? rows : rows.take(_collapsedTiles).toList();
     return Column(
       children: [
-        LayoutBuilder(
-          builder: (context, constraints) {
-            const gap = 10.0;
-            final width = (constraints.maxWidth - gap) / 2;
-            return Wrap(
-              spacing: gap,
-              runSpacing: gap,
-              children: [
-                for (final row in shown)
-                  SizedBox(width: width, child: _tile(row)),
-              ],
-            );
-          },
-        ),
+        // One plain line per commodity, a hairline between them — easy to
+        // scan however many there are.
+        for (var i = 0; i < shown.length; i++) ...[
+          if (i > 0) Divider(height: 1, color: Colors.grey[200]),
+          _tile(shown[i]),
+        ],
         if (rows.length > _collapsedTiles)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -107,48 +100,44 @@ class _MarketAverageCardState extends State<MarketAverageCard> {
     );
   }
 
-  // One commodity: its name, then the price with the unit set smaller.
+  // One commodity on one line: its name, then the price and unit.
   Widget _tile(MarketAverageRow row) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 11, 12, 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF7FAF5),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
         children: [
-          Text(
-            row.commodity,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: GoogleFonts.montserrat(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 6),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
+          Expanded(
             child: Text(
-              formatPeso(row.average),
+              row.commodity,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: GoogleFonts.montserrat(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                color: AppTheme.dark,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w600,
+                color: Colors.black87,
               ),
             ),
           ),
-          const SizedBox(height: 1),
-          Text(
-            'per ${row.unit}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: GoogleFonts.montserrat(
-              fontSize: 11,
-              color: Colors.grey[600],
+          const SizedBox(width: 8),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: formatPeso(row.average),
+                  style: GoogleFonts.montserrat(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.dark,
+                  ),
+                ),
+                TextSpan(
+                  text: ' /${row.unit}',
+                  style: GoogleFonts.montserrat(
+                    fontSize: 11,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
             ),
           ),
         ],

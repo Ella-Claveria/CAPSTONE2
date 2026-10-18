@@ -6,6 +6,7 @@ import '../data/laurel_barangays.dart';
 import '../screen/confirm_farm_location_screen.dart';
 import '../services/location_permission_prompt.dart';
 import '../theme/app_theme.dart';
+import 'agri_dialog.dart';
 
 /// Farmer-only barangay picker (buyers use BuyerLocationField instead, since
 /// buyer registration isn't restricted to Laurel): a field that opens a
@@ -143,19 +144,22 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
     required String title,
     required String message,
   }) async {
-    final choice = await showDialog<String>(
+    final choice = await showAgriDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AgriDialog(
+        icon: Icons.location_off_outlined,
+        tone: AgriTone.warning,
         title: Text(title),
         content: Text(message),
         actions: [
-          TextButton(
+          AgriDialogButton(
+            label: 'Select Manually',
             onPressed: () => Navigator.pop(dialogContext, 'manual'),
-            child: const Text('Select Manually'),
           ),
-          TextButton(
+          AgriDialogButton(
+            label: 'Retry',
+            kind: AgriButtonKind.primary,
             onPressed: () => Navigator.pop(dialogContext, 'retry'),
-            child: const Text('Retry'),
           ),
         ],
       ),
@@ -286,15 +290,10 @@ class _BarangayLocationFieldState extends State<BarangayLocationField> {
 /// tapped, or null if the sheet was closed without choosing one. Nothing
 /// is ever picked on the user's behalf.
 Future<String?> showBarangayPicker(BuildContext context, {String? selected}) {
-  return showModalBottomSheet<String>(
+  // The app's frosted panel sheet and dimmed background, like every other.
+  return showAgriPanelSheet<String>(
     context: context,
     isScrollControlled: true,
-    useSafeArea: true,
-    backgroundColor: Colors.white,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    clipBehavior: Clip.antiAlias,
     builder: (_) => _BarangayPickerSheet(selected: selected),
   );
 }
@@ -416,15 +415,15 @@ class _BarangayPickerSheetState extends State<_BarangayPickerSheet> {
                   fillColor: const Color(0xFFF4F6F4),
                   contentPadding: const EdgeInsets.symmetric(vertical: 12),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(30),
                     borderSide: BorderSide.none,
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(30),
                     borderSide: BorderSide.none,
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
+                    borderRadius: BorderRadius.circular(30),
                     borderSide: const BorderSide(
                       color: AppTheme.mid,
                       width: 1.2,

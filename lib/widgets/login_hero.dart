@@ -112,7 +112,7 @@ class LoginHero extends StatelessWidget {
                       alignment: Alignment.topLeft,
                       child: DefaultTextStyle.merge(
                         style: const TextStyle(shadows: _textShadow),
-                        child: _lockup(),
+                        child: const BrandLockup(),
                       ),
                     ),
                   ),
@@ -149,7 +149,7 @@ class LoginHero extends StatelessWidget {
         final size = [
           26.0,
           box.maxWidth * 0.068,
-          (box.maxHeight - 6) / 4.4,
+          (box.maxHeight - 6) / BrandHeadline.heightFactor,
         ].reduce((a, b) => a < b ? a : b);
         // Hidden, not removed, when there is no room (the keyboard up), so
         // it does not type itself out again when the keyboard goes away.
@@ -160,12 +160,7 @@ class LoginHero extends StatelessWidget {
             child: ConstrainedBox(
               // Wraps onto two or three lines, never across the photo.
               constraints: const BoxConstraints(maxWidth: 340),
-              child: TypewriterHeadline(
-                text: 'Connecting Farmers to Better Markets',
-                highlight: 'Better Markets',
-                // The gold of the logo's leaves (and the sunrise).
-                highlightColor: const Color(0xFFF4C430),
-                subtitle: 'Grow together. Trade smarter.',
+              child: BrandHeadline(
                 fontSize: size < 15 ? 15 : size,
                 shadows: _textShadow,
               ),
@@ -175,8 +170,24 @@ class LoginHero extends StatelessWidget {
       },
     );
   }
+}
 
-  Widget _lockup() {
+/// The AgriTrade+ lockup on a photo: the logo, "AgriTrade+" beside it and
+/// the tagline under the name, all white. Shared by the mobile login hero
+/// and the Admin Portal's sign-in panel, so the two look the same; [scale]
+/// sizes the whole lockup (1 is the phone's).
+class BrandLockup extends StatelessWidget {
+  final double scale;
+  final String tagline;
+
+  const BrandLockup({
+    super.key,
+    this.scale = 1,
+    this.tagline = 'TRADE  •  GROW  •  PROSPER',
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -188,30 +199,57 @@ class LoginHero extends StatelessWidget {
           heightFactor: 0.76,
           child: Image.asset(
             'assets/images/logo.png',
-            height: 56,
+            height: 56 * scale,
             errorBuilder: (context, error, stackTrace) =>
-                const Icon(Icons.agriculture, size: 40, color: Colors.white),
+                Icon(Icons.agriculture, size: 40 * scale, color: Colors.white),
           ),
         ),
-        const SizedBox(width: 10),
+        SizedBox(width: 10 * scale),
         Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const AgriTradeText(fontSize: 20, light: true),
-            const SizedBox(height: 2),
+            AgriTradeText(fontSize: 20 * scale, light: true),
+            SizedBox(height: 2 * scale),
             Text(
               tagline,
               style: TextStyle(
-                fontSize: 9,
+                fontSize: 9 * scale,
                 fontWeight: FontWeight.w600,
-                letterSpacing: 1.6,
+                letterSpacing: 1.6 * scale,
                 color: Colors.white.withValues(alpha: 0.92),
               ),
             ),
           ],
         ),
       ],
+    );
+  }
+}
+
+/// "Connecting Farmers to Better Markets" (in the logo's gold), typed out,
+/// then "Grow together. Trade smarter." — the same on the mobile login and
+/// the Admin Portal's sign-in panel.
+class BrandHeadline extends StatelessWidget {
+  final double fontSize;
+  final List<Shadow>? shadows;
+
+  const BrandHeadline({super.key, required this.fontSize, this.shadows});
+
+  /// Its height is about this many times [fontSize] (up to three lines of
+  /// headline and the subtitle), for sizing it to the room it has.
+  static const double heightFactor = 4.4;
+
+  @override
+  Widget build(BuildContext context) {
+    return TypewriterHeadline(
+      text: 'Connecting Farmers to Better Markets',
+      highlight: 'Better Markets',
+      // The gold of the logo's leaves (and the sunrise).
+      highlightColor: const Color(0xFFF4C430),
+      subtitle: 'Grow together. Trade smarter.',
+      fontSize: fontSize,
+      shadows: shadows,
     );
   }
 }

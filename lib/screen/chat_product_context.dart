@@ -15,7 +15,7 @@ import 'add_product_screen.dart';
 import 'place_order_screen.dart';
 
 // Product context for a Farmer–Buyer conversation that's tied to a product,
-// shared by ChatScreen and MessageOrderScreen:
+// used by ChatScreen:
 //  - ChatProductCard: the card pinned above the messages (Order Now for the
 //    buyer; View Listing + Send Options for the farmer).
 //  - showSendOrderOptionsSheet: the farmer's Send Options confirmation.
@@ -579,7 +579,9 @@ class _ChatProductCardState extends State<ChatProductCard> {
   }
 
   Widget _card(ChatProduct? product, bool isFarmer, {required bool loaded}) {
-    final name = product?.name ?? widget.fallbackName;
+    final name = product == null
+        ? widget.fallbackName
+        : withSellingOption(product.name, product.data);
     final missing = loaded && product == null;
     final String? status = missing || (product != null && !product.listed)
         ? 'No longer available'
@@ -908,7 +910,7 @@ class _OrderOptionsMessageCardState extends State<OrderOptionsMessageCard> {
           maxWidth: MediaQuery.of(context).size.width * 0.78,
         ),
         decoration: BoxDecoration(
-          color: isMe ? const Color(0xFFF4F9F1) : Colors.white,
+          color: isMe ? AppTheme.tint : Colors.white,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: _border),
           boxShadow: [

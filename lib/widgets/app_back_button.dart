@@ -5,8 +5,9 @@ import '../theme/app_theme.dart';
 /// The look of every Back button in the app, and it follows the page's
 /// scroll position by itself:
 ///
-///  * at the top of the page — just the arrow, nothing behind it: green on
-///    a light header, white on a dark one;
+///  * on a dark (green) header — always just the white arrow;
+///  * at the top of the page — just the arrow, nothing behind it, green on
+///    a light header;
 ///  * once content has scrolled under the header — a white circle with a
 ///    very soft shadow fades in behind a green arrow, so the button stays
 ///    readable over whatever is passing beneath it. Scrolling back to the
@@ -69,11 +70,14 @@ class _AppBackIconState extends State<AppBackIcon> {
 
   @override
   Widget build(BuildContext context) {
-    final showCircle = widget.overImage || _scrolled;
     // Inside an app bar the surrounding icon colour is the bar's foreground
     // colour, which tells a dark header from a light one.
     final ambient = IconTheme.of(context).color;
     final onDark = ambient != null && ambient.computeLuminance() > 0.5;
+    // A coloured (dark green) header already keeps the white arrow
+    // readable, so the circle only comes in on a light header or over a
+    // photo.
+    final showCircle = widget.overImage || (_scrolled && !onDark);
     final arrowColor = (!showCircle && onDark) ? Colors.white : AppTheme.mid;
 
     return SizedBox(

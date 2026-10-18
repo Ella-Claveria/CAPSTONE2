@@ -93,17 +93,37 @@ void main() {
     expect(find.textContaining('does not process or hold payments'), findsOne);
   });
 
-  testWidgets('no support contact is shown until one is confirmed', (
-    tester,
-  ) async {
+  testWidgets('the support team email is shown', (tester) async {
     await openHelp(tester);
-    expect(adminSupportContacts, isEmpty);
-    expect(find.textContaining('available soon'), findsNothing);
+    expect(adminSupportContacts.single.value, 'agritrade.team@gmail.com');
+    expect(find.textContaining('agritrade.team@gmail.com'), findsWidgets);
     expect(find.text('Close'), findsOneWidget);
   });
 
   testWidgets('fits a small window', (tester) async {
     await openHelp(tester, size: const Size(420, 700));
     expect(tester.takeException(), isNull);
+  });
+
+  test('an imported FAQ with the old wording shows the new one', () {
+    const stale = AdminFaq(
+      id: 'default-account-password',
+      category: AdminFaqCategory.account,
+      question: 'How do I change my password?',
+      answer:
+          'Open your account at the bottom of the sidebar, then Manage '
+          'Account › Change Password. Enter your current password and the new '
+          'one (at least 6 characters). If you have forgotten your password, '
+          'use Forgot Password on the Admin login page instead.',
+    );
+    expect(refreshStaleDefault(stale).answer, contains('12 characters'));
+    // An answer an admin wrote is kept.
+    const edited = AdminFaq(
+      id: 'default-account-password',
+      category: AdminFaqCategory.account,
+      question: 'How do I change my password?',
+      answer: 'Ask the head admin.',
+    );
+    expect(refreshStaleDefault(edited).answer, 'Ask the head admin.');
   });
 }

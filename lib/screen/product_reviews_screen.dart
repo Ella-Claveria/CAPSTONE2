@@ -347,7 +347,7 @@ class _ProductReviewsScreenState extends State<ProductReviewsScreen> {
             width: double.infinity,
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFFF1F7EC),
+              color: AppTheme.tint,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(

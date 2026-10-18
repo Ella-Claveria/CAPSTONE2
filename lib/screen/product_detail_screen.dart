@@ -20,7 +20,7 @@ import '../widgets/agri_refresh_indicator.dart';
 import '../widgets/app_back_button.dart';
 import '../widgets/save_product_button.dart';
 import '../data/commodity_master_list.dart';
-import 'message_order_screen.dart';
+import 'chat_screen.dart';
 import 'place_order_screen.dart';
 import 'product_reviews_screen.dart';
 import 'buyer_market_view.dart';
@@ -798,7 +798,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       width: 250,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF6F8F5),
+        color: AppTheme.surface,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -975,7 +975,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         vertical: 5,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF1F7EC),
+                        color: AppTheme.tint,
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
@@ -990,7 +990,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     const SizedBox(height: 10),
                   ],
                   Text(
-                    name,
+                    withSellingOption(name, data),
                     style: AppTheme.heading(26).copyWith(height: 1.15),
                   ),
                   const SizedBox(height: 10),
@@ -1139,7 +1139,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                         vertical: 12,
                       ),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF1F7EC),
+                        color: AppTheme.tint,
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Column(
@@ -1370,9 +1370,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         onPressed: onTap,
         style: OutlinedButton.styleFrom(
           foregroundColor: _dark,
-          backgroundColor: enabled
-              ? const Color(0xFFF1F7EC)
-              : Colors.grey.shade100,
+          backgroundColor: enabled ? AppTheme.tint : Colors.grey.shade100,
           side: BorderSide(
             color: enabled
                 ? _dark.withValues(alpha: 0.35)
@@ -1441,24 +1439,23 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => MessageOrderScreen(
+        // The same Messages screen as everywhere else, with this product
+        // on top — one conversation, one look (it was a separate screen).
+        builder: (_) => ChatScreen(
           conversationId: conversationId,
-          farmerId: farmerId,
+          otherUserId: farmerId,
+          otherUserName: farmerName,
           productId: widget.productId,
-          farmerName: farmerName,
           productName: productName,
-          productPrice: formatPriceWithUnit(
-            (widget.data['retailPrice'] as num?) ??
-                (widget.data['price'] as num?) ??
-                0,
-            (widget.data['unit'] as String?) ?? unitForProductName(productName),
-          ),
-          productImage: _imageUrl ?? '',
-          deliveryAvailable: widget.data['deliveryAvailable'] == true,
-          pickupAvailable: widget.data['pickupOnly'] == true,
-          unit:
-              (widget.data['unit'] as String?) ??
-              unitForProductName(productName),
+          productImageUrl: _imageUrl,
+          retailPrice:
+              (widget.data['retailPrice'] as num?) ??
+              (widget.data['price'] as num?),
+          wholesalePrice: widget.data['wholesalePrice'] as num?,
+          wholesaleMinimumQuantity:
+              (widget.data['wholesaleMinimumQuantity'] as num?)?.toInt() ?? 1,
+          retailMaximumQuantity:
+              (widget.data['retailMaximumQuantity'] as num?)?.toInt() ?? 1,
         ),
       ),
     );

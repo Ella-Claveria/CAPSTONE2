@@ -369,11 +369,6 @@ Future<void> showAdminHelp(BuildContext context) =>
 // Read once for the app's lifetime — it cannot change while running.
 final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
-/// The project details About shows. Not provided yet: shown as marked
-/// placeholders until they are, never made up.
-const String kAboutDevelopedBy = '';
-const String kAboutInstitution = '';
-
 /// Admin menu → About AgriTrade+: the logo and what the platform is, its
 /// two parts (the mobile app and this portal), and the project details,
 /// with the version of this build.
@@ -540,21 +535,6 @@ Future<void> showAdminAbout(BuildContext context) {
               return detail('Version', version.isEmpty ? '—' : version);
             },
           ),
-          detail(
-            'Developed by',
-            kAboutDevelopedBy.isEmpty
-                ? '[Project team name — to be provided]'
-                : kAboutDevelopedBy,
-            placeholder: kAboutDevelopedBy.isEmpty,
-          ),
-          detail(
-            'Institution',
-            kAboutInstitution.isEmpty
-                ? '[School name — to be provided]'
-                : kAboutInstitution,
-            placeholder: kAboutInstitution.isEmpty,
-          ),
-          detail('Project type', 'Academic Capstone Project'),
         ],
       );
     },

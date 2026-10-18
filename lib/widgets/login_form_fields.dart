@@ -17,7 +17,7 @@ import '../screen/page_transitions.dart';
 import 'glow_field.dart';
 import 'login_lockout_dialog.dart';
 import 'role_mismatch_dialog.dart';
-import '../l10n/app_localizations.dart';
+import '../l10n/tr.dart';
 
 /// The email/password sign-in form — fields, Forgot Password, and the
 /// submit button — plus the whole sign-in flow behind it. Shared by
@@ -28,9 +28,9 @@ import '../l10n/app_localizations.dart';
 /// Remembering credentials is left entirely to the OS's own password
 /// manager (Google Password Manager / iCloud Keychain), via the
 /// [AutofillGroup] + autofillHints below — the app itself never stores an
-/// password on this device. The admin email alone is remembered.
-///
-/// Legacy locally saved admin passwords are removed when the form opens.
+/// password or email on this device. The Admin form starts empty every time
+/// (a remembered email went stale after a Change Email); what older
+/// versions saved is removed when the form opens.
 class LoginFormFields extends StatefulWidget {
   // Null means "role-agnostic" login: whoever this account belongs to
   // (farmer or buyer), log them in and route them to the right home screen.
@@ -43,11 +43,13 @@ class LoginFormFields extends StatefulWidget {
 
   const LoginFormFields({super.key, this.role, this.onForgotPassword});
 
-  /// Removes passwords persisted by older versions of the admin form.
+  /// Removes the admin email and password older versions of the admin
+  /// form saved on this device.
   static Future<void> clearSavedAdminPassword() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_LoginFormFieldsState._adminPasswordKey);
+      await prefs.remove(_LoginFormFieldsState._adminEmailKey);
     } catch (_) {}
   }
 
@@ -76,7 +78,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
   @override
   void initState() {
     super.initState();
-    if (_isAdmin) _loadSavedAdminEmail();
+    if (_isAdmin) LoginFormFields.clearSavedAdminPassword();
     _emailController.addListener(_clearLoginError);
     _passwordController.addListener(_clearLoginError);
   }
@@ -128,27 +130,6 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadSavedAdminEmail() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_adminPasswordKey);
-      final email = prefs.getString(_adminEmailKey);
-      if (!mounted) return;
-      if (email != null) _emailController.text = email;
-    } catch (_) {
-      // Non-fatal — fields just stay empty, same as a first-ever visit.
-    }
-  }
-
-  Future<void> _saveAdminEmail(String email) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_adminEmailKey, email);
-    } catch (_) {
-      // Non-fatal — login already succeeded either way.
-    }
   }
 
   Future<void> _login() async {
@@ -256,7 +237,6 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
           AuditAction.loginSuccess,
           'Logged in to the Admin Portal.',
         );
-        _saveAdminEmail(email);
         // First sign-in after a confirmed Change Email — bring the
         // Firestore copy of the email in line (a no-op otherwise).
         _authService.syncProfileEmail();
@@ -610,7 +590,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            AppLocalizations.of(context)!.emailAddress,
+            tr(context).emailAddress,
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 8),
@@ -628,13 +608,13 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                AppLocalizations.of(context)!.password,
+                tr(context).password,
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               GestureDetector(
                 onTap: _openForgotPassword,
                 child: Text(
-                  AppLocalizations.of(context)!.forgotPassword,
+                  tr(context).forgotPassword,
                   style: const TextStyle(
                     color: AppTheme.dark,
                     fontSize: 13,
@@ -678,10 +658,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
                         color: Colors.white,
                       ),
                     )
-                  : Text(
-                      AppLocalizations.of(context)!.loginButton,
-                      style: AppTheme.buttonText(),
-                    ),
+                  : Text(tr(context).loginButton, style: AppTheme.buttonText()),
             ),
           ),
           // The admin door never reaches here — it has its own layout, see

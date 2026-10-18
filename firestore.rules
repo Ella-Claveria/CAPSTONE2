@@ -102,6 +102,19 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // ---- Recovery email codes ----
+    // The same, for the code that verifies a Farmer's or Buyer's recovery
+    // email (requestRecoveryEmailOtp / confirmRecoveryEmailOtp).
+    match /recoveryEmailVerifications/{userId} {
+      allow read, write: if false;
+    }
+
+    // ---- Password change codes ----
+    // For requestPasswordChangeOtp / confirmPasswordChangeOtp.
+    match /passwordChangeVerifications/{userId} {
+      allow read, write: if false;
+    }
+
     // ---- Failed-login cooldown ----
     // Counted and enforced only by the checkLoginAllowed / reportLoginFailure
     // / clearLoginFailures Cloud Functions (Admin SDK). No client access, so
@@ -132,9 +145,9 @@ service cloud.firestore {
         (isApprovedFarmer() && request.auth.uid == resource.data.farmerId &&
           request.resource.data.farmerId == resource.data.farmerId &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'name', 'category', 'commodity', 'unit', 'price', 'retailPrice',
+            'name', 'category', 'commodity', 'unit', 'sellingOption', 'price', 'retailPrice',
             'wholesaleEnabled', 'wholesalePrice', 'wholesaleMinimumQuantity',
-            'retailMaximumQuantity', 'quantity', 'harvestDate', 'description', 'imageUrls',
+            'retailMaximumQuantity', 'quantity', 'stockBaseline', 'harvestDate', 'description', 'imageUrls',
             'imageUrl', 'deliveryAvailable', 'pickupOnly', 'deliveryCoverage', 'updatedAt',
             'isArchived', 'archivedAt', 'priceFlag'
           ])) ||
@@ -161,7 +174,8 @@ service cloud.firestore {
         !request.resource.data.keys().hasAny([
           'reviewedBy', 'reviewedAt', 'suspensionReason', 'suspendedUntil',
           'banReason', 'moderationUpdatedBy', 'moderationUpdatedAt',
-          'emailVerified', 'emailVerifiedAt', 'emailOtpVerifiedAt'
+          'emailVerified', 'emailVerifiedAt', 'emailOtpVerifiedAt',
+          'recoveryEmailVerified', 'recoveryEmailVerifiedAt'
         ]) &&
         // emailOtpVerified may only be claimed once the code check passed.
         (!('emailOtpVerified' in request.resource.data) ||
@@ -186,6 +200,15 @@ service cloud.firestore {
           request.resource.data.get('emailVerifiedAt', null) == resource.data.get('emailVerifiedAt', null) &&
           request.resource.data.get('emailOtpVerified', null) == resource.data.get('emailOtpVerified', null) &&
           request.resource.data.get('emailOtpVerifiedAt', null) == resource.data.get('emailOtpVerifiedAt', null) &&
+          // Set only by the recovery email code functions, so "Verified"
+          // always means the code sent to that address was entered.
+          // The app may only remove them (an emptied field, saved).
+          (request.resource.data.get('recoveryEmail', null) == resource.data.get('recoveryEmail', null) ||
+            !('recoveryEmail' in request.resource.data)) &&
+          (request.resource.data.get('recoveryEmailVerified', null) == resource.data.get('recoveryEmailVerified', null) ||
+            !('recoveryEmailVerified' in request.resource.data)) &&
+          (request.resource.data.get('recoveryEmailVerifiedAt', null) == resource.data.get('recoveryEmailVerifiedAt', null) ||
+            !('recoveryEmailVerifiedAt' in request.resource.data)) &&
           request.resource.data.get('rating', null) == resource.data.get('rating', null) &&
           request.resource.data.get('reviewCount', null) == resource.data.get('reviewCount', null) &&
           request.resource.data.get('trustedBuyer', null) == resource.data.get('trustedBuyer', null) &&
@@ -426,6 +449,9 @@ service cloud.firestore {
         && request.resource.data.sellerId is string
         && approvedFarmer(request.resource.data.sellerId)
         && request.resource.data.status == 'pending'
+        // The "arranged long distance" exception is no longer offered;
+        // coverage itself is re-checked by notifyNewOrder.
+        && request.resource.data.get('deliveryArrangement', 'standard') != 'longDistance'
         && request.resource.data.quantity is number
         && request.resource.data.quantity > 0
         && request.resource.data.productId is string
@@ -451,7 +477,9 @@ service cloud.firestore {
         && request.resource.data.sellerId == resource.data.sellerId
         && request.resource.data.buyerId == resource.data.buyerId
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'buyerName', 'buyerContact', 'buyerAddress', 'deliveryMethod', 'neededBy', 'updatedAt'
+          // Not deliveryMethod: switching pick-up to delivery afterwards
+          // would skip the coverage check made when the order was placed.
+          'buyerName', 'buyerContact', 'buyerAddress', 'neededBy', 'updatedAt'
         ]);
 
       // Buyer can only attach review markers after completion.
@@ -468,6 +496,17 @@ service cloud.firestore {
         && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.orderId == orderId
         && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.productId == resource.data.productId
         && getAfter(/databases/$(database)/documents/productReviews/$(orderId)).data.rating == request.resource.data.reviewRating;
+
+      // Buyer confirms a shipped / ready order arrived ("Order Received"):
+      // shipped → completed, marked as done by the buyer, nothing else.
+      allow update: if isBuyer()
+        && resource.data.buyerId == request.auth.uid
+        && resource.data.status == 'shipped'
+        && request.resource.data.status == 'completed'
+        && request.resource.data.buyerId == resource.data.buyerId
+        && request.resource.data.sellerId == resource.data.sellerId
+        && request.resource.data.completedBy == 'buyer'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'completedAt', 'completedBy']);
 
       // Seller controls status transitions.
       allow update: if isApprovedFarmer()
@@ -494,8 +533,15 @@ service cloud.firestore {
         && resource.data.sellerId == request.auth.uid
         && resource.data.status == 'confirmed'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['delay', 'updatedAt'])
-        && request.resource.data.delay.keys().hasOnly(['reason', 'note', 'proposedDate', 'reportedAt', 'status'])
+        && request.resource.data.delay.keys().hasOnly(['reason', 'otherReason', 'note', 'proposedDate', 'reportedAt', 'status'])
         && request.resource.data.delay.reason in ['weather', 'transport', 'supply', 'other']
+        // "Other": the farmer's own words, required and at most 100
+        // characters; no such text for the listed reasons.
+        && (request.resource.data.delay.reason == 'other'
+          ? (request.resource.data.delay.otherReason is string
+            && request.resource.data.delay.otherReason.size() > 0
+            && request.resource.data.delay.otherReason.size() <= 100)
+          : !('otherReason' in request.resource.data.delay))
         && request.resource.data.delay.proposedDate is timestamp
         && request.resource.data.delay.reportedAt == request.time
         && request.resource.data.delay.status == 'proposed'

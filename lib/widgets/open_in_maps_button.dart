@@ -65,7 +65,7 @@ class OpenInMapsButton extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
         decoration: BoxDecoration(
-          color: const Color(0xFFF1F8E9),
+          color: AppTheme.tint,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: _dark.withValues(alpha: 0.2)),
         ),
@@ -100,9 +100,7 @@ class OpenInMapsButton extends StatelessWidget {
           foregroundColor: _dark,
           side: const BorderSide(color: _dark),
           padding: const EdgeInsets.symmetric(vertical: 13),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
+          shape: const StadiumBorder(),
         ),
       ),
     );

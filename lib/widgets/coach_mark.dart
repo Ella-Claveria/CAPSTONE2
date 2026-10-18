@@ -188,11 +188,14 @@ class _CoachHintsState extends State<_CoachHints>
       color: AppTheme.accent,
       shadows: const [Shadow(color: Colors.black54, blurRadius: 6)],
     );
+    final last = _index == widget.steps.length - 1;
     final bubble = _HintBubble(
       title: step.title,
       message: step.message,
-      stepNumber: _index + 1,
-      totalSteps: widget.steps.length,
+      progress: widget.steps.length > 1
+          ? '${_index + 1}/${widget.steps.length}'
+          : null,
+      footer: last ? 'Tap anywhere to close' : 'Tap anywhere to continue',
     );
 
     return Stack(
@@ -235,18 +238,19 @@ class _CoachHintsState extends State<_CoachHints>
   }
 }
 
-/// The hint's label: dark green, small, with the step count.
+/// The hint's label: dark green and small, with its place in the tour
+/// ([progress], e.g. "1/2") and a line on how it goes away ([footer]).
 class _HintBubble extends StatelessWidget {
   final String title;
   final String message;
-  final int stepNumber;
-  final int totalSteps;
+  final String? progress;
+  final String footer;
 
   const _HintBubble({
     required this.title,
     required this.message,
-    required this.stepNumber,
-    required this.totalSteps,
+    required this.footer,
+    this.progress,
   });
 
   @override
@@ -283,9 +287,9 @@ class _HintBubble extends StatelessWidget {
                     ),
                   ),
                 ),
-                if (totalSteps > 1)
+                if (progress != null)
                   Text(
-                    '$stepNumber/$totalSteps',
+                    progress!,
                     style: TextStyle(
                       fontFamily: 'Montserrat',
                       fontSize: 11,
@@ -306,9 +310,7 @@ class _HintBubble extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              stepNumber < totalSteps
-                  ? 'Tap anywhere to continue'
-                  : 'Tap anywhere to close',
+              footer,
               style: TextStyle(
                 fontFamily: 'Montserrat',
                 fontSize: 10.5,
@@ -319,6 +321,209 @@ class _HintBubble extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Where a [showSectionHint] card's top edge must be — as a share of its
+/// scroll view's height — for its hint to show: low enough to leave room
+/// for the label above it, high enough that the card is in view.
+const double kSectionHintBandTop = 0.28;
+const double kSectionHintBandBottom = 0.78;
+
+/// Where [key]'s top edge is in its scroll view, as a share of the view's
+/// height (0 at the top, 1 at the bottom); null when it is not laid out.
+double? sectionTopFraction(GlobalKey key) {
+  final context = key.currentContext;
+  if (context == null) return null;
+  final box = context.findRenderObject() as RenderBox?;
+  final scrollable = Scrollable.maybeOf(context);
+  final view = scrollable?.context.findRenderObject() as RenderBox?;
+  if (box == null || !box.attached || view == null || !view.attached) {
+    return null;
+  }
+  final top = box.localToGlobal(Offset.zero).dy;
+  final viewTop = view.localToGlobal(Offset.zero).dy;
+  if (view.size.height == 0) return null;
+  return (top - viewTop) / view.size.height;
+}
+
+/// A hint about one section of a scrolling page — a card the user has just
+/// scrolled to: a soft outline around it, a bouncing arrow at its top edge
+/// and a short label above. It never blocks the page. It goes away with
+/// any tap, or once the card has been scrolled on past; the future then
+/// completes. While a popup or another screen covers [context]'s screen
+/// it waits, hidden.
+Future<void> showSectionHint({
+  required BuildContext context,
+  required CoachMarkStep step,
+  String? progress,
+}) {
+  final done = Completer<void>();
+  late final OverlayEntry entry;
+  entry = OverlayEntry(
+    builder: (_) => _SectionHint(
+      host: context,
+      step: step,
+      progress: progress,
+      onDone: () {
+        entry.remove();
+        if (!done.isCompleted) done.complete();
+      },
+    ),
+  );
+  Overlay.of(context, rootOverlay: true).insert(entry);
+  return done.future;
+}
+
+class _SectionHint extends StatefulWidget {
+  final BuildContext host;
+  final CoachMarkStep step;
+  final String? progress;
+  final VoidCallback onDone;
+
+  const _SectionHint({
+    required this.host,
+    required this.step,
+    required this.progress,
+    required this.onDone,
+  });
+
+  @override
+  State<_SectionHint> createState() => _SectionHintState();
+}
+
+class _SectionHintState extends State<_SectionHint>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _bounce = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  )..repeat(reverse: true);
+
+  // Where each finger went down while the hint was showing.
+  final _downWhileShowing = <int, Offset>{};
+  var _finished = false;
+
+  @override
+  void initState() {
+    super.initState();
+    GestureBinding.instance.pointerRouter.addGlobalRoute(_onPointer);
+  }
+
+  @override
+  void dispose() {
+    GestureBinding.instance.pointerRouter.removeGlobalRoute(_onPointer);
+    _bounce.dispose();
+    super.dispose();
+  }
+
+  bool get _hostShowing {
+    if (!widget.host.mounted) return false;
+    return ModalRoute.of(widget.host)?.isCurrent ?? true;
+  }
+
+  // A tap counts when it started while the hint was showing (see
+  // _CoachHintsState). A scroll is a drag, not a tap, so scrolling on does
+  // not dismiss it this way — leaving the card behind does.
+  void _onPointer(PointerEvent event) {
+    if (event is PointerDownEvent) {
+      if (_hostShowing) _downWhileShowing[event.pointer] = event.position;
+      return;
+    }
+    if (event is PointerCancelEvent) {
+      _downWhileShowing.remove(event.pointer);
+      return;
+    }
+    if (event is! PointerUpEvent) return;
+    final down = _downWhileShowing.remove(event.pointer);
+    // A tap: the finger barely moved. The end of a scroll is not one.
+    final tapped =
+        down != null && (event.position - down).distance <= kTouchSlop;
+    if (tapped && _hostShowing) _finish();
+  }
+
+  void _finish() {
+    if (_finished) return;
+    _finished = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) => widget.onDone());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_finished) return const SizedBox.shrink();
+    if (!widget.host.mounted) {
+      _finish();
+      return const SizedBox.shrink();
+    }
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _bounce,
+        builder: (context, _) {
+          if (!_hostShowing) return const SizedBox.shrink();
+          final key = widget.step.targetKey;
+          final box = key.currentContext?.findRenderObject() as RenderBox?;
+          final fraction = sectionTopFraction(key);
+          if (box == null || !box.attached || fraction == null) {
+            return const SizedBox.shrink();
+          }
+          // Scrolled on past it (or back above it): it has been seen.
+          if (fraction < 0.06 || fraction > 0.94) {
+            _finish();
+            return const SizedBox.shrink();
+          }
+          final card = box.localToGlobal(Offset.zero) & box.size;
+          return _hint(context, card);
+        },
+      ),
+    );
+  }
+
+  Widget _hint(BuildContext context, Rect card) {
+    final screen = MediaQuery.sizeOf(context);
+    const arrowSize = 28.0;
+    const bubbleWidth = 270.0;
+    final lift = Curves.easeInOut.transform(_bounce.value) * 6;
+    final left = (card.center.dx - bubbleWidth / 2)
+        .clamp(16.0, math.max(16.0, screen.width - bubbleWidth - 16))
+        .toDouble();
+    return Stack(
+      children: [
+        // A soft outline around the card.
+        Positioned.fromRect(
+          rect: card.inflate(3),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: AppTheme.accent.withValues(alpha: 0.95),
+                width: 2.5,
+              ),
+            ),
+          ),
+        ),
+        // The arrow, nudging down at the card's top edge.
+        Positioned(
+          left: card.center.dx - arrowSize / 2,
+          top: card.top - arrowSize - 2 - lift,
+          child: const Icon(
+            Icons.arrow_downward_rounded,
+            size: arrowSize,
+            color: AppTheme.mid,
+            shadows: [Shadow(color: Colors.white, blurRadius: 6)],
+          ),
+        ),
+        Positioned(
+          left: left,
+          width: bubbleWidth,
+          bottom: screen.height - card.top + arrowSize + 10,
+          child: _HintBubble(
+            title: widget.step.title,
+            message: widget.step.message,
+            progress: widget.progress,
+            footer: 'Tap anywhere to close',
+          ),
+        ),
+      ],
     );
   }
 }

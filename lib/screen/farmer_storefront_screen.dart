@@ -146,7 +146,7 @@ class _FarmerStorefrontScreenState extends State<FarmerStorefrontScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFFE8F5E9),
+              color: AppTheme.tint,
               borderRadius: BorderRadius.circular(20),
             ),
             child: const Row(

@@ -4,7 +4,7 @@ import '../theme/app_theme.dart';
 import '../widgets/existing_account_dialog.dart';
 import '../widgets/login_form_fields.dart';
 import '../widgets/login_hero.dart';
-import '../l10n/app_localizations.dart';
+import '../l10n/tr.dart';
 
 /// The app's front door: "Log In" or "Don't have an account? Create One."
 /// No role is picked here — login itself is role-agnostic (see
@@ -65,7 +65,7 @@ class RoleSelectionScreen extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        AppLocalizations.of(context)!.loginButton,
+                        tr(context).loginButton,
                         textAlign: TextAlign.center,
                         style: const TextStyle(
                           fontSize: 28,
@@ -75,7 +75,7 @@ class RoleSelectionScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        AppLocalizations.of(context)!.loginSubtitle,
+                        tr(context).loginSubtitle,
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontSize: 14,
@@ -98,9 +98,7 @@ class RoleSelectionScreen extends StatelessWidget {
                           children: [
                             RichText(
                               text: TextSpan(
-                                text: AppLocalizations.of(
-                                  context,
-                                )!.noAccountSignUp,
+                                text: tr(context).noAccountSignUp,
                                 style: GoogleFonts.montserrat(
                                   fontSize: 14,
                                   color: Colors.black87,
@@ -117,9 +115,7 @@ class RoleSelectionScreen extends StatelessWidget {
                                 ),
                                 child: RichText(
                                   text: TextSpan(
-                                    text: AppLocalizations.of(
-                                      context,
-                                    )!.createOne,
+                                    text: tr(context).createOne,
                                     style: GoogleFonts.montserrat(
                                       fontSize: 14,
                                       fontWeight: FontWeight.bold,

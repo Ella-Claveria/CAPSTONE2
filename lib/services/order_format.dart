@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
+import '../data/commodity_master_list.dart';
 import 'market_price_helpers.dart';
 
 /// Which side of an order the signed-in user is on. The Orders screens,
@@ -80,11 +81,17 @@ class OrderInfo {
   bool get isCompleted => status == 'completed';
 
   String get productId => _text('productId');
+
+  /// The product as ordered — livestock with how it was sold, e.g.
+  /// "Swine (Slaughtered)".
   String get productName {
     final name = _text('productName');
-    return name.isNotEmpty
-        ? name
-        : (_text('name').isNotEmpty ? _text('name') : 'Product');
+    return withSellingOption(
+      name.isNotEmpty
+          ? name
+          : (_text('name').isNotEmpty ? _text('name') : 'Product'),
+      data,
+    );
   }
 
   String get imageUrl => _text('imageUrl');
@@ -179,7 +186,16 @@ class OrderInfo {
   bool get delayAccepted => _delay['status'] == 'accepted';
 
   String get delayReason => (_delay['reason'] ?? '').toString();
-  String get delayReasonLabel => orderDelayReasonLabel(delayReason);
+
+  /// What the farmer typed for an "Other" reason.
+  String get delayOtherReason =>
+      (_delay['otherReason'] ?? '').toString().trim();
+
+  /// The reason as shown: the farmer's own words for "Other", when given.
+  String get delayReasonLabel =>
+      delayReason == 'other' && delayOtherReason.isNotEmpty
+      ? delayOtherReason
+      : orderDelayReasonLabel(delayReason);
   String get delayNote => (_delay['note'] ?? '').toString().trim();
   DateTime? get delayProposedDate {
     final value = _delay['proposedDate'];

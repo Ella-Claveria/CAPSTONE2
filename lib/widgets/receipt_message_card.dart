@@ -149,17 +149,11 @@ class _ReceiptMessageCardState extends State<ReceiptMessageCard> {
           ),
         ),
         const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 6,
+        // Review (or "Reviewed") on the left, View Receipt on the right —
+        // as on the order's details.
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            OrderActionButton(
-              OrderCardAction(
-                'View Receipt',
-                () => OrderActions.viewReceipt(context, _orderId),
-                kind: OrderActionKind.primary,
-              ),
-            ),
             if (isBuyer && available && !order.reviewed)
               OrderActionButton(
                 OrderCardAction(
@@ -179,6 +173,15 @@ class _ReceiptMessageCardState extends State<ReceiptMessageCard> {
                   ),
                 ),
               ),
+            // Always there, so View Receipt stays on the right even alone.
+            const SizedBox(width: 8),
+            OrderActionButton(
+              OrderCardAction(
+                'View Receipt',
+                () => OrderActions.viewReceipt(context, _orderId),
+                kind: OrderActionKind.primary,
+              ),
+            ),
           ],
         ),
       ],

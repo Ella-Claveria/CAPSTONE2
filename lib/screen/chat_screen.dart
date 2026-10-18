@@ -7,6 +7,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import '../data/commodity_master_list.dart';
 import '../services/message_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/conversation_prefs_service.dart';
@@ -110,6 +111,13 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _productImageUrl;
   String? _farmerId;
 
+  // A chat about a livestock listing: the buyer can ask for the animal's
+  // health certificate with one tap (a suggestion over the message box)
+  // until they have asked once; the farmer answers with a photo of it.
+  bool _livestockProduct = false;
+  bool _certificateAsked = false;
+  String? _certificateCheckedFor;
+
   String get _myUid => FirebaseAuth.instance.currentUser!.uid;
 
   final ConversationPrefs _prefs = ConversationPrefs.instance;
@@ -145,6 +153,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _productName = widget.productName;
     _productImageUrl = widget.productImageUrl;
     _loadConversationContext();
+    _checkCertificateSuggestion();
     final draft = widget.initialDraft;
     if (draft != null && draft.isNotEmpty) _setDraft(draft);
   }
@@ -176,9 +185,99 @@ class _ChatScreenState extends State<ChatScreen> {
           _productImageUrl ??= text('productImageUrl');
         }
       });
+      _checkCertificateSuggestion();
     } catch (_) {
       // Best effort — the chat works without a product card.
     }
+  }
+
+  // Whether this chat's product is livestock, and whether this user has
+  // already asked for its health certificate here. Checked once per
+  // product; best effort — without it the suggestion just isn't shown.
+  Future<void> _checkCertificateSuggestion() async {
+    final productId = _productId;
+    if (productId == null ||
+        productId.isEmpty ||
+        _certificateCheckedFor == productId) {
+      return;
+    }
+    _certificateCheckedFor = productId;
+    try {
+      final product = await FirebaseFirestore.instance
+          .collection('products')
+          .doc(productId)
+          .get();
+      if (!isLivestockCategory(product.data()?['category']?.toString())) {
+        return;
+      }
+      final requests = await FirebaseFirestore.instance
+          .collection('conversations')
+          .doc(widget.conversationId)
+          .collection('messages')
+          .where('kind', isEqualTo: MessageService.certificateRequestKind)
+          .get();
+      if (!mounted) return;
+      setState(() {
+        _livestockProduct = true;
+        _certificateAsked = requests.docs.any(
+          (d) => d.data()['senderId'] == _myUid,
+        );
+      });
+    } catch (_) {}
+  }
+
+  // True when this user has sent a photo after message [index] (the list
+  // is newest first, so those are the ones before it).
+  bool _photoSentSince(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    int index,
+  ) {
+    for (var j = 0; j < index; j++) {
+      final data = docs[j].data();
+      if (data['senderId'] == _myUid &&
+          (data['imageUrl']?.toString() ?? '').isNotEmpty) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool get _showCertificateSuggestion =>
+      _livestockProduct && !_certificateAsked && !_viewerIsFarmer;
+
+  // The suggestion's one tap: sends the request as it reads.
+  Future<void> _askForCertificate() async {
+    if (_sending) return;
+    setState(() => _sending = true);
+    try {
+      await _messageService.sendMessage(
+        conversationId: widget.conversationId,
+        otherUserId: widget.otherUserId,
+        text: MessageService.certificateRequestText,
+        kind: MessageService.certificateRequestKind,
+      );
+      if (mounted) setState(() => _certificateAsked = true);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'No internet connection. Your message was not sent. Reconnect and try again.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  // The farmer's answer to a certificate request: a photo of it, from the
+  // camera or the gallery.
+  Future<void> _sendCertificatePhoto(BuildContext chipContext) async {
+    if (_sending) return;
+    final source = await showChatPhotoMenu(chipContext);
+    if (source == null || !mounted) return;
+    await _sendPhoto(source);
   }
 
   // Farmer-side view of the product context. The card itself confirms this
@@ -809,7 +908,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                         ),
                                       );
                                     }
-                                    return _messageBubble(
+                                    final bubble = _messageBubble(
                                       docs[i].id,
                                       text,
                                       isMe,
@@ -833,6 +932,38 @@ class _ChatScreenState extends State<ChatScreen> {
                                               docs[i].id,
                                             ),
                                     );
+                                    // The buyer asked for the health
+                                    // certificate: the farmer can answer
+                                    // with a photo right here, until one
+                                    // has been sent after the request.
+                                    if (!isMe &&
+                                        _viewerIsFarmer &&
+                                        data['kind'] ==
+                                            MessageService
+                                                .certificateRequestKind &&
+                                        !_photoSentSince(docs, i)) {
+                                      return Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          bubble,
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 2,
+                                              bottom: 6,
+                                            ),
+                                            child: ChatSuggestionChip(
+                                              icon: Icons.photo_camera_outlined,
+                                              label: 'Send a photo',
+                                              onTap: _sending
+                                                  ? null
+                                                  : _sendCertificatePhoto,
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    }
+                                    return bubble;
                                   },
                                 ),
                               ),
@@ -862,6 +993,13 @@ class _ChatScreenState extends State<ChatScreen> {
     Map<String, dynamic>? replyTo,
     VoidCallback? onReply,
   }) {
+    // A photo on its own is shown as just the photo — no green or white
+    // bubble around it.
+    final imageOnly =
+        imageUrl != null &&
+        imageUrl.isNotEmpty &&
+        text.isEmpty &&
+        replyTo == null;
     return GestureDetector(
       onLongPressStart: (details) =>
           _beginLikeHold(messageId, details.globalPosition),
@@ -883,28 +1021,34 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             Container(
               margin: const EdgeInsets.symmetric(vertical: 3),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: imageOnly
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.72,
+                maxWidth:
+                    MediaQuery.of(context).size.width *
+                    (imageOnly ? 0.62 : 0.72),
               ),
-              decoration: BoxDecoration(
-                color: isMe ? _dark : Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isMe ? 16 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 16),
-                ),
-                boxShadow: isMe
-                    ? null
-                    : [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 6,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-              ),
+              decoration: imageOnly
+                  ? null
+                  : BoxDecoration(
+                      color: isMe ? _dark : Colors.white,
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(16),
+                        topRight: const Radius.circular(16),
+                        bottomLeft: Radius.circular(isMe ? 16 : 4),
+                        bottomRight: Radius.circular(isMe ? 4 : 16),
+                      ),
+                      boxShadow: isMe
+                          ? null
+                          : [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                    ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -916,7 +1060,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       decoration: BoxDecoration(
                         color: isMe
                             ? Colors.white.withValues(alpha: 0.14)
-                            : const Color(0xFFEAF4E7),
+                            : AppTheme.tint,
                         borderRadius: BorderRadius.circular(8),
                         border: Border(
                           left: BorderSide(
@@ -1187,7 +1331,7 @@ class _ChatScreenState extends State<ChatScreen> {
               margin: const EdgeInsets.only(bottom: 8),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFFF2F6EF),
+                color: AppTheme.tint,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
@@ -1224,6 +1368,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: const Icon(Icons.close, size: 17),
                   ),
                 ],
+              ),
+            ),
+          if (_showCertificateSuggestion)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: ChatSuggestionChip(
+                  icon: Icons.health_and_safety_outlined,
+                  label: MessageService.certificateRequestText,
+                  onTap: _sending ? null : (_) => _askForCertificate(),
+                ),
               ),
             ),
           ChatComposerBar(

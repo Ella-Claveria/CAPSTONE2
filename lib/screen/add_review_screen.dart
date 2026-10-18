@@ -260,7 +260,7 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
                 labelText: 'Description',
                 hintText: 'Share your experience with this product...',
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(24),
                 ),
               ),
             ),

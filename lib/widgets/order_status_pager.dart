@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../l10n/app_localizations.dart';
 import '../services/order_seen_service.dart';
 import '../theme/app_theme.dart';
 import 'agri_dialog.dart';
@@ -31,6 +32,28 @@ class OrderStatusTab {
   const OrderStatusTab(this.value, this.label, this.emptyIcon);
 
   String get emptyTitle => 'No ${label.toLowerCase()} orders yet';
+
+  /// [label] in the app's language.
+  String labelIn(BuildContext context) {
+    final t = AppLocalizations.of(context);
+    if (t == null) return label;
+    return switch (value) {
+      'pending' => t.statusPending,
+      'confirmed' => t.statusConfirmed,
+      'shipped' => t.statusShipped,
+      'completed' => t.statusCompleted,
+      'rejected' => t.statusRejected,
+      _ => label,
+    };
+  }
+
+  /// [emptyTitle] in the app's language.
+  String emptyTitleIn(BuildContext context) {
+    final t = AppLocalizations.of(context);
+    return t == null
+        ? emptyTitle
+        : t.noStatusOrdersYet(labelIn(context).toLowerCase());
+  }
 }
 
 const kPendingTab = OrderStatusTab(
@@ -136,6 +159,10 @@ class OrderStatusPager extends StatefulWidget {
   /// Where this user's "seen up to" times are kept. Null turns badges off.
   final OrderSeenStore? seenStore;
 
+  /// A status tab to open (e.g. 'completed', from the Profile's Completed
+  /// Orders count); followed whenever it changes.
+  final ValueListenable<String?>? showStatus;
+
   const OrderStatusPager({
     super.key,
     required this.streamFactory,
@@ -150,6 +177,7 @@ class OrderStatusPager extends StatefulWidget {
     this.tutorialEligible = isRecentlyRegisteredUser,
     this.activityOf,
     this.seenStore,
+    this.showStatus,
   });
 
   @override
@@ -173,8 +201,21 @@ class _OrderStatusPagerState extends State<OrderStatusPager>
   late final TabController _tabs = TabController(
     length: widget.tabs.length,
     vsync: this,
+    initialIndex: _requestedIndex() ?? 0,
   )..addListener(_onTabChanged);
-  int _index = 0;
+  late int _index = _tabs.index;
+
+  int? _requestedIndex() {
+    final status = widget.showStatus?.value;
+    if (status == null) return null;
+    final index = widget.tabs.indexWhere((t) => t.value == status);
+    return index < 0 ? null : index;
+  }
+
+  void _onShowStatus() {
+    final index = _requestedIndex();
+    if (index != null && index != _tabs.index) _tabs.animateTo(index);
+  }
 
   ValueListenable<TickerModeData>? _visible;
   bool _tutorialChecked = false;
@@ -191,6 +232,7 @@ class _OrderStatusPagerState extends State<OrderStatusPager>
   @override
   void initState() {
     super.initState();
+    widget.showStatus?.addListener(_onShowStatus);
     _loadSeen();
   }
 
@@ -209,6 +251,7 @@ class _OrderStatusPagerState extends State<OrderStatusPager>
   @override
   void dispose() {
     _visible?.removeListener(_onVisibilityChanged);
+    widget.showStatus?.removeListener(_onShowStatus);
     _seenTimer?.cancel();
     _tabs.dispose();
     super.dispose();
@@ -426,7 +469,7 @@ class _OrderStatusPagerState extends State<OrderStatusPager>
               Tab(
                 height: 42,
                 child: _TabLabel(
-                  label: tab.label,
+                  label: tab.labelIn(context),
                   unseen: unseen[tab.value] ?? 0,
                 ),
               ),
@@ -538,7 +581,7 @@ class _EmptyState extends StatelessWidget {
     // The app-wide empty state; Orders is where its look comes from.
     return AgriEmptyState(
       icon: tab.emptyIcon,
-      title: tab.emptyTitle,
+      title: tab.emptyTitleIn(context),
       subtitle: subtitle,
       action: action,
     );
@@ -646,7 +689,7 @@ class _SwipeTutorialCardState extends State<_SwipeTutorialCard>
                     child: Container(
                       padding: const EdgeInsets.all(9),
                       decoration: const BoxDecoration(
-                        color: Color(0xFFEFF6E8),
+                        color: AppTheme.tint,
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(

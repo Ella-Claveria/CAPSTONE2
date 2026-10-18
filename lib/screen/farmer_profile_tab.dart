@@ -12,16 +12,17 @@ import '../data/commodity_master_list.dart';
 import 'role_selection_screen.dart';
 import 'add_product_screen.dart';
 import 'farmer_edit_profile_screen.dart';
-import 'account_settings_screen.dart';
-import 'manage_account_screen.dart';
+import 'help_support_screen.dart';
 import 'farmer_reviews_screen.dart';
 import '../widgets/page_header.dart';
+import '../widgets/profile_settings_menu.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/update_stock_dialog.dart';
 import '../widgets/shimmer.dart';
 import '../widgets/skeleton_loaders.dart';
 import '../widgets/retry_message.dart';
 import '../widgets/agri_refresh_indicator.dart';
+import '../l10n/tr.dart';
 
 // Body-only widget — renders inside FarmerHomeScreen's Scaffold.
 class ProfileTab extends StatefulWidget {
@@ -50,9 +51,9 @@ class _ProfileTabState extends State<ProfileTab> {
       context: context,
       icon: Icons.logout,
       tone: AgriTone.destructive,
-      title: 'Log Out',
-      message: 'Are you sure you want to log out?',
-      confirmLabel: 'Log Out',
+      title: tr(context).logOut,
+      message: tr(context).logOutConfirm,
+      confirmLabel: tr(context).logOut,
     );
     if (!confirm) return;
 
@@ -65,70 +66,38 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  // ---- Three-dot menu beside the Profile title ----
-  // Manage Account, Help & Support, then Log Out last and in red.
-  Widget _profileMenu(BuildContext context) {
-    // Compact rows: a small icon, then small text.
-    PopupMenuItem<String> item(
-      String value,
-      IconData icon,
-      String label, {
-      Color color = Colors.black87,
-    }) => PopupMenuItem(
-      value: value,
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(width: 10),
-          Text(
-            label,
-            style: GoogleFonts.montserrat(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: color,
+  // ---- Settings (gear) menu beside the Profile title ----
+  // Share My Store first, then settings and help, and Log Out last — in
+  // red, after a divider.
+  Widget _profileMenu(BuildContext context) => ProfileSettingsMenu(
+    onShareStore: () => _shareStore(context),
+    onHelp: () => Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const HelpSupportScreen(farmer: true)),
+    ),
+    onLogout: () => _handleLogout(context),
+  );
+
+  Future<void> _shareStore(BuildContext context) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final shared = await ProductShareService.shareStore(context, uid);
+      if (!shared) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Add a product first. There is nothing to share yet.',
             ),
           ),
-        ],
-      ),
-    );
-
-    return PopupMenuButton<String>(
-      tooltip: 'Account menu',
-      icon: const Icon(Icons.more_vert, color: PageHeader.titleColor),
-      // A small floating panel that opens just below the icon.
-      position: PopupMenuPosition.under,
-      offset: const Offset(0, 4),
-      color: const Color(0xFFFCFCFA),
-      surfaceTintColor: Colors.transparent,
-      elevation: 6,
-      shadowColor: Colors.black.withValues(alpha: 0.25),
-      menuPadding: const EdgeInsets.symmetric(vertical: 6),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      onSelected: (value) {
-        switch (value) {
-          case 'manage':
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ManageAccountScreen()),
-            );
-            break;
-          case 'help':
-            AccountSettingsScreen.showHelp(context);
-            break;
-          case 'logout':
-            _handleLogout(context);
-            break;
-        }
-      },
-      itemBuilder: (context) => [
-        item('manage', Icons.settings_outlined, 'Manage Account'),
-        item('help', Icons.help_outline, 'Help & Support'),
-        item('logout', Icons.logout, 'Log Out', color: const Color(0xFFD32F2F)),
-      ],
-    );
+        );
+      }
+    } catch (_) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not share your store. Try again.')),
+      );
+    }
   }
 
   // ---- Avatar with an edit badge sitting on top of it ----
@@ -243,14 +212,24 @@ class _ProfileTabState extends State<ProfileTab> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
+          // Active | Archived, with the current one underlined; swiping the
+          // list below sideways moves between them too.
+          // Two equal halves, like the Orders tabs.
           Row(
             children: [
-              _productFilterChip('Active', 'active'),
-              const SizedBox(width: 8),
-              _productFilterChip('Archived', 'archived'),
+              Expanded(
+                child: _productFilterTab(tr(context).productsActive, 'active'),
+              ),
+              Expanded(
+                child: _productFilterTab(
+                  tr(context).productsArchived,
+                  'archived',
+                ),
+              ),
             ],
           ),
+          Divider(height: 1, color: Colors.grey.shade200),
           const SizedBox(height: 10),
           Container(
             decoration: BoxDecoration(
@@ -295,27 +274,33 @@ class _ProfileTabState extends State<ProfileTab> {
                       (d) => (d.data()['isArchived'] == true) == showArchived,
                     )
                     .toList();
-                if (docs.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Text(
-                      showArchived
-                          ? "You don't have any archived products."
-                          : "You haven't posted any active products yet.",
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    ),
-                  );
-                }
-
-                return Column(
-                  children: [
-                    for (var i = 0; i < docs.length; i++) ...[
-                      if (i > 0)
-                        const Divider(height: 1, indent: 16, endIndent: 16),
-                      _productTile(context, docs[i].id, docs[i].data()),
-                    ],
-                  ],
-                );
+                final Widget list = docs.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Text(
+                          showArchived
+                              ? "You don't have any archived products."
+                              : "You haven't posted any active products yet.",
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      )
+                    : Column(
+                        children: [
+                          for (var i = 0; i < docs.length; i++) ...[
+                            if (i > 0)
+                              const Divider(
+                                height: 1,
+                                indent: 16,
+                                endIndent: 16,
+                              ),
+                            _productTile(context, docs[i].id, docs[i].data()),
+                          ],
+                        ],
+                      );
+                return _swipeBetweenFilters(list);
               },
             ),
           ),
@@ -324,24 +309,84 @@ class _ProfileTabState extends State<ProfileTab> {
     );
   }
 
-  Widget _productFilterChip(String label, String value) {
+  // One half of Active | Archived: its label centred, and — for the one
+  // showing — dark green with a green bar under the whole half. Tapping
+  // it works too.
+  Widget _productFilterTab(String label, String value) {
     final selected = _productFilter == value;
-    return GestureDetector(
-      onTap: () => setState(() => _productFilter = value),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: selected ? _dark : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? _dark : Colors.grey.shade300),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : Colors.grey[700],
+    return InkWell(
+      onTap: () => _showProductFilter(value),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? _dark : Colors.grey[500],
+              ),
+            ),
           ),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            height: 2.5,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: selected ? _dark : Colors.transparent,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Which way the list last moved: -1 to Archived (it slides in from the
+  // right), 1 back to Active.
+  int _filterDirection = -1;
+
+  void _showProductFilter(String value) {
+    if (value == _productFilter) return;
+    setState(() {
+      _filterDirection = value == 'archived' ? -1 : 1;
+      _productFilter = value;
+    });
+  }
+
+  // The list, swiped sideways to move between Active and Archived — left
+  // for Archived, right for Active — sliding the new list in from that side.
+  Widget _swipeBetweenFilters(Widget list) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onHorizontalDragEnd: (details) {
+        final velocity = details.primaryVelocity ?? 0;
+        if (velocity < -250) _showProductFilter('archived');
+        if (velocity > 250) _showProductFilter('active');
+      },
+      child: ClipRect(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          layoutBuilder: (current, previous) => Stack(
+            alignment: Alignment.topCenter,
+            children: [...previous, ?current],
+          ),
+          transitionBuilder: (child, animation) {
+            final incoming = child.key == ValueKey(_productFilter);
+            final from = Offset(incoming ? -_filterDirection * 1.0 : 0, 0);
+            final to = Offset(incoming ? 0 : _filterDirection * 1.0, 0);
+            final slide = incoming
+                ? Tween(begin: from, end: Offset.zero).animate(animation)
+                : Tween(begin: to, end: Offset.zero).animate(animation);
+            return SlideTransition(position: slide, child: child);
+          },
+          child: KeyedSubtree(key: ValueKey(_productFilter), child: list),
         ),
       ),
     );
@@ -377,6 +422,10 @@ class _ProfileTabState extends State<ProfileTab> {
     return Column(
       children: [
         ListTile(
+          // Less room on the right, so the ⋮ sits near the card's edge,
+          // in line with "View Reviews" below it.
+          contentPadding: const EdgeInsets.only(left: 16, right: 4),
+          horizontalTitleGap: 12,
           leading: ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: (imageUrl != null && imageUrl.isNotEmpty)
@@ -411,7 +460,7 @@ class _ProfileTabState extends State<ProfileTab> {
             children: [
               Flexible(
                 child: Text(
-                  name,
+                  withSellingOption(name, data),
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 14.5,
@@ -488,6 +537,7 @@ class _ProfileTabState extends State<ProfileTab> {
           trailing: Builder(
             builder: (buttonContext) => IconButton(
               tooltip: 'Product actions',
+              visualDensity: VisualDensity.compact,
               icon: Icon(Icons.more_vert, color: Colors.grey[500]),
               onPressed: () => _openProductMenu(
                 buttonContext,
@@ -675,8 +725,8 @@ class _ProfileTabState extends State<ProfileTab> {
       child: Row(
         children: [
           if (summary.count == 0)
-            const Text(
-              'No reviews yet',
+            Text(
+              tr(context).noReviewsYet,
               style: TextStyle(fontSize: 12, color: Colors.black45),
             )
           else ...[
@@ -716,7 +766,7 @@ class _ProfileTabState extends State<ProfileTab> {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-              child: const Text('View Reviews'),
+              child: Text(tr(context).viewReviews),
             ),
           ],
         ],
@@ -796,7 +846,7 @@ class _ProfileTabState extends State<ProfileTab> {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                child: const Text('View All Reviews'),
+                child: Text(tr(context).viewAllReviews),
               ),
             ],
           ),
@@ -820,7 +870,10 @@ class _ProfileTabState extends State<ProfileTab> {
           children: [
             // ---- Page title, with the account menu beside it ----
             // The menu sits on the title's own row, opposite it.
-            PageHeader(title: 'Profile', titleTrailing: _profileMenu(context)),
+            PageHeader(
+              title: tr(context).navProfile,
+              titleTrailing: _profileMenu(context),
+            ),
 
             // ---- Avatar with edit badge ----
             _avatarWithEditBadge(context),

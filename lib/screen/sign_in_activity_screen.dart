@@ -7,7 +7,7 @@ import 'package:intl/intl.dart';
 import '../services/device_trust_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agri_app_bar.dart';
-import '../widgets/change_password_dialog.dart';
+import '../widgets/agri_dialog.dart';
 
 /// One device the account has signed in on, as shown in the list.
 class SignInDevice {
@@ -119,30 +119,19 @@ class _SignInActivityScreenState extends State<SignInActivityScreen> {
       date == null ? '—' : DateFormat('MMM d, y · h:mm a').format(date);
 
   Future<void> _remove(SignInDevice device) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showAgriConfirm(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Remove this device?'),
-        content: Text(
+      icon: Icons.phonelink_erase_outlined,
+      tone: AgriTone.destructive,
+      title: 'Remove this device?',
+      message:
           '${device.name} will be taken off your list, and you will be '
           'alerted if it logs in again.\n\n'
           'This does not sign that device out. If you do not recognize '
           'it, change your password.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
-            child: const Text('Remove'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Remove',
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     try {
       await (widget.removeDevice?.call(device.id) ??
           _collection?.doc(device.id).delete());
@@ -301,7 +290,7 @@ class _SignInActivityScreenState extends State<SignInActivityScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7FAF7),
+      backgroundColor: AppTheme.surface,
       appBar: const AgriAppBar(title: 'Devices & Login Activity'),
       body: FutureBuilder<String>(
         future: _currentDeviceId,
@@ -346,31 +335,12 @@ class _SignInActivityScreenState extends State<SignInActivityScreen> {
                       _deviceCard(device, idSnap.data ?? ''),
                   const SizedBox(height: 8),
                   Text(
+                    // Change Password itself is one step back, beside this
+                    // screen in the account settings.
                     'See a device you do not recognize? Change your password '
-                    'so it can no longer be used to log in.',
+                    'in your account settings so it can no longer be used to '
+                    'log in.',
                     style: _text(12, color: Colors.black54),
-                  ),
-                  const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: () => showChangePasswordDialog(context),
-                      icon: const Icon(Icons.lock_outline, size: 18),
-                      label: Text(
-                        'Change Password',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppTheme.dark,
-                        side: const BorderSide(color: AppTheme.dark),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    ),
                   ),
                 ],
               );

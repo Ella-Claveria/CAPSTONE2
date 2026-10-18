@@ -96,7 +96,7 @@ Future<bool> requestBuyerLocationPermission(BuildContext context) {
     title: 'Allow Location Access',
     message:
         'AgriTrade+ uses your location to estimate distance, support '
-        'delivery or pickup, and show nearby marketplace information. Your '
+        'delivery or pick-up, and show nearby marketplace information. Your '
         'exact location is not shown publicly.',
     denyLabel: 'Not Now',
     allowLabel: 'Allow Location',

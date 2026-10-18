@@ -96,6 +96,9 @@ double? computeLiveAverage(
 
     final unit = (data['unit'] ?? unitForProductName(data['name']?.toString() ?? '')).toString();
     if (expectedUnit.isNotEmpty && unit.isNotEmpty && unit != expectedUnit) continue;
+    // The average is of the commodity as listed in its own unit: live
+    // livestock. Slaughtered meat (per kg) is a different price.
+    if (isSlaughtered(data)) continue;
 
     dynamic raw;
     if (pricingType == 'wholesale') {

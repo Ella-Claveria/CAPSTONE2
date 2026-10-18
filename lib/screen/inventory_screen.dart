@@ -12,18 +12,57 @@ import '../theme/app_theme.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/retry_message.dart';
 
-/// At or below this many units (and above zero) a product counts as Low
-/// Stock. One simple threshold for every unit — there is no per-product
-/// setting.
-const num kLowStockThreshold = 5;
+/// Low Stock: 20% or less of the stock the farmer last set (when posting,
+/// restocking or editing the quantity — saved as the product's
+/// stockBaseline) is left. Orders bring the quantity down, never the
+/// baseline, so the rule fits every size of harvest: 100 kg → low at
+/// 20 kg, 1,000 kg → at 200 kg, 10 head → at 2.
+const double kLowStockFraction = 0.2;
+
+/// For a listing saved before stockBaseline existed: a plain minimum per
+/// unit instead.
+num lowStockFallback(String unit) => switch (unit.trim().toLowerCase()) {
+  'head' => 2,
+  _ => 10,
+};
 
 enum StockStatus { inStock, lowStock, outOfStock }
 
-StockStatus stockStatusOf(num quantity) => quantity <= 0
+/// The quantity at or below which [unit] stock is low, given the farmer's
+/// last-set [baseline]. Whole animals or pieces round up, so 3 head is
+/// low at 1.
+num lowStockThreshold({num? baseline, num quantity = 0, String unit = 'kg'}) {
+  if (baseline == null || baseline <= 0) return lowStockFallback(unit);
+  // Never below what is in stock now: a baseline only goes up with it.
+  final base = baseline < quantity ? quantity : baseline;
+  final threshold = base * kLowStockFraction;
+  return isCountBasedUnit(unit) ? threshold.ceil() : threshold;
+}
+
+StockStatus stockStatusOf(num quantity, {num? baseline, String unit = 'kg'}) =>
+    quantity <= 0
     ? StockStatus.outOfStock
-    : quantity <= kLowStockThreshold
+    : quantity <=
+          lowStockThreshold(baseline: baseline, quantity: quantity, unit: unit)
     ? StockStatus.lowStock
     : StockStatus.inStock;
+
+/// [stockStatusOf] for a product document.
+StockStatus stockStatusOfProduct(Map<String, dynamic> product) {
+  final value = product['quantity'];
+  final quantity = value is num ? value : num.tryParse('${value ?? ''}') ?? 0;
+  final baseline = product['stockBaseline'];
+  final unit = (product['unit'] ?? '').toString().trim();
+  return stockStatusOf(
+    quantity,
+    baseline: baseline is num ? baseline : null,
+    unit: unit.isNotEmpty
+        ? unit
+        : unitForProductName(
+            (product['commodity'] ?? product['name'] ?? '').toString(),
+          ),
+  );
+}
 
 /// Completed-order quantity per product id. Only completed orders count as
 /// sold; pending, confirmed, shipped and rejected ones do not.
@@ -114,7 +153,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F5),
+      backgroundColor: AppTheme.surface,
       appBar: const AgriAppBar(title: 'Inventory'),
       body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
         stream: _products,
@@ -165,7 +204,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     Map<String, num> sold,
   ) {
     StockStatus statusOf(QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
-        stockStatusOf(_quantityOf(doc.data()));
+        stockStatusOfProduct(doc.data());
     int count(StockStatus status) =>
         products.where((doc) => statusOf(doc) == status).length;
 
@@ -278,7 +317,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: selected ? AppTheme.dark : Colors.white,
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(30),
           border: Border.all(
             color: selected ? AppTheme.dark : Colors.grey.shade300,
           ),
@@ -299,7 +338,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final name = (product['name'] ?? 'Product').toString();
     final unit = _unitOf(product);
     final quantity = _quantityOf(product);
-    final status = stockStatusOf(quantity);
+    final status = stockStatusOfProduct(product);
     final imageUrl = (product['imageUrl'] ?? '').toString();
     final (String statusLabel, Color statusColor) = switch (status) {
       StockStatus.inStock => ('IN STOCK', AppTheme.dark),
@@ -350,7 +389,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  name,
+                  withSellingOption(name, product),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.montserrat(
@@ -411,9 +450,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               minimumSize: const Size(0, 32),
               padding: const EdgeInsets.symmetric(horizontal: 10),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+              shape: const StadiumBorder(),
               textStyle: GoogleFonts.montserrat(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w600,

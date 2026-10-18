@@ -178,7 +178,7 @@ class _BuyerMyReviewsScreenState extends State<BuyerMyReviewsScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFFF4F7F4),
+                color: AppTheme.surface,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Column(

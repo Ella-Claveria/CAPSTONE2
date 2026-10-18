@@ -71,30 +71,55 @@ Future<BuyerLocationResult?> showBuyerLocationPicker(
 /// Location" or "Set Location Manually" — then opens the same popup as
 /// [showBuyerLocationPicker] in that mode. Location permission is only
 /// requested once "Use My Current Location" is chosen.
+///
+/// With [anchorContext] (the Location field), the two choices open as a
+/// menu right under that field, as wide as it; otherwise as a sheet.
 Future<BuyerLocationResult?> showBuyerLocationOptions(
   BuildContext context, {
   BuyerLocationResult? initial,
+  BuildContext? anchorContext,
 }) async {
-  final useCurrent = await showAgriSheet<bool>(
-    context: context,
-    title: 'Set Your Location',
-    builder: (sheetContext) => Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        AgriSheetAction(
+  final bool? useCurrent;
+  final anchorBox = anchorContext?.findRenderObject();
+  if (anchorContext != null && anchorBox is RenderBox && anchorBox.hasSize) {
+    useCurrent = await showAgriPopupMenu<bool>(
+      anchorContext: anchorContext,
+      width: anchorBox.size.width,
+      items: const [
+        AgriMenuItem(
+          value: true,
           icon: Icons.my_location,
           label: 'Use My Current Location',
-          onTap: () => Navigator.pop(sheetContext, true),
         ),
-        AgriSheetAction(
+        AgriMenuItem(
+          value: false,
           icon: Icons.list_alt_outlined,
           label: 'Set Location Manually',
-          onTap: () => Navigator.pop(sheetContext, false),
         ),
-        const SizedBox(height: 8),
       ],
-    ),
-  );
+    );
+  } else {
+    useCurrent = await showAgriSheet<bool>(
+      context: context,
+      title: 'Set Your Location',
+      builder: (sheetContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AgriSheetAction(
+            icon: Icons.my_location,
+            label: 'Use My Current Location',
+            onTap: () => Navigator.pop(sheetContext, true),
+          ),
+          AgriSheetAction(
+            icon: Icons.list_alt_outlined,
+            label: 'Set Location Manually',
+            onTap: () => Navigator.pop(sheetContext, false),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
   if (useCurrent == null || !context.mounted) return null;
   return showBuyerLocationPicker(
     context,
@@ -642,9 +667,7 @@ class _BuyerLocationPopupState extends State<_BuyerLocationPopup> {
                         foregroundColor: _dark,
                         side: const BorderSide(color: _dark),
                         padding: const EdgeInsets.symmetric(vertical: 13),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                        shape: const StadiumBorder(),
                       ),
                     ),
                   ),

@@ -214,3 +214,53 @@ bool isCountBasedUnit(String unit) {
   final u = unit.trim().toLowerCase();
   return u == 'piece' || u == 'head';
 }
+
+/// How a livestock listing is sold, chosen in Add Product for every
+/// commodity the Admin files under Livestock: alive, in the commodity's own
+/// unit (kg liveweight or head), or slaughtered, always per kg. Saved on
+/// the listing and on its orders as 'sellingOption'.
+enum SellingOption {
+  live('live', 'Live'),
+  slaughtered('slaughtered', 'Slaughtered');
+
+  const SellingOption(this.value, this.label);
+
+  /// What is stored in 'sellingOption'.
+  final String value;
+  final String label;
+}
+
+/// The unit of a slaughtered livestock listing.
+const String kSlaughteredUnit = 'kg';
+
+/// True for the Livestock category, whatever the Admin's capitals.
+bool isLivestockCategory(String? category) =>
+    (category ?? '').trim().toLowerCase() == 'livestock';
+
+/// The selling option saved on a listing or an order, or null when it has
+/// none (not livestock, or a listing saved before the option existed —
+/// sold live).
+SellingOption? sellingOptionOf(Map<String, dynamic>? data) =>
+    switch ((data?['sellingOption'] ?? '').toString()) {
+      'live' => SellingOption.live,
+      'slaughtered' => SellingOption.slaughtered,
+      _ => null,
+    };
+
+/// True when a listing or an order is for slaughtered livestock.
+bool isSlaughtered(Map<String, dynamic>? data) =>
+    sellingOptionOf(data) == SellingOption.slaughtered;
+
+/// The unit a listing of [commodity] is sold in: per kg when slaughtered,
+/// otherwise the commodity's own unit.
+String unitForListing(String commodity, SellingOption? option) =>
+    option == SellingOption.slaughtered
+    ? kSlaughteredUnit
+    : unitForCommodity(commodity);
+
+/// [name] with the selling option after it — "Swine (Live)",
+/// "Cattle (Slaughtered)" — or [name] alone when there is none.
+String withSellingOption(String name, Map<String, dynamic>? data) {
+  final option = sellingOptionOf(data);
+  return option == null ? name : '$name (${option.label})';
+}

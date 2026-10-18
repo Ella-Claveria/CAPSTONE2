@@ -128,14 +128,28 @@ function verificationEmail({ name, link }) {
 
 // The 6-digit code from email_otp.js, shown as "482 731".
 // `purpose: "email-change"` is the code sent to the new address when an
-// account's email is being changed (email_change_otp.js).
+// account's email is being changed (email_change_otp.js);
+// `purpose: "recovery-email"` the one that verifies a recovery email
+// (recovery_email_otp.js).
 function otpEmail({ code, purpose }) {
   const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
   const change = purpose === "email-change";
-  const title = change ? "Confirm your new email address" : "Verify your email address";
+  const recovery = purpose === "recovery-email";
+  const password = purpose === "password-change";
+  const title = change
+    ? "Confirm your new email address"
+    : recovery
+      ? "Verify your recovery email"
+      : password
+        ? "Confirm your password change"
+        : "Verify your email address";
   const ignore = change
     ? "If you did not ask to change your AgriTrade+ email to this address, you may safely ignore this email."
-    : "If you did not create an AgriTrade+ account, you may safely ignore this email.";
+    : recovery
+      ? "If you did not add this address as the recovery email of an AgriTrade+ account, you may safely ignore this email."
+      : password
+        ? "If you did not ask to change your AgriTrade+ password, do not share this code with anyone, and change your password as soon as you can."
+        : "If you did not create an AgriTrade+ account, you may safely ignore this email.";
   return {
     subject: "Your AgriTrade+ verification code",
     text: [
@@ -186,8 +200,8 @@ function passwordResetEmail({ name, link }) {
       bodyHtml: [
         paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
         paragraph("We received a request to reset the password for your AgriTrade+ account. Use the button below to choose a new password."),
+        // Only the button: the page's web address is not spelled out.
         button("Reset Password", link),
-        linkFallback(link),
         paragraph("If you did not request a password reset, you can ignore this email. Your password will not change."),
         paragraph(`<strong style="color:${BRAND_GREEN}">The AgriTrade+ Team</strong>`),
       ].join("\n"),
@@ -270,6 +284,35 @@ function signInEmail({ name, deviceName, platform, when }) {
         paragraph(intro),
         detailsTable(rows),
         paragraph("If this was you, no action is required."),
+        paragraph(ifNot),
+        paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Security</strong>`),
+      ].join("\n"),
+    }),
+  };
+}
+
+// Sent once a password has been changed (password_change_otp.js), so the
+// owner learns of a change they did not make.
+function passwordChangedEmail({ name, when }) {
+  const greeting = greetingFor(name);
+  const intro = "The password of your AgriTrade+ account was changed.";
+  const after = "Every other device was logged out and must log in again with the new password.";
+  const ifNot = "If you did not change it, reset your password right away with Forgot Password on the login screen, and contact the AgriTrade+ team.";
+  const rows = [["Date and time", `${when} (Philippine time)`]];
+  return {
+    subject: "Your AgriTrade+ password was changed",
+    text: [
+      greeting, "", intro, "", ...rows.map(([label, value]) => `${label}: ${value}`), "",
+      after, "", ifNot, "", "AgriTrade+ Security",
+    ].join("\n"),
+    html: layout({
+      title: "Password changed",
+      preheader: intro,
+      bodyHtml: [
+        paragraph(`<strong>${escapeHtml(greeting)}</strong>`),
+        paragraph(intro),
+        detailsTable(rows),
+        paragraph(after),
         paragraph(ifNot),
         paragraph(`<strong style="color:${BRAND_GREEN}">AgriTrade+ Security</strong>`),
       ].join("\n"),
@@ -420,4 +463,4 @@ function googleSignInEmail({ name }) {
   };
 }
 
-module.exports = { escapeHtml, verificationEmail, otpEmail, passwordResetEmail, googleSignInEmail, newDeviceEmail, signInEmail, adminSignInEmail, farmerApprovedEmail, farmerRejectedEmail, accountNoticeEmail };
+module.exports = { escapeHtml, verificationEmail, otpEmail, passwordResetEmail, googleSignInEmail, newDeviceEmail, signInEmail, passwordChangedEmail, adminSignInEmail, farmerApprovedEmail, farmerRejectedEmail, accountNoticeEmail };

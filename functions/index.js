@@ -26,6 +26,9 @@ const { CHANNELS, NEW_DEVICE_TYPE, pushData, newDeviceAlert } = require("./push_
 const { categoryOf, pushAllowed, deliveryChannels, WELCOME } = require("./notification_policy");
 const { COMMODITY_ARCHIVED, archiveChange, commodityNotice } = require("./commodity_notice");
 const { suspensionEndText } = require("./suspension_logic");
+const { outsideCoverage } = require("./delivery_coverage_logic");
+const { completionReminderDue } = require("./order_reminder_logic");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { signedInBeforeRevocation } = require("./admin_session_logic");
 
 // Keep marketplace-visible profile fields separate from private users/{uid}
@@ -256,6 +259,35 @@ exports.sendMessageNotification = onDocumentCreated(
 // ---------------------------------------------------------------
 exports.notifyNewOrder = onDocumentCreated("orders/{orderId}", async (event) => {
   const order = event.data.data();
+
+  // A delivery order outside the listing's coverage is turned away before
+  // anyone is told about it: the app never places one, but the database
+  // rules cannot check places, so one written another way is caught here.
+  // Its stock goes back; notifyOrderStatusChange tells the buyer why.
+  if (order.deliveryMethod === "delivery" && order.productId) {
+    const orderRef = event.data.ref;
+    const productRef = db.collection("products").doc(order.productId);
+    const turnedAway = await db.runTransaction(async (tx) => {
+      const [orderSnap, productSnap] = await Promise.all([tx.get(orderRef), tx.get(productRef)]);
+      const current = orderSnap.exists ? orderSnap.data() : null;
+      if (!current || current.status !== "pending") return false;
+      if (!outsideCoverage(current, productSnap.exists ? productSnap.data() : {})) return false;
+      tx.update(orderRef, {
+        status: "rejected",
+        rejectionReason: "outside_coverage",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      if (productSnap.exists && typeof current.quantity === "number") {
+        tx.update(productRef, { quantity: FieldValue.increment(current.quantity) });
+      }
+      return true;
+    });
+    if (turnedAway) {
+      console.warn(`notifyNewOrder(${event.params.orderId}): delivery outside coverage, turned away.`);
+      return;
+    }
+  }
+
   const productName = order.productName || "a product";
   const buyerName = order.buyerName || "A buyer";
   const sellerName = order.sellerName || "the farmer";
@@ -328,6 +360,20 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
   const label = statusLabels[after.status];
   if (!label) return;
 
+  // Turned away by notifyNewOrder (delivery outside coverage): only the
+  // buyer is told, with the reason — the farmer never saw this order.
+  if (after.status === "rejected" && after.rejectionReason === "outside_coverage") {
+    await notifyUser(after.buyerId, {
+      title: "Order not placed",
+      body: `Delivery for ${after.productName || "this product"} does not cover your area. Choose pick-up, or message the farmer about adding your area.`,
+      type: "order_status",
+      relatedId: event.params.orderId,
+      data: { orderId: event.params.orderId, status: after.status },
+      dedupeId: event.id,
+    });
+    return;
+  }
+
   // Completion also tells the buyer their receipt is ready (issued by
   // issueOrderReceipt below from this same status change). Tapping it opens
   // the order's details, where View Receipt is.
@@ -344,9 +390,13 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
   });
 
   if (after.sellerId) {
+    // Completed by the buyer's "Order Received": say so.
+    const byBuyer = completed && after.completedBy === "buyer";
     await notifyUser(after.sellerId, {
-      title: `Order ${label}`,
-      body: `The order for ${after.productName || "a product"} was ${label}.`,
+      title: byBuyer ? "Order Received by Buyer" : `Order ${label}`,
+      body: byBuyer
+        ? `${after.buyerName || "The buyer"} confirmed receiving ${after.productName || "the order"}. The order is now completed.`
+        : `The order for ${after.productName || "a product"} was ${label}.`,
       type: "order_status",
       relatedId: event.params.orderId,
       data: { orderId: event.params.orderId, status: after.status },
@@ -354,6 +404,45 @@ exports.notifyOrderStatusChange = onDocumentUpdated("orders/{orderId}", async (e
     });
   }
 });
+
+// ---------------------------------------------------------------
+// Every morning: a farmer whose order is still "shipped" the day after its
+// date (agreed, requested, or the day it shipped) is reminded once to mark
+// it Completed — the buyer can also confirm with "Order Received". See
+// order_reminder_logic.js. Nothing is completed automatically.
+// ---------------------------------------------------------------
+exports.remindFarmersToComplete = onSchedule(
+  { schedule: "every day 09:00", region: "asia-southeast1", timeZone: "Asia/Manila" },
+  async () => {
+    const now = Date.now();
+    // One equality filter: no composite index needed.
+    const shipped = await db.collection("orders")
+      .where("status", "==", "shipped")
+      .limit(500)
+      .get();
+    let reminded = 0;
+    for (const doc of shipped.docs) {
+      const order = doc.data();
+      if (!completionReminderDue(order, now) || !order.sellerId) continue;
+      try {
+        await notifyUser(order.sellerId, {
+          title: "Was this order received?",
+          body: `If ${order.buyerName || "the buyer"} already has ${order.productName || "their order"}, mark it as Completed so the receipt is issued.`,
+          type: "order_status",
+          relatedId: doc.id,
+          data: { orderId: doc.id, status: "shipped" },
+          dedupeId: `complete-reminder-${doc.id}`,
+        });
+        // Doesn't change the status, so the order triggers ignore it.
+        await doc.ref.update({ completionReminderSentAt: FieldValue.serverTimestamp() });
+        reminded++;
+      } catch (err) {
+        console.error(`remindFarmersToComplete(${doc.id}):`, err.message);
+      }
+    }
+    console.log(`remindFarmersToComplete: reminded ${reminded} of ${shipped.size} shipped orders.`);
+  }
+);
 
 // ---------------------------------------------------------------
 // Buyer-facing marketplace map — barangay farmer-density clusters.
@@ -643,6 +732,14 @@ Object.assign(exports, require("./email_otp"));
 // email_change_otp.js.
 Object.assign(exports, require("./email_change_otp"));
 
+// 6-digit code that verifies a Farmer's or Buyer's recovery email — see
+// recovery_email_otp.js.
+Object.assign(exports, require("./recovery_email_otp"));
+
+// 6-digit code to the account's email before its password is changed — see
+// password_change_otp.js.
+Object.assign(exports, require("./password_change_otp"));
+
 // Failed-login cooldown (5 wrong passwords → 5 minute pause) — see
 // login_throttle.js.
 Object.assign(exports, require("./login_throttle"));
@@ -734,7 +831,11 @@ exports.handleOrderReschedule = onDocumentUpdated("orders/{orderId}", async (eve
   const reportedBefore = delayBefore.reportedAt ? delayBefore.reportedAt.toMillis() : 0;
   const reportedAfter = delayAfter.reportedAt ? delayAfter.reportedAt.toMillis() : 0;
   if (delayAfter.status === "proposed" && reportedAfter && reportedAfter !== reportedBefore) {
-    const reason = DELAY_REASON_TEXT[delayAfter.reason] || DELAY_REASON_TEXT.other;
+    // "Other": the farmer's own words, when given.
+    const otherReason = typeof delayAfter.otherReason === "string" ? delayAfter.otherReason.trim() : "";
+    const reason = delayAfter.reason === "other" && otherReason
+      ? `"${otherReason}"`
+      : DELAY_REASON_TEXT[delayAfter.reason] || DELAY_REASON_TEXT.other;
     const date = formatManilaDate(delayAfter.proposedDate);
     await notifyUser(after.buyerId, {
       title: "Order Delayed",

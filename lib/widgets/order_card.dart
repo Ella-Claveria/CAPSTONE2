@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../services/market_price_helpers.dart';
 import '../services/order_format.dart';
 import '../theme/app_theme.dart';
+import '../l10n/tr.dart';
 
 enum OrderActionKind { primary, secondary, destructive, text }
 
@@ -68,7 +69,7 @@ class OrderPricingTag extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
       decoration: BoxDecoration(
-        color: order.isWholesale ? const Color(0xFFEFF6E8) : Colors.grey[100],
+        color: order.isWholesale ? AppTheme.tint : Colors.grey[100],
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
@@ -130,7 +131,16 @@ class OrderActionButton extends StatelessWidget {
   /// Larger hit area and text, for the details screen's bottom bar.
   final bool large;
 
-  const OrderActionButton(this.action, {super.key, this.large = false});
+  /// Overrides the height (the order card lines its buttons up with its
+  /// icon buttons).
+  final double? height;
+
+  const OrderActionButton(
+    this.action, {
+    super.key,
+    this.large = false,
+    this.height,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -152,7 +162,7 @@ class OrderActionButton extends StatelessWidget {
         BorderSide.none,
       ),
     };
-    final height = large ? 42.0 : 30.0;
+    final height = this.height ?? (large ? 42.0 : 30.0);
     return TextButton(
       onPressed: action.onTap,
       style: TextButton.styleFrom(
@@ -168,13 +178,17 @@ class OrderActionButton extends StatelessWidget {
         ),
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         visualDensity: VisualDensity.compact,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: const StadiumBorder(),
         textStyle: GoogleFonts.montserrat(
           fontSize: large ? 13 : 11.5,
           fontWeight: FontWeight.w600,
         ),
       ),
-      child: Text(action.label, maxLines: 1),
+      // Shrinks a little rather than cut a label off on a narrow phone.
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(action.label, maxLines: 1),
+      ),
     );
   }
 }
@@ -189,8 +203,6 @@ class OrderCard extends StatelessWidget {
   /// Has activity this user hasn't seen yet — shows a small red dot.
   final bool isNew;
   final VoidCallback onDetails;
-  final VoidCallback? onMessage;
-  final List<OrderCardAction> actions;
 
   const OrderCard({
     super.key,
@@ -198,8 +210,6 @@ class OrderCard extends StatelessWidget {
     required this.role,
     required this.onDetails,
     this.isNew = false,
-    this.onMessage,
-    this.actions = const [],
   });
 
   TextStyle _muted([double size = 11.5]) =>
@@ -249,30 +259,38 @@ class OrderCard extends StatelessWidget {
                         children: [
                           Row(
                             children: [
-                              Flexible(
-                                child: Text(
-                                  order.productName,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: GoogleFonts.montserrat(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.black87,
-                                  ),
+                              // The name (and its new-activity dot) take the
+                              // rest of the row, so the status tag ends on
+                              // the card's right edge.
+                              Expanded(
+                                child: Row(
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        order.productName,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: GoogleFonts.montserrat(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.black87,
+                                        ),
+                                      ),
+                                    ),
+                                    if (isNew)
+                                      Container(
+                                        key: const ValueKey('order-new-dot'),
+                                        margin: const EdgeInsets.only(left: 6),
+                                        width: 7,
+                                        height: 7,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFFE53935),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                  ],
                                 ),
                               ),
-                              if (isNew)
-                                Container(
-                                  key: const ValueKey('order-new-dot'),
-                                  margin: const EdgeInsets.only(left: 6),
-                                  width: 7,
-                                  height: 7,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFFE53935),
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                              const Spacer(),
                               const SizedBox(width: 6),
                               // A confirmed order waiting on a new date reads
                               // DELAYED; its real status is still confirmed.
@@ -367,67 +385,26 @@ class OrderCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Divider(height: 1, color: Colors.grey.shade200),
                 const SizedBox(height: 8),
+                // The total, and Details: everything else about the order —
+                // messaging, Report Delay, Accept and the rest — is in it.
                 Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          total == null ? 'Subtotal + delivery' : 'Total',
-                          style: _muted(10),
+                    Expanded(child: _total(total)),
+                    TextButton.icon(
+                      onPressed: onDetails,
+                      icon: const Icon(Icons.receipt_long_outlined, size: 17),
+                      label: Text(tr(context).details),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.dark,
+                        side: BorderSide(color: Colors.grey.shade400),
+                        fixedSize: const Size.fromHeight(34),
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        shape: const StadiumBorder(),
+                        textStyle: GoogleFonts.montserrat(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
                         ),
-                        Text(
-                          formatPeso(total ?? order.subtotal),
-                          style: GoogleFonts.montserrat(
-                            fontSize: 14.5,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.dark,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Wrap(
-                        alignment: WrapAlignment.end,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: [
-                          if (onMessage != null)
-                            SizedBox(
-                              width: 30,
-                              height: 30,
-                              child: IconButton(
-                                onPressed: onMessage,
-                                tooltip: role == OrderRole.farmer
-                                    ? 'Message Buyer'
-                                    : 'Message Farmer',
-                                padding: EdgeInsets.zero,
-                                iconSize: 17,
-                                color: AppTheme.dark,
-                                style: IconButton.styleFrom(
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  side: BorderSide(color: Colors.grey.shade400),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                                icon: const Icon(Icons.chat_bubble_outline),
-                              ),
-                            ),
-                          OrderActionButton(
-                            OrderCardAction(
-                              'Details',
-                              onDetails,
-                              kind: OrderActionKind.text,
-                            ),
-                          ),
-                          for (final action in actions)
-                            OrderActionButton(action),
-                        ],
                       ),
                     ),
                   ],
@@ -439,4 +416,19 @@ class OrderCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _total(num? total) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(total == null ? 'Subtotal + delivery' : 'Total', style: _muted(10)),
+      Text(
+        formatPeso(total ?? order.subtotal),
+        style: GoogleFonts.montserrat(
+          fontSize: 14.5,
+          fontWeight: FontWeight.w700,
+          color: AppTheme.dark,
+        ),
+      ),
+    ],
+  );
 }

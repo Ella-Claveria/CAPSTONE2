@@ -254,6 +254,10 @@ class AdminDemandAreasPanel extends StatelessWidget {
   /// True when the panel sits under the Purchases / Searches tabs.
   final bool tabbed;
 
+  /// The count shown for each area, in place of "N purchases" (the
+  /// heatmap's "3 purchases · 5 searches").
+  final Map<String, String>? countTexts;
+
   const AdminDemandAreasPanel({
     super.key,
     required this.areas,
@@ -265,6 +269,7 @@ class AdminDemandAreasPanel extends StatelessWidget {
     this.unit = 'purchase',
     this.unitPlural = 'purchases',
     this.tabbed = false,
+    this.countTexts,
   });
 
   @override
@@ -329,8 +334,9 @@ class AdminDemandAreasPanel extends StatelessWidget {
                             ),
                             const SizedBox(width: 8),
                             Text(
-                              '${area.orderCount} '
-                              '${area.orderCount == 1 ? unit : unitPlural}',
+                              countTexts?[area.area] ??
+                                  '${area.orderCount} '
+                                      '${area.orderCount == 1 ? unit : unitPlural}',
                               style: TextStyle(
                                 color: c.textSecondary,
                                 fontSize: 12,

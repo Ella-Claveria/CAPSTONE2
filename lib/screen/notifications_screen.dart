@@ -28,7 +28,7 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   static const Color _dark = AppTheme.dark;
-  static const Color _bg = Color(0xFFFAFBFA);
+  static const Color _bg = AppTheme.surface;
   static const Color _text = Color(0xFF1B1B1B);
 
   // Created once, not in build(), so switching filter doesn't resubscribe.
@@ -159,7 +159,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               if (hasUnread)
                 TextButton(
                   onPressed: () => _markAllRead(docs),
-                  style: TextButton.styleFrom(foregroundColor: _dark),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AgriAppBar.foreground,
+                  ),
                   child: const Text(
                     'Mark All as Read',
                     style: TextStyle(
@@ -379,7 +381,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                           title: kNotificationRationaleTitle,
                           message: kNotificationRationaleMessage,
                           denyLabel: 'Not Now',
-                          allowLabel: 'Allow Notifications',
+                          allowLabel: 'Allow',
                         );
                         if (proceed) {
                           await PushNotificationService().setupFCM(

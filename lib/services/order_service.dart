@@ -38,12 +38,9 @@ class OrderService {
     required String deliveryMethod,
     DateTime? neededBy,
     // The buyer's general location, re-checked against the listing's
-    // delivery coverage when deliveryMethod is 'delivery'.
+    // delivery coverage when deliveryMethod is 'delivery' (and again on
+    // the server — see notifyNewOrder).
     BuyerArea? buyerArea,
-    // True when the buyer is outside the standard coverage but arranged
-    // delivery with the farmer in Messages — the fee is then always "to be
-    // arranged", and the farmer can still decline the order.
-    bool longDistanceArranged = false,
   }) async {
     // An order must never be silently queued for later — if it can't be
     // confirmed against live Firestore data right now, it doesn't happen.
@@ -131,17 +128,15 @@ class OrderService {
           final reach = buyerArea == null
               ? DeliveryReach.unknownLocation
               : coverage.reach(buyerArea);
-          if (!longDistanceArranged && reach != DeliveryReach.covered) {
+          if (reach != DeliveryReach.covered) {
             throw StateError(
               'Delivery no longer covers your area. Choose pick-up or '
               'message the farmer to arrange delivery.',
             );
           }
-          final feeKnown = !longDistanceArranged && coverage.feeKnown;
+          final feeKnown = coverage.feeKnown;
           fulfillment.addAll({
-            'deliveryArrangement': longDistanceArranged
-                ? 'longDistance'
-                : 'standard',
+            'deliveryArrangement': 'standard',
             'deliveryFeeType': feeKnown ? 'fixed' : 'arranged',
             'deliveryFee': feeKnown ? coverage.fee : null,
             'grandTotal': feeKnown ? total + coverage.fee! : null,
@@ -194,6 +189,8 @@ class OrderService {
           // still has it after the listing is edited or deleted.
           'category': frozenCategory,
           if (frozenCommodity.isNotEmpty) 'commodity': frozenCommodity,
+          // Livestock: sold live or slaughtered, as listed when ordered.
+          'sellingOption': ?sellingOptionOf(productData)?.value,
           'imageUrl': imageUrl,
           'quantity': q,
           'unit': realUnit,
@@ -241,6 +238,42 @@ class OrderService {
 
   // Confirm / ship / complete an order. Rejecting needs rejectOrder below
   // instead, since it also has to give the reserved stock back.
+  /// Buyer: "Order Received" on a shipped / ready-for-pick-up order —
+  /// completes it (the receipt is issued as when the farmer completes it).
+  Future<String?> confirmReceived(String id) async {
+    final offlineError = await requireOnlineOrError();
+    if (offlineError != null) return offlineError;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return 'Please log in again.';
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final orderRef = _orders.doc(id);
+        final snapshot = await transaction.get(orderRef);
+        final data = snapshot.data();
+        if (data == null) throw StateError('This order no longer exists.');
+        if (data['buyerId'] != uid) {
+          throw StateError('Only the buyer of this order can confirm it.');
+        }
+        final status = (data['status'] ?? '').toString().toLowerCase();
+        if (status == 'completed') return; // the farmer just did it
+        if (status != 'shipped') {
+          throw StateError('This order has not been sent yet.');
+        }
+        transaction.update(orderRef, {
+          'status': 'completed',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'completedAt': FieldValue.serverTimestamp(),
+          'completedBy': 'buyer',
+        });
+      });
+      return null;
+    } on StateError catch (e) {
+      return e.message;
+    } catch (_) {
+      return 'Could not confirm the order. Please try again.';
+    }
+  }
+
   Future<String?> updateStatus(String id, String status) async {
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
@@ -342,18 +375,27 @@ class OrderService {
   // only these fields.
 
   /// Farmer: report a delay on a confirmed order and propose a new date.
+  ///
+  /// [otherReason]: the farmer's own words when [reason] is 'other' (at most
+  /// 100 characters); stored only then.
   Future<String?> reportDelay({
     required String id,
     required String reason,
     required DateTime proposedDate,
     String note = '',
+    String otherReason = '',
   }) async {
     final offlineError = await requireOnlineOrError();
     if (offlineError != null) return offlineError;
+    final other = otherReason.trim();
+    if (reason == 'other' && other.isEmpty) {
+      return 'Please say what is causing the delay.';
+    }
     try {
       await _orders.doc(id).update({
         'delay': {
           'reason': reason,
+          if (reason == 'other') 'otherReason': other,
           'note': note.trim(),
           'proposedDate': Timestamp.fromDate(proposedDate),
           'reportedAt': FieldValue.serverTimestamp(),

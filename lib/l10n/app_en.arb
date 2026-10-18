@@ -1,35 +1,20 @@
 {
   "@@locale": "en",
-  "welcomeBack": "Welcome back,",
+  "welcomeBack": "Welcome,",
   "productsListed": "{count, plural, =1{1 product listed} other{{count} products listed}}",
   "@productsListed": {
-    "placeholders": { "count": { "type": "int" } }
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
   },
-  "totalOrdersThisWeek": "TOTAL ORDERS\nTHIS WEEK",
-  "totalProducts": "TOTAL\nPRODUCTS",
   "salesPerformance": "Sales Performance",
-  "monthLabel": "Month",
-  "monthlyRevenue": "Monthly Revenue",
-  "revenueUpdatesHint": "Revenue updates as orders come in.",
-  "reviews": "Reviews",
   "noReviewsYet": "No reviews yet",
-  "noReviewsHint": "Buyers' reviews of your products will appear here.",
-  "somethingWrongProducts": "Something went wrong loading products.",
-
-  "splashTagline": "Fresh from Farm to Table",
-
-  "roleSelectionTitle": "Who are you shopping as?",
-  "roleSelectionSubtitle": "Choose how you'll use AgriTrade+",
   "roleFarmer": "Farmer",
   "roleFarmerDescription": "Sell your harvest directly to buyers",
   "roleBuyer": "Buyer",
   "roleBuyerDescription": "Order fresh produce from local farmers",
-  "continueAsFarmer": "Continue as Farmer",
-  "continueAsFarmerSubtitle": "List crops & livestock, manage orders",
-  "continueAsBuyer": "Continue as Buyer",
-  "continueAsBuyerSubtitle": "Source fresh goods",
-
-  "welcomeTo": "Welcome to",
   "farmerLoginTitle": "Farmer Login",
   "buyerLoginTitle": "Buyer Login",
   "adminLoginTitle": "Admin Portal",
@@ -41,34 +26,17 @@
   "noAccountSignUp": "Don't have an account? ",
   "signUp": "Sign up",
   "createOne": "Create One.",
-  "saveLoginInfo": "Save login info",
-
   "registerTitle": "Create Account",
   "fullName": "Full Name",
   "confirmPassword": "Confirm Password",
   "registerButton": "Register",
   "alreadyHaveAccount": "Already have an account? ",
   "logIn": "Log in",
-
   "navExplore": "Explore",
   "navMessages": "Messages",
   "navOrders": "Orders",
-  "navMap": "Map",
   "navProfile": "Profile",
   "navMarket": "Market",
-
-  "selectLanguage": "Select Language",
-  "english": "English",
-  "tagalog": "Filipino",
-  "language": "Language",
-  "languageHintTitle": "Choose your language",
-  "languageHintMessage": "Tap E for English or F for Filipino. You can change it here anytime, or later in Settings.",
-  "coachGotIt": "Got it",
-  "languageChanged": "Language set to {language}.",
-  "@languageChanged": {
-    "placeholders": { "language": { "type": "String" } }
-  },
-
   "onboardingSkip": "Skip",
   "onboardingNext": "Next",
   "onboardingGetStarted": "Get Started",
@@ -77,5 +45,91 @@
   "onboardingTitle2": "Smart and Convenient Marketplace",
   "onboardingDescription2": "Discover products, connect with farmers and buyers, and manage your transactions in one place.",
   "onboardingTitle3": "Stay Connected",
-  "onboardingDescription3": "Manage orders, messages, and important transaction updates through AgriTrade+."
+  "onboardingDescription3": "Manage orders, messages, and important transaction updates through AgriTrade+.",
+  "manageAccount": "Manage Account",
+  "accountSettings": "Account Settings",
+  "sectionSecurity": "Security",
+  "sectionAbout": "About",
+  "sectionAccount": "Account",
+  "personalInformation": "Personal Information",
+  "personalInformationHint": "Name, photo and contact details",
+  "changePassword": "Change Password",
+  "changePasswordHint": "Update the password you log in with.",
+  "recoveryEmail": "Recovery Email",
+  "recoveryEmailHint": "Add or verify it in your profile.",
+  "devicesActivity": "Devices & Login Activity",
+  "devicesActivityHint": "Where your account is logged in, and login alerts.",
+  "privacySecurity": "Privacy & Security",
+  "privacyPolicy": "Privacy Policy",
+  "privacyPolicyHint": "How AgriTrade+ handles your information.",
+  "termsConditions": "Terms & Conditions",
+  "termsConditionsHint": "The rules for using AgriTrade+.",
+  "helpSupport": "Help & Support",
+  "shareMyStore": "Share My Store",
+  "notificationSettings": "Notification Settings",
+  "logOut": "Log Out",
+  "ordersToday": "ORDERS TODAY",
+  "totalProductsCard": "TOTAL PRODUCTS",
+  "appVersion": "AgriTrade+ • Version {version}",
+  "@appVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "completedOrderRevenue": "Completed-order revenue",
+  "currentMarketAverage": "Current Market Average",
+  "marketAverageSubtitle": "Average retail price of active marketplace listings",
+  "live": "Live",
+  "bestSellingProducts": "Best-Selling Products",
+  "topBuyerLocations": "Top Buyer Locations",
+  "viewAll": "View All",
+  "showLess": "Show Less",
+  "viewReviews": "View Reviews",
+  "viewAllReviews": "View All Reviews",
+  "productsActive": "Active",
+  "productsArchived": "Archived",
+  "myReviews": "My Reviews",
+  "likedProducts": "Liked Products",
+  "deliveryPickupPreferences": "Delivery & Pick-up Preferences",
+  "inventory": "Inventory",
+  "details": "Details",
+  "filterAll": "All",
+  "filterUnread": "Unread",
+  "statusPending": "Pending",
+  "statusConfirmed": "Confirmed",
+  "statusShipped": "Shipped",
+  "statusCompleted": "Completed",
+  "statusRejected": "Rejected",
+  "exitAppTitle": "Exit App?",
+  "exitAppMessage": "Are you sure you want to close AgriTrade+?",
+  "exit": "Exit",
+  "cancel": "Cancel",
+  "logOutConfirm": "Are you sure you want to log out?",
+  "faqTitle": "Frequently Asked Questions",
+  "contactUs": "Contact Us",
+  "sendSupportRequest": "Send a Support Request",
+  "supportRequestHint": "Our team replies here in the app.",
+  "editProfile": "Edit Profile",
+  "saveChanges": "Save Changes",
+  "bestSellersSubtitle": "Top {count} most purchased products across AgriTrade+",
+  "@bestSellersSubtitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "noStatusOrdersYet": "No {status} orders yet",
+  "@noStatusOrdersYet": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "sectionActivity": "My Activity",
+  "sectionSettings": "Settings",
+  "sectionSupport": "Support"
 }

@@ -6,8 +6,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/support_request_service.dart';
 import '../widgets/agri_empty_state.dart';
 
-/// Lets a buyer send a support request and see the ones they've already
-/// sent, with live status updates and replies from the admin portal.
+/// Lets a farmer or buyer send a support request and see the ones they've
+/// already sent, with live status updates and replies from the admin
+/// portal. Opened from Help & Support (help_support_screen.dart).
 class BuyerSupportScreen extends StatefulWidget {
   const BuyerSupportScreen({super.key});
 
@@ -68,10 +69,7 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                   const SizedBox(height: 16),
                   TextField(
                     controller: _subjectController,
-                    decoration: const InputDecoration(
-                      labelText: 'Subject',
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: const InputDecoration(labelText: 'Subject'),
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -79,7 +77,6 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                     maxLines: 4,
                     decoration: const InputDecoration(
                       labelText: 'How can we help?',
-                      border: OutlineInputBorder(),
                       alignLabelWithHint: true,
                     ),
                   ),
@@ -106,9 +103,7 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: const StadiumBorder(),
                     ),
                     child: _sending
                         ? const SizedBox(
@@ -155,7 +150,7 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: const AgriAppBar(title: 'Help & Support'),
+      appBar: const AgriAppBar(title: 'Support Requests'),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openNewRequestSheet,
         backgroundColor: _dark,

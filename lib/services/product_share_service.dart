@@ -59,6 +59,38 @@ String productShareText({
   'View Product: $link',
 ].join('\n');
 
+/// What "Share My Store" sends: the farmer's name and general location,
+/// up to [kStoreShareMaxListed] of their active products — each with its
+/// own link, which opens the app or the web page like a shared product
+/// does — and how many more there are.
+const int kStoreShareMaxListed = 5;
+
+String storeShareText({
+  required String farmerName,
+  required String location,
+  required List<({String name, num price, String unit, Uri link})> products,
+  int? total,
+}) {
+  final count = total ?? products.length;
+  final listed = products.take(kStoreShareMaxListed).toList();
+  return [
+    '$farmerName on AgriTrade+',
+    if (location.isNotEmpty) 'Location: $location',
+    if (listed.isNotEmpty) ...[
+      '',
+      'Products:',
+      for (final p in listed) ...[
+        '• ${p.name} — ${formatPriceWithUnit(p.price, p.unit)}',
+        '  ${p.link}',
+      ],
+    ],
+    if (count > listed.length) ...[
+      '',
+      'And ${count - listed.length} more — find $farmerName on AgriTrade+.',
+    ],
+  ].join('\n');
+}
+
 class ProductShareService {
   const ProductShareService._();
 
@@ -95,6 +127,74 @@ class ProductShareService {
         sharePositionOrigin: origin,
       ),
     );
+  }
+
+  /// Opens the share sheet for the signed-in farmer's whole store (Share
+  /// My Store on the Profile tab). Returns false when there is nothing to
+  /// share yet — no active products.
+  static Future<bool> shareStore(BuildContext context, String farmerId) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box == null || !box.hasSize
+        ? null
+        : box.localToGlobal(Offset.zero) & box.size;
+
+    final db = FirebaseFirestore.instance;
+    final profile =
+        (await db.collection('publicProfiles').doc(farmerId).get()).data() ??
+        const <String, dynamic>{};
+    final docs =
+        (await db
+                .collection('products')
+                .where('farmerId', isEqualTo: farmerId)
+                .get())
+            .docs
+            .where(
+              (d) =>
+                  d.data()['isArchived'] != true &&
+                  d.data()['isSuspended'] != true,
+            )
+            .toList();
+    if (docs.isEmpty) return false;
+    // Newest listings first.
+    int created(QueryDocumentSnapshot<Map<String, dynamic>> d) {
+      final value = d.data()['createdAt'];
+      return value is Timestamp ? value.millisecondsSinceEpoch : 0;
+    }
+
+    docs.sort((a, b) => created(b).compareTo(created(a)));
+
+    final farmerName = (profile['name'] ?? profile['fullName'] ?? 'Farmer')
+        .toString();
+    final text = storeShareText(
+      farmerName: farmerName,
+      location: [profile['municipality'], profile['province']]
+          .map((v) => (v ?? '').toString().trim())
+          .where((v) => v.isNotEmpty)
+          .join(', '),
+      total: docs.length,
+      products: [
+        for (final d in docs.take(kStoreShareMaxListed))
+          (
+            name: (d.data()['name'] ?? 'Product').toString(),
+            price:
+                (d.data()['retailPrice'] as num?) ??
+                (d.data()['price'] as num?) ??
+                0,
+            unit: (d.data()['unit'] as String?)?.trim().isNotEmpty == true
+                ? d.data()['unit'] as String
+                : unitForProductName((d.data()['name'] ?? '').toString()),
+            link: productLink(d.id),
+          ),
+      ],
+    );
+    await SharePlus.instance.share(
+      ShareParams(
+        text: text,
+        subject: '$farmerName on AgriTrade+',
+        sharePositionOrigin: origin,
+      ),
+    );
+    return true;
   }
 
   // "Laurel, Batangas" from the farmer's public profile — the general area

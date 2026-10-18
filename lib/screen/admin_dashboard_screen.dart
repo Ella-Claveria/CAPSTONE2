@@ -1078,7 +1078,7 @@ class _DashboardWelcomeState extends State<_DashboardWelcome> {
           children: [
             Flexible(
               child: Text(
-                'Welcome back, Admin!',
+                'Welcome, Admin!',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -1623,7 +1623,7 @@ class _AdminAccountMenuState extends State<_AdminAccountMenu> {
         item('help', Icons.help_outline_rounded, 'Help & Support'),
         item('about', Icons.info_outline_rounded, 'About AgriTrade+'),
         const PopupMenuDivider(),
-        item('logout', Icons.logout_rounded, 'Logout', color: c.red),
+        item('logout', Icons.logout_rounded, 'Log Out', color: c.red),
       ],
       child: MouseRegion(
         onEnter: (_) => setState(() => _hovered = true),
@@ -2476,15 +2476,12 @@ const String _mutedMapStyle = '''
 // google_maps_flutter's Heatmap widget still only targets that removed API
 // on web, so it's unusable here now.
 
-// Real completed-order demand only — no mock/baseline padding. One point
-// per buyer area (DashboardAnalyticsService.demandByBuyerAreaForMonth),
-// at that area's general location, weighted by its number of completed
-// purchases — the weight becomes the heat's colour and size. An area
+// Real demand only — no mock/baseline padding. One point per buyer area
+// (DashboardAnalyticsService.combinedDemandByArea), at that area's general
+// location, weighted by its demand score (completed purchases ×2 + buyer
+// searches ×1) — the weight becomes the heat's colour and size. An area
 // with no completed purchase has no point, and a buyer with no location on
 // file contributes to none, rather than a fabricated one.
-// Shown on the map and in Highest Demand Areas when the selected
-// Month/Year has no completed purchase with a buyer area.
-const String _noDemandMessage = 'No completed buyer purchases for this period.';
 
 List<WeightedLatLng> _buildDemandPoints(
   List<({String area, int orderCount, num revenue, double? lat, double? lng})>
@@ -2566,7 +2563,6 @@ const double _zoomStreetLevel = 16.0;
 
 /// What the Demand Heatmap is showing: where buyers bought, or where they
 /// searched. Two layers, never combined.
-enum _HeatLayer { purchases, searches }
 
 class _DemandHeatmapView extends StatefulWidget {
   const _DemandHeatmapView();
@@ -2706,12 +2702,8 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
     _focusRequest++;
   });
 
-  // Which demand the map shows. Purchases and searches are two separate
-  // layers: switching replaces one with the other, it never blends them.
-  _HeatLayer _layer = _HeatLayer.purchases;
-
   // Buyer searches for the selected month — a live listener on just that
-  // month's records, opened only while the Searches layer is shown.
+  // month's records; they add to the demand heat with the purchases.
   // null = not loaded yet.
   List<Map<String, dynamic>>? _searchEvents;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _searchSubscription;
@@ -3133,65 +3125,64 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                           month: _selectedMonth,
                           areaCoordinates: _areaCoordinates,
                         );
-                    // The Searches layer: where buyers are looking, counted
-                    // the same way but kept entirely apart — searches never
-                    // add to purchase heat. Only loaded while it is shown.
-                    final showSearches = _layer == _HeatLayer.searches;
-                    if (showSearches) _watchSearches();
-                    final searches = showSearches
-                        ? DashboardAnalyticsService.searchesByBuyerAreaForMonth(
-                            category == null
-                                ? (_searchEvents ?? const [])
-                                : [
-                                    for (final event
-                                        in _searchEvents ?? const [])
-                                      if (categoryOfCommodity(
-                                            matchSupportedCommodity(
-                                                  (event['query'] ?? '')
-                                                      .toString(),
-                                                ) ??
-                                                '',
-                                          ) ==
-                                          category)
-                                        event,
-                                  ],
-                            usersByUid,
-                            year: _selectedYear,
-                            month: _selectedMonth,
-                            areaCoordinates: _areaCoordinates,
-                          )
-                        : null;
-                    // One list drives the map and the areas panel, for
-                    // whichever layer is shown.
-                    final List<
-                      ({
-                        String area,
-                        int orderCount,
-                        num revenue,
-                        double? lat,
-                        double? lng,
-                      })
-                    >
-                    rankedDemand = searches == null
-                        ? purchaseDemand
-                        : [
-                            for (final area in searches.areas)
-                              (
-                                area: area.area,
-                                orderCount: area.searches,
-                                revenue: 0,
-                                lat: area.lat,
-                                lng: area.lng,
-                              ),
-                          ];
-                    final noneMessage = !showSearches
-                        ? _noDemandMessage
-                        : _searchEvents == null
-                        ? 'Loading buyer searches…'
-                        : 'No buyer searches for this period.';
-                    final areasTitle = showSearches
-                        ? 'Top Search Areas'
-                        : 'Highest Demand Areas';
+                    // Where buyers searched, counted by area the same way —
+                    // added to the purchase heat below (one demand map).
+                    _watchSearches();
+                    final searches =
+                        DashboardAnalyticsService.searchesByBuyerAreaForMonth(
+                          category == null
+                              ? (_searchEvents ?? const [])
+                              : [
+                                  for (final event in _searchEvents ?? const [])
+                                    if (categoryOfCommodity(
+                                          matchSupportedCommodity(
+                                                (event['query'] ?? '')
+                                                    .toString(),
+                                              ) ??
+                                              '',
+                                        ) ==
+                                        category)
+                                      event,
+                                ],
+                          usersByUid,
+                          year: _selectedYear,
+                          month: _selectedMonth,
+                          areaCoordinates: _areaCoordinates,
+                        );
+                    // One demand map: purchases and searches together, as
+                    // each area's demand score (a purchase counts twice a
+                    // search) — see combinedDemandByArea. The score sets
+                    // the heat and the ranking.
+                    final combined =
+                        DashboardAnalyticsService.combinedDemandByArea(
+                          purchaseDemand,
+                          searches.areas,
+                        );
+                    final rankedDemand = [
+                      for (final area in combined)
+                        (
+                          area: area.area,
+                          orderCount: area.score,
+                          revenue: area.revenue,
+                          lat: area.lat,
+                          lng: area.lng,
+                        ),
+                    ];
+                    String plural(int n, String one, String many) =>
+                        '$n ${n == 1 ? one : many}';
+                    final countTexts = {
+                      for (final area in combined)
+                        area.area: [
+                          if (area.purchases > 0)
+                            plural(area.purchases, 'purchase', 'purchases'),
+                          if (area.searches > 0)
+                            plural(area.searches, 'search', 'searches'),
+                        ].join(' · '),
+                    };
+                    const noneMessage =
+                        'No completed purchases or buyer searches for this '
+                        'period.';
+                    const areasTitle = 'Highest Demand Areas';
                     _locateAreas([
                       for (final area in rankedDemand)
                         if (area.lat == null) area.area,
@@ -3304,9 +3295,7 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                         bounds: _computeMapBounds(buyerPoints),
                                         onCameraIdle: _onCameraIdle,
                                         isFullscreen: false,
-                                        legendTitle: showSearches
-                                            ? 'Buyer searches'
-                                            : 'Completed purchases',
+                                        legendTitle: 'Buyer demand',
                                         emptyMessage: emptyMessage,
                                         areas: plottedAreas,
                                         onSelectArea: _selectArea,
@@ -3316,9 +3305,7 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                             _openFullscreen(
                                               context,
                                               emptyMessage: emptyMessage,
-                                              legendTitle: showSearches
-                                                  ? 'Buyer searches'
-                                                  : 'Completed purchases',
+                                              legendTitle: 'Buyer demand',
                                               points: points,
                                               bounds: _computeMapBounds(
                                                 buyerPoints,
@@ -3340,73 +3327,50 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Expanded(
-                                        // Where buyers purchased, or where
-                                        // they searched: tabs on the panel
-                                        // they change. No counts: these
-                                        // are two views, not two lists.
-                                        child: AdminTabbedTable<_HeatLayer>(
-                                          expand: true,
-                                          selected: _layer,
-                                          onSelected: (layer) =>
-                                              setState(() => _layer = layer),
-                                          tabs: const [
-                                            (
-                                              value: _HeatLayer.purchases,
-                                              label: 'Purchases',
-                                              count: null,
-                                              icon: Icons.shopping_bag_outlined,
-                                            ),
-                                            (
-                                              value: _HeatLayer.searches,
-                                              label: 'Searches',
-                                              count: null,
-                                              icon: Icons.search_rounded,
-                                            ),
+                                        // Ranked by demand score: purchases
+                                        // and searches together.
+                                        child: AdminDemandAreasPanel(
+                                          areas: [
+                                            for (final d in rankedDemand)
+                                              if (d.orderCount > 0)
+                                                (
+                                                  area: d.area,
+                                                  orderCount: d.orderCount,
+                                                ),
                                           ],
-                                          child: AdminDemandAreasPanel(
-                                            tabbed: true,
-                                            areas: [
-                                              for (final d in rankedDemand)
-                                                if (d.orderCount > 0)
-                                                  (
-                                                    area: d.area,
-                                                    orderCount: d.orderCount,
-                                                  ),
-                                            ],
-                                            selectedArea: selectedArea,
-                                            onSelect: _selectArea,
-                                            emptyText: noneMessage,
-                                            title: areasTitle,
-                                            subtitle: showSearches
-                                                ? 'By buyer searches · select an area'
-                                                : 'By completed buyer purchases · select an area',
-                                            unit: showSearches
-                                                ? 'search'
-                                                : 'purchase',
-                                            unitPlural: showSearches
-                                                ? 'searches'
-                                                : 'purchases',
-                                          ),
+                                          countTexts: countTexts,
+                                          selectedArea: selectedArea,
+                                          onSelect: _selectArea,
+                                          emptyText: noneMessage,
+                                          title: areasTitle,
+                                          subtitle:
+                                              'Purchases (×2) and searches (×1) · select an area',
+                                        ),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      // The selected area: what buyers
+                                      // there bought, and what they
+                                      // searched for.
+                                      Expanded(
+                                        child: AdminAreaProductsPanel(
+                                          area: selectedArea,
+                                          products:
+                                              productsByArea[selectedArea] ??
+                                              const [],
+                                          emptyText: noneMessage,
                                         ),
                                       ),
                                       const SizedBox(height: 16),
                                       Expanded(
-                                        child: searches != null
-                                            ? AdminAreaSearchesPanel(
-                                                area: selectedArea,
-                                                terms:
-                                                    searches
-                                                        .terms[selectedArea] ??
-                                                    const [],
-                                                emptyText: noneMessage,
-                                              )
-                                            : AdminAreaProductsPanel(
-                                                area: selectedArea,
-                                                products:
-                                                    productsByArea[selectedArea] ??
-                                                    const [],
-                                                emptyText: noneMessage,
-                                              ),
+                                        child: AdminAreaSearchesPanel(
+                                          area: selectedArea,
+                                          terms:
+                                              searches.terms[selectedArea] ??
+                                              const [],
+                                          emptyText: _searchEvents == null
+                                              ? 'Loading buyer searches…'
+                                              : 'No buyer searches here for this period.',
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -4438,6 +4402,7 @@ class _PriceManagementViewState extends State<_PriceManagementView>
     String? unit,
     String? category,
     bool isActive = true,
+    double? slaughteredPrice,
   }) async {
     final saved = await showDialog<bool>(
       context: context,
@@ -4448,6 +4413,7 @@ class _PriceManagementViewState extends State<_PriceManagementView>
         initialUnit: unit,
         initialCategory: category,
         initialActive: isActive,
+        initialSlaughteredPrice: slaughteredPrice,
       ),
     );
     if (saved == true) {
@@ -4998,6 +4964,10 @@ class _PriceManagementViewState extends State<_PriceManagementView>
     required TextStyle secondary,
   }) {
     final baseline = (data['baselinePrice'] as num?)?.toDouble() ?? 0;
+    // Livestock only, and only when the office gave one.
+    final slaughtered = isLivestockCategory(category)
+        ? (data['slaughteredBaselinePrice'] as num?)?.toDouble()
+        : null;
     // Current Market Average comes ONLY from active Farmer listings —
     // never the admin's reference price (see computeLiveAverage). Worked
     // out once per change in the listings: ticking a box or archiving
@@ -5043,10 +5013,26 @@ class _PriceManagementViewState extends State<_PriceManagementView>
           ),
         ),
         DataCell(
-          Text(
-            _formatPriceWithUnit(baseline, unit),
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
+          slaughtered == null
+              ? Text(
+                  _formatPriceWithUnit(baseline, unit),
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                )
+              : Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Live ${_formatPriceWithUnit(baseline, unit)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      'Slaughtered '
+                      '${_formatPriceWithUnit(slaughtered, kSlaughteredUnit)}',
+                      style: secondary,
+                    ),
+                  ],
+                ),
         ),
         DataCell(Text(unit.isEmpty ? 'kg' : unit, style: secondary)),
         DataCell(
@@ -5076,6 +5062,7 @@ class _PriceManagementViewState extends State<_PriceManagementView>
                   unit: unit,
                   category: category,
                   isActive: isActive,
+                  slaughteredPrice: slaughtered,
                 ),
               ),
               // Archive and Restore are on the selection bar above the
@@ -5268,6 +5255,9 @@ class _BaselinePriceDialog extends StatefulWidget {
   final String? initialCategory;
   final bool initialActive;
 
+  /// Livestock only: the reference price per kg when sold slaughtered.
+  final double? initialSlaughteredPrice;
+
   const _BaselinePriceDialog({
     this.commodityId,
     this.initialName,
@@ -5275,6 +5265,7 @@ class _BaselinePriceDialog extends StatefulWidget {
     this.initialUnit,
     this.initialCategory,
     this.initialActive = true,
+    this.initialSlaughteredPrice,
   });
 
   @override
@@ -5290,6 +5281,17 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
         ? widget.initialPrice!.toStringAsFixed(2)
         : '',
   );
+  // Livestock is also sold slaughtered, per kg (Add Product's Selling
+  // Option); this is the reference for that price. Optional: left empty,
+  // the price suggestion for slaughtered listings uses marketplace data
+  // only.
+  late final TextEditingController _slaughteredController =
+      TextEditingController(
+        text: widget.initialSlaughteredPrice != null
+            ? widget.initialSlaughteredPrice!.toStringAsFixed(2)
+            : '',
+      );
+  bool get _livestock => isLivestockCategory(_categoryController.text);
   // Adding: the unit is typed. Updating: it is chosen from the units the
   // app knows (kCommodityUnitOptions), so a misspelling cannot slip in.
   late final TextEditingController _unitController = TextEditingController(
@@ -5431,6 +5433,7 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
     _priceController.dispose();
     _unitController.dispose();
     _categoryController.dispose();
+    _slaughteredController.dispose();
     super.dispose();
   }
 
@@ -5459,6 +5462,18 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
     }
     if (_editing && _unitChoice == null) {
       setState(() => _error = 'Choose a unit.');
+      return;
+    }
+    final slaughteredText = _slaughteredController.text.trim();
+    final slaughteredPrice = _livestock && slaughteredText.isNotEmpty
+        ? double.tryParse(slaughteredText)
+        : null;
+    if (_livestock &&
+        slaughteredText.isNotEmpty &&
+        (slaughteredPrice == null || slaughteredPrice <= 0)) {
+      setState(
+        () => _error = 'Enter a valid slaughtered price, or leave it empty.',
+      );
       return;
     }
 
@@ -5497,6 +5512,7 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
         'category': category,
         'isActive': _isActive,
         'baselinePrice': price,
+        'slaughteredBaselinePrice': slaughteredPrice ?? FieldValue.delete(),
         'unit': savedUnit,
         'previousBaselinePrice': oldPrice,
         'effectiveDate': Timestamp.fromDate(_effectiveDate),
@@ -5584,6 +5600,8 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
                       'Existing: ${CommodityRegistry.instance.categories.join(', ')}',
                   helperMaxLines: 2,
                 ),
+                // Livestock shows the slaughtered price below.
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 14),
               AdminField(
@@ -5592,13 +5610,33 @@ class _BaselinePriceDialogState extends State<_BaselinePriceDialog> {
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
-                decoration: const InputDecoration(
-                  labelText: 'Admin reference price (₱)',
+                decoration: InputDecoration(
+                  labelText: _livestock
+                      ? 'Admin reference price, live (₱)'
+                      : 'Admin reference price (₱)',
                   hintText: 'e.g. 55.00',
                 ),
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 14),
+              if (_livestock) ...[
+                AdminField(
+                  controller: _slaughteredController,
+                  icon: Icons.set_meal_outlined,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Slaughtered reference price, per kg (₱)',
+                    hintText: 'e.g. 320.00',
+                    helperText:
+                        'Optional. For listings sold slaughtered; the price '
+                        'above is for live animals.',
+                    helperMaxLines: 2,
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
               if (_editing)
                 Builder(
                   builder: (plateContext) => AdminFieldPlate(

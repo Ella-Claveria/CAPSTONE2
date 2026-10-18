@@ -33,24 +33,16 @@ OrderInfo _order(String status, {String method = 'delivery', num? fee = 50}) {
   });
 }
 
-Widget _card(OrderInfo order, OrderRole role, List<OrderCardAction> actions) =>
-    MaterialApp(
-      home: Scaffold(
-        body: ListView(
-          padding: const EdgeInsets.all(14),
-          children: [
-            OrderCard(
-              order: order,
-              role: role,
-              isNew: true,
-              onDetails: () {},
-              onMessage: () {},
-              actions: actions,
-            ),
-          ],
-        ),
-      ),
-    );
+Widget _card(OrderInfo order, OrderRole role) => MaterialApp(
+  home: Scaffold(
+    body: ListView(
+      padding: const EdgeInsets.all(14),
+      children: [
+        OrderCard(order: order, role: role, isNew: true, onDetails: () {}),
+      ],
+    ),
+  ),
+);
 
 void main() {
   test('order reference and receipt number share one code', () {
@@ -59,19 +51,12 @@ void main() {
     expect(receiptNumberFor(order.id, order.createdAt), 'RCT-2026-K3F9QZ');
   });
 
-  testWidgets('farmer pending card fits a small phone with all its actions', (
-    tester,
-  ) async {
+  testWidgets('farmer pending card fits a small phone', (tester) async {
     tester.view.physicalSize = const Size(320, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(
-      _card(_order('pending'), OrderRole.farmer, [
-        OrderCardAction('Reject', () {}, kind: OrderActionKind.destructive),
-        OrderCardAction('Accept', () {}, kind: OrderActionKind.primary),
-      ]),
-    );
+    await tester.pumpWidget(_card(_order('pending'), OrderRole.farmer));
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull); // no overflow
@@ -84,9 +69,9 @@ void main() {
     expect(find.text('Ordered Sep 27 · 4:28 PM'), findsOneWidget);
     expect(find.text('PENDING'), findsOneWidget);
     expect(find.text('₱185.00'), findsOneWidget);
-    for (final label in ['Details', 'Reject', 'Accept']) {
-      expect(find.text(label), findsOneWidget);
-    }
+    // Only Details: Accept, Reject and messaging are in the order's details.
+    expect(find.text('Details'), findsOneWidget);
+    expect(find.text('Accept'), findsNothing);
     expect(find.byKey(const ValueKey('order-new-dot')), findsOneWidget);
   });
 
@@ -94,7 +79,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      _card(_order('shipped', fee: null), OrderRole.buyer, const []),
+      _card(_order('shipped', fee: null), OrderRole.buyer),
     );
     await tester.pumpAndSettle();
 

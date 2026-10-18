@@ -36,7 +36,7 @@ class AgriEmptyState extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: const BoxDecoration(
-              color: Color(0xFFEFF6E8),
+              color: AppTheme.tint,
               shape: BoxShape.circle,
             ),
             child: Icon(icon, size: 30, color: AppTheme.dark),

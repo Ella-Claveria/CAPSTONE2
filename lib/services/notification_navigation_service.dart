@@ -8,6 +8,7 @@ import '../main.dart' show rootNavigatorKey;
 import '../screen/buyer_marketplace_screen.dart';
 import '../screen/chat_screen.dart';
 import '../screen/farmer_home_screen.dart';
+import '../screen/help_support_screen.dart';
 import '../screen/order_details_screen.dart';
 import '../screen/pending_approval_screen.dart';
 import 'auth_routing_service.dart' show suspensionEndOf;
@@ -110,6 +111,32 @@ class NotificationNavigationService {
             builder: (_) => SignInActivityScreen(
               highlightDeviceId: data['deviceId']?.toString(),
             ),
+          ),
+        );
+        return;
+
+      case 'welcome':
+        // The first notification a new account gets: opens Help & Support,
+        // the getting-started questions for its role.
+        final uid = FirebaseAuth.instance.currentUser?.uid;
+        String? role;
+        if (uid != null) {
+          try {
+            role =
+                (await FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(uid)
+                        .get())
+                    .data()?['role']
+                    ?.toString();
+          } catch (_) {
+            role = null;
+          }
+        }
+        if (!context.mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => HelpSupportScreen(farmer: role == 'farmer'),
           ),
         );
         return;

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
-import '../widgets/agritrade_text.dart';
+import '../widgets/login_hero.dart' show BrandHeadline, BrandLockup;
 import '../widgets/login_form_fields.dart';
 import 'forgot_password_screen.dart';
 
@@ -236,111 +236,109 @@ class AdminBrandPanel extends StatelessWidget {
             ),
           ),
         ),
-        // Light over the sky, deeper toward the bottom where the text sits.
+        // As on the mobile login: a little deeper along the top, behind the
+        // lockup, nearly clear in the middle so the photo shows, and a soft
+        // shade from the lower left behind the headline.
         DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                AppTheme.dark.withValues(alpha: compact ? 0.55 : 0.30),
-                AppTheme.dark.withValues(alpha: compact ? 0.65 : 0.45),
-                AppTheme.dark.withValues(alpha: compact ? 0.75 : 0.82),
+                AppTheme.dark.withValues(alpha: 0.55),
+                AppTheme.dark.withValues(alpha: 0.12),
+                AppTheme.dark.withValues(alpha: 0.30),
               ],
+              stops: const [0, 0.5, 1],
+            ),
+          ),
+        ),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(-1, 0.9),
+              radius: 1.15,
+              colors: [Color(0x990E3210), Color(0x000E3210)],
             ),
           ),
         ),
         DefaultTextStyle.merge(
           style: const TextStyle(color: Colors.white, shadows: _textShadow),
-          child: compact ? _compactLockup() : _fullLockup(),
+          child: compact ? _compactLayout() : _fullLayout(),
         ),
       ],
     );
   }
 
-  Widget _logo(double height) => Image.asset(
-    'assets/images/logo.png',
-    height: height,
-    errorBuilder: (context, error, stackTrace) =>
-        Icon(Icons.agriculture, size: height * 0.75, color: Colors.white),
+  // "Administrative Portal", with a small green dot, above the headline.
+  Widget _portalLabel(double fontSize) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Container(
+        width: fontSize * 0.55,
+        height: fontSize * 0.55,
+        decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
+      ),
+      SizedBox(width: fontSize * 0.75),
+      Text(
+        'Administrative Portal',
+        style: TextStyle(
+          fontSize: fontSize,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.4,
+        ),
+      ),
+    ],
   );
 
-  // The same wordmark widget the mobile login hero uses (AgriTradeText,
-  // its on-photo white version) — never redrawn or recoloured here. The
-  // shadow comes from the DefaultTextStyle above, as it does on mobile.
-  Widget _wordmark(double fontSize) =>
-      AgriTradeText(fontSize: fontSize, light: true);
-
-  Widget _tagline(double fontSize) => Text(
-    'TRADE  •  GROW  •  PROSPER',
-    style: TextStyle(
-      fontSize: fontSize,
-      fontWeight: FontWeight.w600,
-      letterSpacing: 2.4,
-      color: Colors.white.withValues(alpha: 0.92),
-    ),
-  );
-
-  Widget _fullLockup() {
+  // The mobile login's layout, sized up: the lockup in the upper-left
+  // corner, and the typed-out headline at the lower left — sized to the
+  // room the window leaves it.
+  Widget _fullLayout() {
     return Padding(
-      padding: const EdgeInsets.all(56),
+      padding: const EdgeInsets.fromLTRB(48, 40, 48, 48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 7,
-                height: 7,
-                decoration: const BoxDecoration(
-                  color: _accent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Text(
-                'Administrative Portal',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.4,
-                ),
-              ),
-            ],
+          const FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.topLeft,
+            child: BrandLockup(scale: 1.45),
           ),
           Expanded(
-            child: Align(
-              alignment: Alignment.bottomLeft,
-              // scaleDown keeps the lockup whole on a short browser window.
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.bottomLeft,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 460),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _logo(84),
-                      const SizedBox(height: 14),
-                      _wordmark(56),
-                      const SizedBox(height: 10),
-                      _tagline(13),
-                      const SizedBox(height: 22),
-                      Text(
-                        'Manage, monitor, and support the AgriTrade+ marketplace.',
-                        style: TextStyle(
-                          fontSize: 16.5,
-                          height: 1.55,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.white.withValues(alpha: 0.94),
-                        ),
+            child: LayoutBuilder(
+              builder: (context, box) {
+                // The label above it takes about 40 px.
+                final size = [
+                  46.0,
+                  box.maxWidth * 0.085,
+                  (box.maxHeight - 40) / BrandHeadline.heightFactor,
+                ].reduce((a, b) => a < b ? a : b);
+                return Offstage(
+                  offstage: size < 16,
+                  // Shrinks, keeping its lines, rather than ever spill out
+                  // on a short window.
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.bottomLeft,
+                    child: SizedBox(
+                      width: box.maxWidth < 560 ? box.maxWidth : 560,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _portalLabel(13),
+                          const SizedBox(height: 16),
+                          BrandHeadline(
+                            fontSize: size < 16 ? 16 : size,
+                            shadows: _textShadow,
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
         ],
@@ -348,35 +346,60 @@ class AdminBrandPanel extends StatelessWidget {
     );
   }
 
-  Widget _compactLockup() {
+  // The banner over the form on a narrow window: the same, smaller — the
+  // lockup in the corner, the portal label and the headline under it.
+  Widget _compactLayout() {
     return SafeArea(
       bottom: false,
-      child: Center(
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _logo(52),
-                    const SizedBox(width: 10),
-                    _wordmark(34),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                _tagline(10.5),
-                const SizedBox(height: 10),
-                const Text(
-                  'Administrative Portal',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                ),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.topLeft,
+              child: BrandLockup(),
             ),
-          ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  final size = [
+                    22.0,
+                    box.maxWidth * 0.065,
+                    (box.maxHeight - 28) / BrandHeadline.heightFactor,
+                  ].reduce((a, b) => a < b ? a : b);
+                  // Shrinks, keeping its lines, rather than ever spill out
+                  // of the banner on a very narrow or short window.
+                  return FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.bottomLeft,
+                    child: SizedBox(
+                      width: box.maxWidth,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _portalLabel(11.5),
+                          // Too short for the headline: the label alone.
+                          if (size >= 13) ...[
+                            const SizedBox(height: 8),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 420),
+                              child: BrandHeadline(
+                                fontSize: size,
+                                shadows: _textShadow,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -423,7 +446,7 @@ class _FormPanel extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               const Text(
-                'Welcome back',
+                'Welcome',
                 style: TextStyle(
                   fontSize: 32,
                   height: 1.15,

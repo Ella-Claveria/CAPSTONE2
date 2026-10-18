@@ -72,7 +72,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F5),
+      backgroundColor: AppTheme.surface,
       appBar: const AgriAppBar(title: 'Order Details'),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: _orderStream,
@@ -229,9 +229,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: waiting
-            ? Colors.orange.withValues(alpha: 0.08)
-            : const Color(0xFFF1F8F1),
+        color: waiting ? Colors.orange.withValues(alpha: 0.08) : AppTheme.tint,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: waiting ? Colors.orange.shade200 : const Color(0xFFC8E6C9),
@@ -605,55 +603,59 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
           ],
         ),
         const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            OrderActionButton(
-              OrderCardAction(
-                'View Receipt',
-                () => OrderActions.viewReceipt(context, order.id),
-              ),
-            ),
-            if (_role == OrderRole.farmer)
-              OrderActionButton(
-                OrderCardAction(
-                  'Send to Buyer in Messages',
-                  () => OrderActions.message(
-                    context,
-                    order,
-                    _role,
-                    withReceipt: true,
-                  ),
-                ),
-              ),
-            if (_role == OrderRole.buyer)
-              order.reviewed
-                  ? Chip(
-                      visualDensity: VisualDensity.compact,
-                      backgroundColor: const Color(0xFFEFF6E8),
-                      side: BorderSide.none,
-                      avatar: const Icon(
-                        Icons.star_rounded,
-                        size: 16,
-                        color: Colors.amber,
-                      ),
-                      label: Text(
-                        'You reviewed this product',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.dark,
-                        ),
-                      ),
-                    )
-                  : OrderActionButton(
-                      OrderCardAction(
-                        'Review Product',
-                        () => OrderActions.review(context, order),
+        // The review (or Send to Buyer) on the left, View Receipt — the
+        // card's own action — on the right.
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children:
+              [
+                if (_role == OrderRole.farmer)
+                  OrderActionButton(
+                    OrderCardAction(
+                      'Send to Buyer in Messages',
+                      () => OrderActions.message(
+                        context,
+                        order,
+                        _role,
+                        withReceipt: true,
                       ),
                     ),
-          ],
+                  ),
+                if (_role == OrderRole.buyer)
+                  order.reviewed
+                      ? Chip(
+                          visualDensity: VisualDensity.compact,
+                          backgroundColor: AppTheme.tint,
+                          side: BorderSide.none,
+                          avatar: const Icon(
+                            Icons.star_rounded,
+                            size: 16,
+                            color: Colors.amber,
+                          ),
+                          label: Text(
+                            'You reviewed this product',
+                            style: GoogleFonts.montserrat(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.dark,
+                            ),
+                          ),
+                        )
+                      : OrderActionButton(
+                          OrderCardAction(
+                            'Review Product',
+                            () => OrderActions.review(context, order),
+                          ),
+                        ),
+              ].map<Widget>((w) => Flexible(child: w)).followedBy([
+                const SizedBox(width: 8),
+                OrderActionButton(
+                  OrderCardAction(
+                    'View Receipt',
+                    () => OrderActions.viewReceipt(context, order.id),
+                  ),
+                ),
+              ]).toList(),
         ),
       ],
     ),

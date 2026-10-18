@@ -7,7 +7,7 @@ import 'admin_login_view.dart';
 import '../widgets/app_back_button.dart';
 import '../widgets/login_form_fields.dart';
 import '../widgets/login_hero.dart';
-import '../l10n/app_localizations.dart';
+import '../l10n/tr.dart';
 
 class LoginScreen extends StatefulWidget {
   // Null means "role-agnostic" login: whoever this account belongs to
@@ -60,7 +60,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // Human-readable label for the role subtitle under the AgriTrade+ logo.
   String? get _roleLabel {
     if (widget.role == null) return null;
-    final t = AppLocalizations.of(context)!;
+    final t = tr(context);
     if (_isAdmin) return t.adminLoginTitle;
     if (widget.role == 'farmer') return t.farmerLoginTitle;
     return t.buyerLoginTitle;
@@ -186,9 +186,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                   children: [
                                     RichText(
                                       text: TextSpan(
-                                        text: AppLocalizations.of(
-                                          context,
-                                        )!.noAccountSignUp,
+                                        text: tr(context).noAccountSignUp,
                                         style: const TextStyle(
                                           color: Colors.black87,
                                         ),
@@ -210,9 +208,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                         ),
                                         child: RichText(
                                           text: TextSpan(
-                                            text: AppLocalizations.of(
-                                              context,
-                                            )!.createOne,
+                                            text: tr(context).createOne,
                                             style: const TextStyle(
                                               fontWeight: FontWeight.bold,
                                               color: AppTheme.dark,
@@ -264,7 +260,7 @@ class _LoginHeader extends StatelessWidget {
     return Column(
       children: [
         Text(
-          AppLocalizations.of(context)!.loginButton,
+          tr(context).loginButton,
           style: const TextStyle(
             fontSize: 28,
             color: AppTheme.dark,
@@ -273,7 +269,7 @@ class _LoginHeader extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         Text(
-          roleLabel ?? AppLocalizations.of(context)!.loginSubtitle,
+          roleLabel ?? tr(context).loginSubtitle,
           style: TextStyle(
             fontSize: 14,
             color: Colors.grey[600],

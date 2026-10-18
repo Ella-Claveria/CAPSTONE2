@@ -184,9 +184,7 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                       side: const BorderSide(color: _dark),
                       backgroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                      shape: const StadiumBorder(),
                     ),
                   ),
                 ),
@@ -199,9 +197,7 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
+                      shape: const StadiumBorder(),
                       elevation: 0,
                     ),
                     child: _saving

@@ -109,28 +109,54 @@ Future<bool> showPermissionRationale(
           ],
         ],
       ),
-      // Stacked, full width and the same size: the main choice on top, then
-      // "Not Now". Side by side, a long label ("Allow Notifications") wraps
-      // onto two lines and the pair looks lopsided.
       actions: [
-        Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            AgriDialogButton(
-              label: allowLabel,
-              kind: AgriButtonKind.primary,
-              onPressed: () => Navigator.pop(context, true),
-            ),
-            const SizedBox(height: 10),
-            AgriDialogButton(
-              label: denyLabel,
-              onPressed: () => Navigator.pop(context, false),
-            ),
-          ],
+        _choiceButtons(
+          allow: AgriDialogButton(
+            label: allowLabel,
+            kind: AgriButtonKind.primary,
+            onPressed: () => Navigator.pop(context, true),
+          ),
+          deny: AgriDialogButton(
+            label: denyLabel,
+            onPressed: () => Navigator.pop(context, false),
+          ),
+          sideBySide:
+              allowLabel.length <= _shortLabel &&
+              denyLabel.length <= _shortLabel,
         ),
       ],
     ),
   );
   return result ?? false;
+}
+
+// Labels this short ("Allow", "Not Now") fit side by side on any phone.
+const _shortLabel = 10;
+
+// The two choices, always the same size. Short labels sit side by side,
+// "Not Now" on the left; longer ones ("Allow Location", "Open Settings")
+// are stacked, the main choice on top, so neither wraps onto two lines and
+// the pair stays even.
+Widget _choiceButtons({
+  required Widget allow,
+  required Widget deny,
+  required bool sideBySide,
+}) {
+  if (sideBySide) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: deny),
+          const SizedBox(width: 10),
+          Expanded(child: allow),
+        ],
+      ),
+    );
+  }
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [allow, const SizedBox(height: 10), deny],
+  );
 }

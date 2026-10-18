@@ -55,6 +55,9 @@ class ProductService {
     // that later displays this product's stock/price shows the same unit,
     // instead of each one re-deriving it independently.
     String? unit,
+    // Livestock only: 'live' or 'slaughtered' (SellingOption.value, see
+    // commodity_master_list.dart). Null for anything else.
+    String? sellingOption,
     // Internal moderation flag, set only when the farmer chose to post at
     // a price far above the AI suggested range (see add_product_screen's
     // high-price warning). Never shown to buyers; exists so the Admin
@@ -78,6 +81,7 @@ class ProductService {
         'category': category,
         if (commodity != null && commodity.isNotEmpty) 'commodity': commodity,
         if (unit != null && unit.isNotEmpty) 'unit': unit,
+        'sellingOption': ?sellingOption,
         'price': price,
         'retailPrice': price,
         'wholesaleEnabled': wholesaleEnabled,
@@ -87,6 +91,8 @@ class ProductService {
             : 1,
         'retailMaximumQuantity': retailMaximumQuantity,
         'quantity': quantity,
+        // What Low Stock is measured against (inventory_screen.dart).
+        'stockBaseline': quantity,
         if (harvestDate != null) 'harvestDate': Timestamp.fromDate(harvestDate),
         'description': description,
         'imageUrls': imageUrls,
@@ -138,6 +144,8 @@ class ProductService {
     String? commodity,
     // See addProduct's unit param.
     String? unit,
+    // See addProduct's sellingOption param — null removes it.
+    String? sellingOption,
     // See addProduct's priceFlag param.
     Map<String, dynamic>? priceFlag,
     // Removes an earlier flag, so a farmer who brings the price back down
@@ -158,14 +166,27 @@ class ProductService {
     final archivedError = await _archivedError(id);
     if (archivedError != null) return archivedError;
 
+    // A changed quantity is a restock (or a correction) by the farmer, so
+    // it becomes the new Low Stock baseline; an edit that leaves the
+    // quantity as it is keeps the old one.
+    num? currentQuantity;
+    try {
+      final current = (await _products.doc(id).get()).data()?['quantity'];
+      currentQuantity = current is num ? current : null;
+    } catch (_) {
+      currentQuantity = null;
+    }
+
     try {
       await _products.doc(id).update({
+        if (currentQuantity != quantity) 'stockBaseline': quantity,
         'name': name,
         'category': category,
         'commodity': (commodity != null && commodity.isNotEmpty)
             ? commodity
             : FieldValue.delete(),
         'unit': (unit != null && unit.isNotEmpty) ? unit : FieldValue.delete(),
+        'sellingOption': sellingOption ?? FieldValue.delete(),
         'price': price,
         'retailPrice': price,
         'wholesaleEnabled': wholesaleEnabled,
@@ -274,6 +295,8 @@ class ProductService {
     try {
       await _products.doc(id).update({
         'quantity': quantity,
+        // The farmer set it: Low Stock is now measured from here.
+        'stockBaseline': quantity,
         'updatedAt': FieldValue.serverTimestamp(),
       });
       return null;

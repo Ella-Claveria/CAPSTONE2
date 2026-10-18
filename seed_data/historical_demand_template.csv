@@ -1,0 +1,19 @@
+Year,Month,Commodity,Category,Quantity Sold,Unit,Average Price,Location,Source
+2025,January,Okra,Vegetables,320,kg,60,Laurel,DA Laurel
+2025,February,Okra,Vegetables,410,kg,55,Laurel,DA Laurel
+2025,March,Okra,Vegetables,560,kg,48,Laurel,DA Laurel
+2025,April,Okra,Vegetables,610,kg,45,Laurel,DA Laurel
+2025,May,Okra,Vegetables,480,kg,52,Laurel,DA Laurel
+2025,June,Okra,Vegetables,300,kg,65,Laurel,DA Laurel
+2025,July,Okra,Vegetables,210,kg,78,Laurel,DA Laurel
+2025,August,Okra,Vegetables,190,kg,82,Laurel,DA Laurel
+2025,September,Okra,Vegetables,230,kg,75,Laurel,DA Laurel
+2025,October,Okra,Vegetables,280,kg,68,Laurel,DA Laurel
+2025,November,Okra,Vegetables,330,kg,62,Laurel,DA Laurel
+2025,December,Okra,Vegetables,350,kg,60,Laurel,DA Laurel
+2025,January,Sitaw,Vegetables,280,kg,70,Laurel,DA Laurel
+2025,July,Sitaw,Vegetables,150,kg,95,Laurel,DA Laurel
+2025,March,Rice,Grains,4200,kg,48,Laurel,DA Laurel
+2025,October,Rice,Grains,6800,kg,44,Laurel,DA Laurel
+2025,December,Swine,Livestock,1500,kg liveweight,210,Laurel,DA Laurel
+2025,December,Cattle,Livestock,12,head,65000,Laurel,DA Laurel

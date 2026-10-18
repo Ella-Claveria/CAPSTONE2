@@ -8,7 +8,7 @@ import '../theme/app_theme.dart';
 import '../widgets/agri_dialog.dart';
 
 // The chat composer and its attachment menu, shared by the Farmer and Buyer
-// chat screens (ChatScreen and MessageOrderScreen).
+// chat screen (ChatScreen).
 //
 // Permissions are asked only when an attachment is actually used — never
 // at startup or onboarding:
@@ -188,6 +188,84 @@ class ChatMessagesLoadingBar extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Camera or Choose Photo, opening down from [anchorContext] — the farmer's
+/// "Send a photo" under a buyer's health-certificate request. Null if
+/// dismissed.
+Future<ImageSource?> showChatPhotoMenu(BuildContext anchorContext) {
+  return showAgriPopupMenu<ImageSource>(
+    anchorContext: anchorContext,
+    width: 196,
+    items: const [
+      AgriMenuItem(
+        value: ImageSource.camera,
+        icon: Icons.camera_alt_outlined,
+        label: 'Camera',
+      ),
+      AgriMenuItem(
+        value: ImageSource.gallery,
+        icon: Icons.photo_library_outlined,
+        label: 'Choose Photo',
+      ),
+    ],
+  );
+}
+
+/// A one-tap message or action in a chat, as a small pill: the buyer's
+/// "Can I see the animal's health certificate?" over the message box, the
+/// farmer's "Send a photo" under that request.
+class ChatSuggestionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  /// Null shows the chip disabled (e.g. while a message is sending).
+  /// Gets the chip's own context, to anchor a menu.
+  final ValueChanged<BuildContext>? onTap;
+
+  const ChatSuggestionChip({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return Material(
+      color: AppTheme.tint,
+      shape: const StadiumBorder(side: BorderSide(color: Color(0xFFDCEDC8))),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: enabled ? () => onTap!(context) : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: enabled ? AppTheme.dark : Colors.grey[500],
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: enabled ? AppTheme.dark : Colors.grey[500],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The message box: one + button for attachments, a wide text field that

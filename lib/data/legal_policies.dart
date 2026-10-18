@@ -11,9 +11,13 @@
 /// as built, and must be reviewed against the system's actual behaviour and
 /// applicable Philippine data privacy requirements (Republic Act No. 10173
 /// and NPC issuances) before production use. Text in [square brackets] is a
-/// placeholder for a detail that still needs approval; nothing here names
-/// an organization, officer, address or date that has not been given.
+/// placeholder for a detail that still needs approval (the retention periods
+/// and the policies' dates); nothing here names an officer, address or date
+/// that has not been given. The operator and contact are the AgriTrade+ Team
+/// and its support email.
 library;
+
+import 'mobile_faqs.dart' show kSupportEmail;
 
 /// One numbered part of a policy: optional paragraphs, then optional
 /// points.
@@ -59,13 +63,12 @@ class PolicyDocument {
       'Last updated: ${lastUpdated ?? '[to be set when the policy is approved]'}';
 }
 
-/// Placeholders for details that still need approval.
-const String kPolicyOperator =
-    '[Name of the operating office — to be approved]';
-const String kPolicyContact =
-    '[Privacy / support contact email or office — to be approved]';
+/// Who runs AgriTrade+ and how to reach them about these policies — the
+/// AgriTrade+ team and its support email (data/mobile_faqs.dart).
+const String kPolicyOperator = 'the AgriTrade+ Team';
+const String kPolicyContact = 'the AgriTrade+ Team at $kSupportEmail';
 const String kPolicyPrivacyOfficer =
-    '[Data Protection Officer or privacy contact — to be approved]';
+    'the AgriTrade+ Team (privacy contact) at $kSupportEmail';
 
 // ===================================================================
 // TERMS OF SERVICE

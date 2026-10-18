@@ -1,3 +1,4 @@
+import 'dart:math';
 import '../theme/app_theme.dart';
 import '../widgets/notification_bell.dart';
 import 'dart:async';
@@ -18,6 +19,7 @@ import 'product_detail_screen.dart';
 import '../widgets/explore_product_card.dart';
 import '../widgets/save_product_button.dart';
 import '../widgets/agri_empty_state.dart';
+import '../l10n/tr.dart';
 
 class BuyerExploreScreen extends StatefulWidget {
   /// The notification bell in this tab's header; [bellKey] lets the
@@ -32,10 +34,10 @@ class BuyerExploreScreen extends StatefulWidget {
   });
 
   @override
-  State<BuyerExploreScreen> createState() => _BuyerExploreScreenState();
+  State<BuyerExploreScreen> createState() => BuyerExploreScreenState();
 }
 
-class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
+class BuyerExploreScreenState extends State<BuyerExploreScreen> {
   static const Color _dark = AppTheme.dark;
 
   String _selectedCategory = 'All Postings';
@@ -50,7 +52,36 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
 
   final ProductService _productService = ProductService();
 
+  // The listings, opened once — not again on every rebuild (a like, a
+  // filter change…) — and again only on Retry.
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _products = _productService
+      .allProductsStream();
+
+  final _grid = ScrollController();
+
+  // Which mix of the feed is shown: 0 is the plain ranking; each Back to
+  // the top (see [backToTop]) deals a fresh mix, so other products come
+  // first. It only changes then, so the grid never reshuffles by itself.
+  int _feedMix = 0;
+
+  /// Back pressed on Explore: when the grid is scrolled down, it glides
+  /// back to the top with a fresh mix of products and true is returned
+  /// (Back is handled); at the top it returns false.
+  bool backToTop() {
+    if (!_grid.hasClients || _grid.offset <= 0) return false;
+    setState(() => _feedMix++);
+    _grid.animateTo(
+      0,
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOutCubic,
+    );
+    return true;
+  }
+
   String _selectedBarangay = 'All Locations';
+
+  // "Newest": the latest listings first, instead of the ranked feed.
+  bool _newestFirst = false;
   Map<String, String> _barangayByFarmerUid = {};
   Map<String, bool> _verifiedByFarmerUid = {};
   StreamSubscription? _usersSub;
@@ -103,6 +134,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   @override
   void dispose() {
     _usersSub?.cancel();
+    _grid.dispose();
     LikedProducts.instance.removeListener(_onLikesChanged);
     super.dispose();
   }
@@ -120,13 +152,13 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
       children: [
         // Same title row as Messages, Orders and Profile.
         PageHeader(
-          title: 'Explore',
+          title: tr(context).navExplore,
           trailing: widget.onNotificationsPressed == null
               ? null
               : NotificationBell(
                   key: widget.bellKey,
                   onPressed: widget.onNotificationsPressed!,
-                  color: AppTheme.dark,
+                  color: PageHeader.onBandColor,
                 ),
         ),
         _buildSearchBar(),
@@ -192,22 +224,30 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
   // menu straight below it (never a bottom sheet or a full-screen picker).
   final GlobalKey _locationPillKey = GlobalKey();
 
+  // The location pill, and "Newest" beside it (the latest listings first).
   Widget _buildLocationFilter() {
     final barangays = _barangayByFarmerUid.values.toSet().toList()..sort();
-    if (barangays.isEmpty) return const SizedBox.shrink();
-
     final active = _selectedBarangay != 'All Locations';
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: _FilterPill(
-          key: _locationPillKey,
-          label: _selectedBarangay,
-          selected: active,
-          trailing: Icons.keyboard_arrow_down_rounded,
-          onTap: () => _pickLocation(['All Locations', ...barangays]),
-        ),
+      child: Row(
+        children: [
+          if (barangays.isNotEmpty) ...[
+            _FilterPill(
+              key: _locationPillKey,
+              label: _selectedBarangay,
+              selected: active,
+              trailing: Icons.keyboard_arrow_down_rounded,
+              onTap: () => _pickLocation(['All Locations', ...barangays]),
+            ),
+            const SizedBox(width: 8),
+          ],
+          _FilterPill(
+            label: 'Newest',
+            selected: _newestFirst,
+            onTap: () => setState(() => _newestFirst = !_newestFirst),
+          ),
+        ],
       ),
     );
   }
@@ -278,7 +318,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
 
   Widget _buildProductGrid() {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _productService.allProductsStream(),
+      stream: _products,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator(color: _dark));
@@ -287,7 +327,8 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
           return RetryMessage(
             message:
                 'Could not load products. Check your connection and try again.',
-            onRetry: () => setState(() {}),
+            onRetry: () =>
+                setState(() => _products = _productService.allProductsStream()),
           );
         }
         var docs = snapshot.data?.docs ?? [];
@@ -326,15 +367,34 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
           },
           verifiedByFarmerId: _verifiedByFarmerUid,
         );
-        docs.sort((a, b) {
-          final scoreCompare = (scores[b.id] ?? 0).compareTo(scores[a.id] ?? 0);
-          if (scoreCompare != 0) return scoreCompare;
-          final aCreated = a.data()['createdAt'] as Timestamp?;
-          final bCreated = b.data()['createdAt'] as Timestamp?;
-          return (bCreated?.millisecondsSinceEpoch ?? 0).compareTo(
-            aCreated?.millisecondsSinceEpoch ?? 0,
-          );
-        });
+        // After a Back to the top, a fresh mix: each listing's rank is
+        // nudged by a random amount fixed for that mix, so the order
+        // changes but well-ranked listings still tend to come first.
+        int created(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
+            (d.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+        if (_newestFirst) {
+          docs.sort((a, b) => created(b).compareTo(created(a)));
+        } else if (_feedMix > 0) {
+          final nudged = {
+            for (final d in docs)
+              d.id:
+                  ((scores[d.id] ?? 0) + 1) *
+                  (0.4 + Random(Object.hash(_feedMix, d.id)).nextDouble()),
+          };
+          docs.sort((a, b) => nudged[b.id]!.compareTo(nudged[a.id]!));
+        } else {
+          docs.sort((a, b) {
+            final scoreCompare = (scores[b.id] ?? 0).compareTo(
+              scores[a.id] ?? 0,
+            );
+            if (scoreCompare != 0) return scoreCompare;
+            final aCreated = a.data()['createdAt'] as Timestamp?;
+            final bCreated = b.data()['createdAt'] as Timestamp?;
+            return (bCreated?.millisecondsSinceEpoch ?? 0).compareTo(
+              aCreated?.millisecondsSinceEpoch ?? 0,
+            );
+          });
+        }
 
         if (docs.isEmpty) {
           final isFiltered =
@@ -394,6 +454,7 @@ class _BuyerExploreScreenState extends State<BuyerExploreScreen> {
               final cardWidth =
                   (constraints.maxWidth - padding * 2 - spacing) / 2;
               return GridView.builder(
+                controller: _grid,
                 padding: const EdgeInsets.fromLTRB(padding, 4, padding, 12),
                 itemCount: docs.length,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -514,7 +575,7 @@ class _LocationOption extends StatelessWidget {
     return Container(
       height: height,
       width: double.infinity,
-      color: selected ? const Color(0xFFE8F5E9) : Colors.white,
+      color: selected ? AppTheme.tint : Colors.white,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       child: Row(
         children: [

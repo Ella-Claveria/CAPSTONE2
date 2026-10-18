@@ -65,7 +65,7 @@ class NotificationPermissionPrompt {
         title: kNotificationRationaleTitle,
         message: kNotificationRationaleMessage,
         denyLabel: 'Not Now',
-        allowLabel: 'Allow Notifications',
+        allowLabel: 'Allow',
       );
       if (proceed) {
         try {

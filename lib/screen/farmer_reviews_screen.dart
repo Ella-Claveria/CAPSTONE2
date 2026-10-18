@@ -7,7 +7,6 @@ import 'package:intl/intl.dart';
 
 import '../services/review_stats.dart';
 import '../theme/app_theme.dart';
-import '../widgets/agri_dialog.dart';
 import '../widgets/profile_avatar.dart';
 
 /// Five stars for [rating], with half stars.
@@ -84,56 +83,6 @@ class _FarmerReviewsScreenState extends State<FarmerReviewsScreen> {
         }
       });
 
-  Future<void> _replyToReview(
-    QueryDocumentSnapshot<Map<String, dynamic>> review,
-  ) async {
-    final existing = review.data()['sellerReply']?.toString() ?? '';
-    final controller = TextEditingController(text: existing);
-    final reply = await showAgriDialog<String>(
-      context: context,
-      builder: (dialogContext) => AgriDialog(
-        title: Text(existing.isEmpty ? 'Reply to review' : 'Edit your reply'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 4,
-          maxLength: 500,
-          decoration: const InputDecoration(
-            hintText: 'Write a helpful reply to the buyer',
-          ),
-        ),
-        actions: [
-          AgriDialogButton(
-            label: 'Cancel',
-            onPressed: () => Navigator.pop(dialogContext),
-          ),
-          AgriDialogButton(
-            label: 'Save reply',
-            kind: AgriButtonKind.primary,
-            onPressed: () =>
-                Navigator.pop(dialogContext, controller.text.trim()),
-          ),
-        ],
-      ),
-    );
-    controller.dispose();
-    if (!mounted || reply == null || reply.isEmpty || reply == existing) {
-      return;
-    }
-    try {
-      // One reply per review: saving again replaces it.
-      await review.reference.update({
-        'sellerReply': reply,
-        'sellerReplyAt': FieldValue.serverTimestamp(),
-      });
-    } on FirebaseException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Could not save your reply.')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     if (_sellerId == null || _sellerId.isEmpty) {
@@ -143,7 +92,7 @@ class _FarmerReviewsScreenState extends State<FarmerReviewsScreen> {
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F7F5),
+      backgroundColor: AppTheme.surface,
       appBar: AgriAppBar(
         title: _forProduct ? 'Product Reviews' : 'Buyer Reviews',
       ),
@@ -393,7 +342,7 @@ class _FarmerReviewsScreenState extends State<FarmerReviewsScreen> {
               width: double.infinity,
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: const Color(0xFFF4F8EF),
+                color: AppTheme.tint,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Column(
@@ -428,23 +377,222 @@ class _FarmerReviewsScreenState extends State<FarmerReviewsScreen> {
               ),
             ),
           ],
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              onPressed: () => _replyToReview(doc),
-              icon: const Icon(Icons.reply_outlined, size: 16),
-              label: Text(reply.isEmpty ? 'Reply' : 'Edit reply'),
-              style: TextButton.styleFrom(
-                foregroundColor: _green,
-                minimumSize: const Size(0, 32),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                textStyle: GoogleFonts.montserrat(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+          // Write the reply right here — no popup to open first.
+          ReviewReplyBox(
+            key: ValueKey('reply-${doc.id}'),
+            existing: reply,
+            // One reply per review: saving again replaces it.
+            onSend: (text) => doc.reference.update({
+              'sellerReply': text,
+              'sellerReplyAt': FieldValue.serverTimestamp(),
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The farmer's reply box under a review: a pill-shaped "Write a reply…"
+/// field with a send button, right on the card. Once a reply is saved it
+/// shows above, and "Edit reply" opens this box again with it filled in.
+/// One reply per review — saving again replaces it. The box owns its text
+/// field, so nothing is used after it is gone.
+class ReviewReplyBox extends StatefulWidget {
+  /// The reply already saved, or empty.
+  final String existing;
+
+  /// Saves the (trimmed) reply.
+  final Future<void> Function(String reply) onSend;
+
+  const ReviewReplyBox({
+    super.key,
+    required this.existing,
+    required this.onSend,
+  });
+
+  /// The most a reply may be (firestore.rules).
+  static const int maxLength = 500;
+
+  @override
+  State<ReviewReplyBox> createState() => _ReviewReplyBoxState();
+}
+
+class _ReviewReplyBoxState extends State<ReviewReplyBox> {
+  final _controller = TextEditingController();
+  late bool _editing = widget.existing.isEmpty;
+  bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(() => setState(() {}));
+  }
+
+  @override
+  void didUpdateWidget(ReviewReplyBox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A reply just saved (here or elsewhere): show it, not the box.
+    if (widget.existing != oldWidget.existing && widget.existing.isNotEmpty) {
+      _editing = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _canSend {
+    final text = _controller.text.trim();
+    return !_sending && text.isNotEmpty && text != widget.existing;
+  }
+
+  Future<void> _send() async {
+    if (!_canSend) return;
+    final reply = _controller.text.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _sending = true);
+    try {
+      await widget.onSend(reply);
+
+      if (!mounted) return;
+      FocusScope.of(context).unfocus();
+      setState(() {
+        _sending = false;
+        _editing = false;
+        _controller.clear();
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Could not send your reply. Please try again.'),
+        ),
+      );
+    }
+  }
+
+  void _edit() {
+    _controller.text = widget.existing;
+    setState(() => _editing = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_editing) {
+      return Align(
+        alignment: Alignment.centerRight,
+        child: TextButton.icon(
+          onPressed: _edit,
+          icon: const Icon(Icons.edit_outlined, size: 15),
+          label: const Text('Edit reply'),
+          style: TextButton.styleFrom(
+            foregroundColor: AppTheme.dark,
+            minimumSize: const Size(0, 32),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: GoogleFonts.montserrat(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
             ),
           ),
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  enabled: !_sending,
+                  minLines: 1,
+                  maxLines: 4,
+                  maxLength: ReviewReplyBox.maxLength,
+                  textCapitalization: TextCapitalization.sentences,
+                  style: GoogleFonts.montserrat(fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: widget.existing.isEmpty
+                        ? 'Write a reply to the buyer…'
+                        : 'Edit your reply…',
+                    hintStyle: GoogleFonts.montserrat(
+                      fontSize: 13,
+                      color: Colors.grey[500],
+                    ),
+                    // Kept clean: the limit still applies.
+                    counterText: '',
+                    isDense: true,
+                    filled: true,
+                    fillColor: const Color(0xFFF4F6F3),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 11,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: const BorderSide(
+                        color: AppTheme.mid,
+                        width: 1.2,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton.filled(
+                  tooltip: 'Send reply',
+                  onPressed: _canSend ? _send : null,
+                  style: IconButton.styleFrom(
+                    backgroundColor: AppTheme.dark,
+                    disabledBackgroundColor: AppTheme.dark.withValues(
+                      alpha: 0.3,
+                    ),
+                    foregroundColor: Colors.white,
+                    disabledForegroundColor: Colors.white,
+                  ),
+                  icon: _sending
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Icon(Icons.send_rounded, size: 18),
+                ),
+              ),
+            ],
+          ),
+          if (widget.existing.isNotEmpty)
+            TextButton(
+              onPressed: _sending
+                  ? null
+                  : () => setState(() {
+                      _editing = false;
+                      _controller.clear();
+                    }),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.grey[700],
+                minimumSize: const Size(0, 30),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('Cancel'),
+            ),
         ],
       ),
     );

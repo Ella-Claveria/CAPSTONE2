@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -11,6 +12,7 @@ import '../widgets/order_status_pager.dart';
 import '../widgets/page_header.dart';
 import 'inventory_screen.dart';
 import 'order_actions.dart';
+import '../l10n/tr.dart';
 
 /// The Orders screen body for both the Farmer and the Buyer: same header,
 /// tabs, swipe, badges, cards, loading and empty states. [role] only
@@ -24,7 +26,15 @@ class OrdersView extends StatefulWidget {
   /// Buyer only: jumps to the marketplace from an empty state.
   final VoidCallback? onBrowseMarketplace;
 
-  const OrdersView({super.key, required this.role, this.onBrowseMarketplace});
+  /// A status tab to open on request (see OrderStatusPager.showStatus).
+  final ValueListenable<String?>? showStatus;
+
+  const OrdersView({
+    super.key,
+    required this.role,
+    this.onBrowseMarketplace,
+    this.showStatus,
+  });
 
   @override
   State<OrdersView> createState() => _OrdersViewState();
@@ -107,15 +117,8 @@ class _OrdersViewState extends State<OrdersView> {
               order: order,
               role: _role,
               isNew: isNew(doc),
+              // Messaging and the order's actions are in its details.
               onDetails: () => OrderActions.openDetails(context, order, _role),
-              // Completed cards stay minimal: Details and the receipt.
-              onMessage:
-                  order.isCompleted ||
-                      order.status == 'rejected' ||
-                      order.isCancelled
-                  ? null
-                  : () => OrderActions.message(context, order, _role),
-              actions: OrderActions.actionsFor(context, order, _role),
             );
           },
         ),
@@ -135,7 +138,7 @@ class _OrdersViewState extends State<OrdersView> {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
-          color: const Color(0xFFEFF6E8),
+          color: AppTheme.tint,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Text(
@@ -158,41 +161,44 @@ class _OrdersViewState extends State<OrdersView> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         PageHeader(
-          title: 'Orders',
+          title: tr(context).navOrders,
           // Farmers only: stock of their own listings. A compact solid
           // dark green button on the title's own row, ending on the
           // page's 16px edge.
           titleTrailing: _isFarmer
               ? Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: FilledButton.icon(
+                  child: FilledButton(
                     onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (_) => const InventoryScreen(),
                       ),
                     ),
-                    icon: const Icon(Icons.inventory_2_outlined, size: 16),
-                    label: const Text('Inventory'),
-                    // Solid dark green, white icon and label; no border,
-                    // shadow or gradient.
-                    style: FilledButton.styleFrom(
-                      foregroundColor: Colors.white,
-                      backgroundColor: const Color(0xFF003B1F),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      minimumSize: Size.zero,
-                      fixedSize: const Size.fromHeight(36),
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      visualDensity: VisualDensity.standard,
-                      textStyle: GoogleFonts.montserrat(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    // Solid dark green pill, white label only, raised on a
+                    // soft shadow that sinks when it is pressed.
+                    style:
+                        FilledButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          backgroundColor: AppTheme.dark,
+                          shadowColor: AppTheme.dark,
+                          shape: const StadiumBorder(),
+                          minimumSize: Size.zero,
+                          fixedSize: const Size.fromHeight(36),
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.standard,
+                          textStyle: GoogleFonts.montserrat(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ).copyWith(
+                          elevation: WidgetStateProperty.resolveWith(
+                            (states) =>
+                                states.contains(WidgetState.pressed) ? 1 : 5,
+                          ),
+                        ),
+                    child: Text(tr(context).inventory),
                   ),
                 )
               : null,
@@ -203,6 +209,7 @@ class _OrdersViewState extends State<OrdersView> {
                 ? _orderService.farmerOrdersStream
                 : _orderService.buyerOrdersStream,
             tabs: _tabs,
+            showStatus: widget.showStatus,
             itemsBuilder: _cardsFor,
             headerBuilder: _header,
             onRefresh: _refresh,

@@ -1,94 +1,83 @@
 import 'package:flutter/material.dart';
-import 'package:package_info_plus/package_info_plus.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
 
-/// One option on a Profile tab (My Reviews, Notifications, Account
-/// Settings...): icon, label, chevron. Shared by the Buyer and Farmer
-/// profiles so their option lists look the same.
+/// One option on the buyer's Profile tab (My Reviews, Liked Products…):
+/// a plain row — icon, label, chevron — with a hairline under it, the same
+/// look as the Manage Account list (no card per option).
+///
+/// [destructive] is for Log Out: red, with no chevron and no hairline.
 class ProfileLinkTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool destructive;
 
   const ProfileLinkTile({
     super.key,
     required this.icon,
     required this.label,
     required this.onTap,
+    this.destructive = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      elevation: 2,
-      shadowColor: Colors.black.withValues(alpha: 0.25),
-      borderRadius: BorderRadius.circular(14),
-      clipBehavior: Clip.antiAlias,
-      child: ListTile(
-        leading: Icon(icon, color: AppTheme.dark),
-        title: Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
+    final color = destructive ? Colors.red.shade700 : null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+          leading: Icon(icon, color: color ?? AppTheme.dark),
+          title: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 14.5,
+              fontWeight: destructive ? FontWeight.w600 : FontWeight.w500,
+              color: color,
+            ),
+          ),
+          trailing: destructive
+              ? null
+              : const Icon(Icons.chevron_right, color: Colors.grey),
+          onTap: onTap,
         ),
-        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-        onTap: onTap,
-      ),
+        if (!destructive)
+          Divider(
+            height: 1,
+            indent: 20,
+            endIndent: 20,
+            color: Colors.grey[200],
+          ),
+      ],
     );
   }
 }
 
-/// The foot of a Profile tab: a divider, Log Out, then the app version.
-/// [onLogout] is the role's own log-out (it asks for confirmation first).
-class ProfileFooter extends StatelessWidget {
-  final VoidCallback onLogout;
-
-  const ProfileFooter({super.key, required this.onLogout});
-
-  // Read once for the app's lifetime — it cannot change while running.
-  static final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
+/// A small grey heading over a group of Profile options — the divisions
+/// of the list, not cards.
+class ProfileSectionLabel extends StatelessWidget {
+  final String text;
+  const ProfileSectionLabel(this.text, {super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Divider(height: 1, color: Colors.grey[300]),
-        const SizedBox(height: 6),
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          leading: const Icon(Icons.logout, color: Colors.redAccent),
-          title: const Text(
-            'Log Out',
-            style: TextStyle(
-              fontSize: 14.5,
-              fontWeight: FontWeight.w600,
-              color: Colors.redAccent,
-            ),
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          onTap: onLogout,
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 18, 20, 2),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        text.toUpperCase(),
+        style: GoogleFonts.montserrat(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.6,
+          color: Colors.grey[600],
         ),
-        const SizedBox(height: 10),
-        // The real version from the installed build; nothing is shown
-        // until (or unless) it can be read.
-        FutureBuilder<PackageInfo>(
-          future: _packageInfo,
-          builder: (context, snapshot) {
-            final version = snapshot.data?.version ?? '';
-            if (version.isEmpty) return const SizedBox(height: 16);
-            return Text(
-              'AgriTrade+ • Version $version',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-            );
-          },
-        ),
-      ],
-    );
-  }
+      ),
+    ),
+  );
 }

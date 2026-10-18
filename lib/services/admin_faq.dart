@@ -1,16 +1,17 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../data/mobile_faqs.dart' show kSupportEmail;
+
 /// The Admin Portal's Help & Support FAQ: its entries, the built-in
 /// starter entries, where they are stored (`adminFaqs` in Firestore,
 /// editable by administrators in FAQ Management), and the word matching
 /// its search uses.
 
 /// The support team's official email and contact number, shown at the
-/// bottom of Help & Support. Not provided by the client yet: while both are
-/// empty, nothing is shown. Set them only to details the client has
-/// confirmed.
-const String kAdminSupportEmail = '';
+/// bottom of Help & Support. An empty one is not shown. Set them only to
+/// details the client has confirmed.
+const String kAdminSupportEmail = kSupportEmail;
 const String kAdminSupportPhone = '';
 
 /// The confirmed support channels, in the order they are shown.
@@ -128,7 +129,8 @@ class AdminFaqService {
   /// Every entry, published or not.
   static Stream<List<AdminFaq>> watchAll() => _faqs.snapshots().map(
     (snap) => sortAdminFaqs([
-      for (final doc in snap.docs) AdminFaq.fromMap(doc.id, doc.data()),
+      for (final doc in snap.docs)
+        refreshStaleDefault(AdminFaq.fromMap(doc.id, doc.data())),
     ]),
   );
 
@@ -277,8 +279,10 @@ const List<AdminFaq> kDefaultAdminFaqs = [
     answer:
         'Open your account at the bottom of the sidebar, then Manage '
         'Account › Change Password. Enter your current password and the new '
-        'one (at least 6 characters). If you have forgotten your password, '
-        'use Forgot Password on the Admin login page instead.',
+        'one: at least 12 characters, with an uppercase and a lowercase '
+        'letter, a number and a symbol. Then enter the 6-digit code emailed '
+        'to you; every other device is logged out. If you have forgotten '
+        'your password, use Forgot Password on the Admin login page instead.',
   ),
   AdminFaq(
     id: 'default-account-cannot-login',
@@ -631,8 +635,53 @@ const List<AdminFaq> kDefaultAdminFaqs = [
     question: 'How can I contact support?',
     keywords: ['contact support', 'support', 'email', 'phone', 'help'],
     answer:
-        'The support team\'s official email and contact number are shown at '
-        'the bottom of Help & Support (account menu › Help & Support), with '
-        'a Copy button each, once the client has confirmed them.',
+        'Email the AgriTrade+ team at $kSupportEmail. The address is also '
+        'at the bottom of Help & Support (account menu › Help & Support), '
+        'with a Copy button.',
   ),
 ];
+
+/// The earlier wording of built-in answers that have since changed, by
+/// id. A stored copy still holding one exactly (imported before the
+/// change and never edited by an admin) shows the current wording; an
+/// edited answer is left as the admin wrote it.
+const Map<String, List<String>> _previousDefaultAnswers = {
+  'default-account-password': [
+    'Open your account at the bottom of the sidebar, then Manage '
+        'Account › Change Password. Enter your current password and the new '
+        'one (at least 6 characters). If you have forgotten your password, '
+        'use Forgot Password on the Admin login page instead.',
+    'Open your account at the bottom of the sidebar, then Manage '
+        'Account › Change Password. Enter your current password and the new '
+        'one: at least 12 characters, with an uppercase and a lowercase '
+        'letter, a number and a symbol. If you have forgotten your password, '
+        'use Forgot Password on the Admin login page instead.',
+  ],
+  'default-general-contact': [
+    "The support team's official email and contact number are shown at "
+        'the bottom of Help & Support (account menu › Help & Support), with '
+        'a Copy button each, once the client has confirmed them.',
+  ],
+};
+
+/// [faq], with a built-in answer's current wording when it still holds
+/// the earlier one word for word (see [_previousDefaultAnswers]).
+AdminFaq refreshStaleDefault(AdminFaq faq) {
+  final old = _previousDefaultAnswers[faq.id];
+  if (old == null || !old.contains(faq.answer.trim())) return faq;
+  for (final current in kDefaultAdminFaqs) {
+    if (current.id == faq.id) {
+      return AdminFaq(
+        id: faq.id,
+        category: faq.category,
+        question: faq.question,
+        answer: current.answer,
+        keywords: faq.keywords,
+        published: faq.published,
+        needsReview: faq.needsReview,
+        order: faq.order,
+      );
+    }
+  }
+  return faq;
+}

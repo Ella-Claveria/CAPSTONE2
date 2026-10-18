@@ -73,4 +73,50 @@ void main() {
     await tester.pumpAndSettle();
     expect(answer, isFalse);
   });
+
+  testWidgets('short labels sit side by side, the same size', (tester) async {
+    tester.view.physicalSize = const Size(400, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    bool? answer;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () async {
+                answer = await showPermissionRationale(
+                  context,
+                  icon: Icons.notifications_active_outlined,
+                  title: 'Stay Updated',
+                  message: 'Allow notifications to receive important updates.',
+                  denyLabel: 'Not Now',
+                  allowLabel: 'Allow',
+                );
+              },
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    final notNow = tester.getRect(
+      find.widgetWithText(AgriDialogButton, 'Not Now'),
+    );
+    final allow = tester.getRect(
+      find.widgetWithText(AgriDialogButton, 'Allow'),
+    );
+    expect(notNow.width, allow.width);
+    expect(notNow.height, allow.height);
+    expect(notNow.top, allow.top); // one row
+    expect(notNow.right, lessThan(allow.left)); // Not Now on the left
+
+    await tester.tap(find.text('Allow'));
+    await tester.pumpAndSettle();
+    expect(answer, isTrue);
+  });
 }

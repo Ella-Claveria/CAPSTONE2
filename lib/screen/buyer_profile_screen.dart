@@ -8,10 +8,12 @@ import '../widgets/profile_menu.dart';
 import 'farmer_edit_profile_screen.dart';
 import 'buyer_my_reviews_screen.dart';
 import 'buyer_saved_products_screen.dart';
-import 'buyer_settings_screen.dart';
+import 'help_support_screen.dart';
+import 'manage_account_screen.dart';
+import 'notification_preferences_screen.dart';
 import 'buyer_fulfillment_preferences_screen.dart';
-import 'notifications_screen.dart';
 import '../widgets/agri_refresh_indicator.dart';
+import '../l10n/tr.dart';
 
 /// The buyer's Profile tab. Same look as the farmer's (header, the
 /// avatar with its edit badge, name, then role-specific content), with
@@ -25,7 +27,15 @@ import '../widgets/agri_refresh_indicator.dart';
 /// Delivery & Pickup.
 class BuyerProfileScreen extends StatefulWidget {
   final VoidCallback onLogout;
-  const BuyerProfileScreen({super.key, required this.onLogout});
+
+  /// Opens Orders on its Completed tab (the Completed Orders count).
+  final VoidCallback? onOpenCompletedOrders;
+
+  const BuyerProfileScreen({
+    super.key,
+    required this.onLogout,
+    this.onOpenCompletedOrders,
+  });
 
   @override
   State<BuyerProfileScreen> createState() => _BuyerProfileScreenState();
@@ -98,6 +108,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = tr(context);
     final user = FirebaseAuth.instance.currentUser;
 
     return AgriRefreshIndicator(
@@ -108,7 +119,8 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
         padding: const EdgeInsets.only(bottom: 90),
         child: Column(
           children: [
-            const PageHeader(title: 'Profile'),
+            // The same settings (gear) menu as the farmer's Profile.
+            PageHeader(title: tr(context).navProfile),
             const SizedBox(height: 4),
 
             // ---- Photo, name, general location ----
@@ -177,50 +189,48 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
             _activitySummary(),
             const SizedBox(height: 20),
 
-            // ---- Buyer features, straight on the page (no popup menu).
-            // Change Password, Privacy & Security and Help & Support are
-            // inside Account Settings, so they are not repeated here. ----
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                children: [
-                  ProfileLinkTile(
-                    icon: Icons.rate_review_outlined,
-                    label: 'My Reviews',
-                    onTap: () => _open(const BuyerMyReviewsScreen()),
-                  ),
-                  const SizedBox(height: 10),
-                  ProfileLinkTile(
-                    icon: Icons.favorite_border_rounded,
-                    label: 'Liked Products',
-                    onTap: () => _open(const BuyerSavedProductsScreen()),
-                  ),
-                  const SizedBox(height: 10),
-                  ProfileLinkTile(
-                    icon: Icons.local_shipping_outlined,
-                    label: 'Delivery & Pickup Preferences',
-                    onTap: () =>
-                        _open(const BuyerFulfillmentPreferencesScreen()),
-                  ),
-                  const SizedBox(height: 10),
-                  ProfileLinkTile(
-                    icon: Icons.notifications_none_rounded,
-                    label: 'Notifications',
-                    onTap: () => _open(const NotificationsScreen()),
-                  ),
-                  const SizedBox(height: 10),
-                  ProfileLinkTile(
-                    icon: Icons.settings_outlined,
-                    label: 'Account Settings',
-                    onTap: () => _open(const BuyerSettingsScreen()),
-                  ),
-                  const SizedBox(height: 18),
-                  // Always the last thing on the page, and kept apart from
-                  // the settings above. onLogout asks for confirmation
-                  // before signing out (see BuyerMarketplaceScreen._logout).
-                  ProfileFooter(onLogout: widget.onLogout),
-                ],
-              ),
+            // ---- Everything on the page, as plain rows in labelled
+            // groups (no cards, no gear menu); notifications themselves
+            // are behind the bell on Explore. ----
+            ProfileSectionLabel(t.sectionActivity),
+            ProfileLinkTile(
+              icon: Icons.rate_review_outlined,
+              label: t.myReviews,
+              onTap: () => _open(const BuyerMyReviewsScreen()),
+            ),
+            ProfileLinkTile(
+              icon: Icons.favorite_border_rounded,
+              label: t.likedProducts,
+              onTap: () => _open(const BuyerSavedProductsScreen()),
+            ),
+            ProfileSectionLabel(t.sectionSettings),
+            ProfileLinkTile(
+              icon: Icons.local_shipping_outlined,
+              label: t.deliveryPickupPreferences,
+              onTap: () => _open(const BuyerFulfillmentPreferencesScreen()),
+            ),
+            ProfileLinkTile(
+              icon: Icons.notifications_none_rounded,
+              label: t.notificationSettings,
+              onTap: () => _open(const NotificationPreferencesScreen()),
+            ),
+            ProfileLinkTile(
+              icon: Icons.manage_accounts_outlined,
+              label: t.manageAccount,
+              onTap: () => _open(const ManageAccountScreen()),
+            ),
+            ProfileSectionLabel(t.sectionSupport),
+            ProfileLinkTile(
+              icon: Icons.help_outline,
+              label: t.helpSupport,
+              onTap: () => _open(const HelpSupportScreen(farmer: false)),
+            ),
+            const SizedBox(height: 8),
+            ProfileLinkTile(
+              icon: Icons.logout,
+              label: t.logOut,
+              destructive: true,
+              onTap: widget.onLogout,
             ),
           ],
         ),
@@ -238,11 +248,20 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
         builder: (context, reviewsSnap) {
           final orders = ordersSnap.data ?? 0;
           final reviews = reviewsSnap.data ?? 0;
-          final stats = [
+          // Each count opens what it counts.
+          final stats = <(int, String, VoidCallback?)>[
             if (orders > 0)
-              (orders, orders == 1 ? 'Completed Order' : 'Completed Orders'),
+              (
+                orders,
+                orders == 1 ? 'Completed Order' : 'Completed Orders',
+                widget.onOpenCompletedOrders,
+              ),
             if (reviews > 0)
-              (reviews, reviews == 1 ? 'Review Given' : 'Reviews Given'),
+              (
+                reviews,
+                reviews == 1 ? 'Review Given' : 'Reviews Given',
+                () => _open(const BuyerMyReviewsScreen()),
+              ),
           ];
           if (stats.isEmpty) return const SizedBox.shrink();
 
@@ -251,7 +270,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFFF4F7F4),
+                color: AppTheme.surface,
                 borderRadius: BorderRadius.circular(14),
               ),
               child: IntrinsicHeight(
@@ -265,28 +284,32 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                           color: Colors.grey[300],
                         ),
                       Expanded(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '${stats[i].$1}',
-                              style: AppTheme.heading(
-                                18,
-                              ).copyWith(color: _dark),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              stats[i].$2,
-                              textAlign: TextAlign.center,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[700],
-                                fontWeight: FontWeight.w500,
+                        child: InkWell(
+                          onTap: stats[i].$3,
+                          borderRadius: BorderRadius.circular(10),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${stats[i].$1}',
+                                style: AppTheme.heading(
+                                  18,
+                                ).copyWith(color: _dark),
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 2),
+                              Text(
+                                stats[i].$2,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[700],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ],

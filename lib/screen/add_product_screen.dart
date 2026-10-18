@@ -101,6 +101,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
   // what the farmer can actually list.
   String? _selectedCommodity;
 
+  // Livestock only: sold live or slaughtered (see SellingOption). Null
+  // until chosen reads as Live.
+  SellingOption? _sellingOption;
+
   bool _deliveryAvailable = false;
   // Stored as 'pickupOnly' for compatibility, but it has always meant
   // "pick-up is available" wherever it's read.
@@ -217,8 +221,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
   // Stock / Price per Unit labels below and updates immediately whenever
   // _matchedCommodity changes, since both read straight from this getter
   // on every rebuild rather than caching a stale value.
-  String get _currentUnit => unitForCommodity(_matchedCommodity ?? '');
+  // A slaughtered livestock listing is always per kg (see unitForListing).
+  String get _currentUnit =>
+      unitForListing(_matchedCommodity ?? '', _listingOption);
   bool get _isCountBasedUnit => isCountBasedUnit(_currentUnit);
+
+  // Every commodity the Admin files under Livestock has a Selling Option.
+  bool get _isLivestock => isLivestockCategory(_category);
+
+  // The selling option this listing is saved with: null for anything that
+  // isn't livestock, Live until the farmer picks Slaughtered.
+  SellingOption? get _listingOption =>
+      _isLivestock ? (_sellingOption ?? SellingOption.live) : null;
+  bool get _slaughtered => _listingOption == SellingOption.slaughtered;
 
   PriceRecommendation _computeRecommendation(
     String commodity, {
@@ -245,6 +260,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
       if (!matchesCommodity) continue;
       final listingUnit = (data['unit'] ?? '').toString().trim();
       if (listingUnit.isNotEmpty && listingUnit != _currentUnit) continue;
+      // Live is compared with live, slaughtered with slaughtered.
+      if (isSlaughtered(data) != _slaughtered) continue;
 
       double? price;
       if (isWholesale) {
@@ -286,6 +303,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       if (transactionUnit.isNotEmpty && transactionUnit != _currentUnit) {
         continue;
       }
+      if (isSlaughtered(data) != _slaughtered) continue;
 
       final price =
           _numField(data, 'pricePerUnit') ?? _numField(data, 'unitPrice');
@@ -333,7 +351,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
       // A wholesale reference is used only when the agricultural office
       // explicitly supplied one. Never derive it by discounting retail.
-      final price = isWholesale
+      // Slaughtered livestock has its own per-kg reference (Admin → Price
+      // Management); the live price never stands in for it.
+      final price = _slaughtered
+          ? (isWholesale ? null : _numField(data, 'slaughteredBaselinePrice'))
+          : isWholesale
           ? _numField(data, 'wholesaleBaselinePrice')
           : _numField(data, 'baselinePrice');
       if (price != null && price > 0) {
@@ -390,6 +412,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             matchSupportedCommodity(_nameController.text.trim()) ?? '',
           ) ??
           category;
+      _sellingOption = sellingOptionOf(data);
       _deliveryAvailable = data['deliveryAvailable'] == true;
       _pickupOnly = data['pickupOnly'] == true;
       // Listings saved before coverage existed leave these unset, so the
@@ -447,7 +470,38 @@ class _AddProductScreenState extends State<AddProductScreen> {
     _wholesalePriceFocusNode.addListener(() {
       if (!_wholesalePriceFocusNode.hasFocus) _checkPrice(wholesale: true);
     });
+    _openedForm = _formSignature();
   }
+
+  // What the form held when the screen opened (empty for a new listing,
+  // the listing's own values when editing), to tell whether Back would
+  // lose anything.
+  late final String _openedForm;
+
+  // Everything the farmer can change on the form, as one comparable value.
+  // Values the screen fills in by itself (the farm's location, market
+  // data) are left out, so they never count as the farmer's changes.
+  String _formSignature() => [
+    _nameController.text.trim(),
+    _listingOption?.value,
+    _priceController.text.trim(),
+    _wholesaleEnabled,
+    _wholesalePriceController.text.trim(),
+    _wholesaleMinimumController.text.trim(),
+    _quantityController.text.trim(),
+    _descriptionController.text.trim(),
+    _harvestDate?.toIso8601String(),
+    _deliveryAvailable,
+    _pickupOnly,
+    _coverageType,
+    _customAreas.map((a) => a.label).join('|'),
+    _feeType,
+    _deliveryFeeController.text.trim(),
+    _file?.path,
+    _imageUrl,
+  ].join('\u0000');
+
+  bool get _hasChanges => _formSignature() != _openedForm;
 
   void _onFieldChanged() {
     if (mounted) setState(() {});
@@ -1084,6 +1138,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             deliveryCoverage: _deliveryCoverage?.toMap(),
             commodity: _selectedCommodity,
             unit: unit,
+            sellingOption: _listingOption?.value,
             priceFlag: flag,
             clearPriceFlag: flag == null && hadPriceFlag,
             harvestDate: harvestChanged ? harvestDate : null,
@@ -1105,6 +1160,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           deliveryCoverage: _deliveryCoverage?.toMap(),
           commodity: _selectedCommodity,
           unit: unit,
+          sellingOption: _listingOption?.value,
           priceFlag: flag,
           harvestDate: harvestDate,
         );
@@ -1579,7 +1635,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           Container(
             padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
             decoration: BoxDecoration(
-              color: const Color(0xFFF6F8F5),
+              color: AppTheme.surface,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Column(
@@ -1832,8 +1888,9 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   Future<void> _confirmExit() async {
     if (_loading || _confirmingExit || _allowPop) return;
-    // Nothing can have been changed on an archived (read-only) product.
-    if (_isArchived) {
+    // Nothing to lose: an archived (read-only) product, or a form still
+    // as it was opened — leave without asking.
+    if (_isArchived || !_hasChanges) {
       _closeScreen();
       return;
     }
@@ -1901,6 +1958,70 @@ class _AddProductScreenState extends State<AddProductScreen> {
   // Small, always-visible warning (not a modal) that not every product can
   // be sold on AgriTrade+ — the full explanation lives in Farmer setup (see
   // register_screen.dart's Supported Products section).
+  // Live is sold in the commodity's own unit (kg liveweight or head, as the
+  // Admin set it); Slaughtered always per kg. The unit, the price
+  // suggestion and the listings it is compared with all follow the choice.
+  Widget _sellingOptionField() {
+    final liveUnit = unitForCommodity(_matchedCommodity ?? '');
+    final option = _listingOption;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _label('Selling Option'),
+        _choiceTile(
+          selected: option == SellingOption.live,
+          title: SellingOption.live.label,
+          subtitle: 'The live animal, priced per $liveUnit',
+          onTap: () => setState(() => _sellingOption = SellingOption.live),
+        ),
+        _choiceTile(
+          selected: option == SellingOption.slaughtered,
+          title: SellingOption.slaughtered.label,
+          subtitle: 'The meat, priced per $kSlaughteredUnit',
+          onTap: () =>
+              setState(() => _sellingOption = SellingOption.slaughtered),
+        ),
+        const SizedBox(height: 4),
+        _healthCertificateNote(),
+      ],
+    );
+  }
+
+  // Health certificates are not uploaded here: the farmer sends a photo
+  // of one to the buyer in Messages when asked (see ChatScreen).
+  Widget _healthCertificateNote() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.tint,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFDCEDC8)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.health_and_safety_outlined,
+            size: 18,
+            color: _darkGreen,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "Buyers may ask for your animal's health certificate. You can "
+              'send a photo of it in Messages.',
+              style: GoogleFonts.montserrat(
+                fontSize: 11.5,
+                color: Colors.black87,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _supportedProductsBanner() {
     return Container(
       width: double.infinity,
@@ -2076,7 +2197,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF4F9F1),
+        color: AppTheme.tint,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: const Color(0xFFDCEDC8)),
       ),
@@ -2915,9 +3036,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 foregroundColor: Colors.white,
                 elevation: 0,
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                shape: const StadiumBorder(),
               ),
               child: Text(
                 'Use Suggested Price',
@@ -3312,6 +3431,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   const SizedBox(height: 8),
                   _supportedProductsBanner(),
                   const SizedBox(height: 12),
+
+                  // ---- Selling Option (Livestock only) ----
+                  if (_isLivestock) ...[
+                    _sellingOptionField(),
+                    const SizedBox(height: 12),
+                  ],
 
                   // ---- Category + Quantity side by side ----
                   Row(

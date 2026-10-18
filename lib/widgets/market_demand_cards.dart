@@ -8,6 +8,7 @@ import '../services/market_demand_service.dart';
 import '../theme/app_theme.dart';
 import 'market_card_shell.dart';
 import 'retry_message.dart';
+import '../l10n/tr.dart';
 
 /// The Farmer Dashboard's marketplace-wide analytics: Best-Selling Products
 /// and, below it, Top Buyer Locations — both for [month], the same month
@@ -16,7 +17,16 @@ import 'retry_message.dart';
 class MarketDemandCards extends StatefulWidget {
   final DateTime month;
 
-  const MarketDemandCards({super.key, required this.month});
+  /// On the two cards, for the Market tab's first-time hints.
+  final Key? bestSellersKey;
+  final Key? locationsKey;
+
+  const MarketDemandCards({
+    super.key,
+    required this.month,
+    this.bestSellersKey,
+    this.locationsKey,
+  });
 
   @override
   State<MarketDemandCards> createState() => _MarketDemandCardsState();
@@ -33,9 +43,6 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
   static const int _collapsed = 5;
   bool _allProducts = false;
   bool _allLocations = false;
-
-  static TextStyle _muted([double size = 11.5]) =>
-      GoogleFonts.montserrat(fontSize: size, color: Colors.grey[600]);
 
   @override
   Widget build(BuildContext context) {
@@ -71,39 +78,47 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
             );
             return Column(
               children: [
-                _card(
-                  title: 'Best-Selling Products',
-                  subtitle:
-                      'Top ${MarketDemandService.bestSellerLimit} most purchased products across AgriTrade+',
-                  tag: tagLabel,
-                  loading: loading,
-                  emptyIcon: Icons.shopping_basket_outlined,
-                  emptyText:
-                      'No completed orders in $monthLabel yet. Popular '
-                      'products will appear here as buyers complete orders.',
-                  rows: [
-                    for (var i = 0; i < bestSellers.length; i++)
-                      _bestSellerRow(i + 1, bestSellers[i]),
-                  ],
-                  expanded: _allProducts,
-                  onToggle: () => setState(() => _allProducts = !_allProducts),
+                KeyedSubtree(
+                  key: widget.bestSellersKey,
+                  child: _card(
+                    title: tr(context).bestSellingProducts,
+                    subtitle: tr(
+                      context,
+                    ).bestSellersSubtitle(MarketDemandService.bestSellerLimit),
+                    tag: tagLabel,
+                    loading: loading,
+                    emptyIcon: Icons.shopping_basket_outlined,
+                    emptyText:
+                        'No completed orders in $monthLabel yet. Popular '
+                        'products will appear here as buyers complete orders.',
+                    rows: [
+                      for (var i = 0; i < bestSellers.length; i++)
+                        _bestSellerRow(i + 1, bestSellers[i]),
+                    ],
+                    expanded: _allProducts,
+                    onToggle: () =>
+                        setState(() => _allProducts = !_allProducts),
+                  ),
                 ),
                 const SizedBox(height: 16),
-                _card(
-                  title: 'Top Buyer Locations',
-                  tag: tagLabel,
-                  loading: loading,
-                  emptyIcon: Icons.map_outlined,
-                  emptyText:
-                      'No buyer locations on record for completed orders in '
-                      '$monthLabel yet.',
-                  rows: [
-                    for (var i = 0; i < locations.length; i++)
-                      _locationRow(i + 1, locations[i]),
-                  ],
-                  expanded: _allLocations,
-                  onToggle: () =>
-                      setState(() => _allLocations = !_allLocations),
+                KeyedSubtree(
+                  key: widget.locationsKey,
+                  child: _card(
+                    title: tr(context).topBuyerLocations,
+                    tag: tagLabel,
+                    loading: loading,
+                    emptyIcon: Icons.map_outlined,
+                    emptyText:
+                        'No buyer locations on record for completed orders in '
+                        '$monthLabel yet.',
+                    rows: [
+                      for (var i = 0; i < locations.length; i++)
+                        _locationRow(i + 1, locations[i]),
+                    ],
+                    expanded: _allLocations,
+                    onToggle: () =>
+                        setState(() => _allLocations = !_allLocations),
+                  ),
                 ),
               ],
             );
@@ -142,7 +157,10 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
                           ? rows.length
                           : rows.length.clamp(0, _collapsed));
                   i++
-                ) ...[if (i > 0) const SizedBox(height: 8), rows[i]],
+                ) ...[
+                  if (i > 0) Divider(height: 1, color: Colors.grey[200]),
+                  rows[i],
+                ],
                 if (rows.length > _collapsed)
                   MarketCardToggle(expanded: expanded, onPressed: onToggle),
               ],
@@ -150,33 +168,29 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
     );
   }
 
-  // One ranked entry on its own soft panel; the leader a shade stronger.
-  Widget _rowPanel(int rank, Widget child) => Container(
-    padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
-    decoration: BoxDecoration(
-      color: rank == 1
-          ? AppTheme.accent.withValues(alpha: 0.38)
-          : const Color(0xFFF7FAF5),
-      borderRadius: BorderRadius.circular(14),
+  // One ranked entry: a single plain line (no panel), so a long list
+  // stays easy to scan.
+  Widget _line(int rank, String name, List<Widget> trailing) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 10),
+    child: Row(
+      children: [
+        _rank(rank),
+        const SizedBox(width: 8),
+        Expanded(child: _name(name)),
+        for (final widget in trailing) ...[const SizedBox(width: 8), widget],
+      ],
     ),
-    child: child,
   );
 
-  Widget _rank(int rank) => Container(
-    width: 28,
-    height: 28,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: rank == 1 ? AppTheme.dark : Colors.white,
-      shape: BoxShape.circle,
-      border: rank == 1 ? null : Border.all(color: const Color(0xFFDCE8D3)),
-    ),
+  // The rank as a plain number; the leader in the brand's dark green.
+  Widget _rank(int rank) => SizedBox(
+    width: 22,
     child: Text(
       '$rank',
       style: GoogleFonts.montserrat(
-        fontSize: 12,
+        fontSize: 13,
         fontWeight: FontWeight.w700,
-        color: rank == 1 ? Colors.white : AppTheme.dark,
+        color: rank == 1 ? AppTheme.dark : Colors.grey[500],
       ),
     ),
   );
@@ -206,11 +220,12 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
     ),
   );
 
+  // Short, so the line fits: High / Moderate / Low.
   Widget _demandTag(DemandLevel level) {
     final (String label, Color color) = switch (level) {
-      DemandLevel.high => ('High Demand', AppTheme.mid),
-      DemandLevel.moderate => ('Moderate Demand', Colors.orange.shade800),
-      DemandLevel.low => ('Low Demand', Colors.grey.shade700),
+      DemandLevel.high => ('High', AppTheme.mid),
+      DemandLevel.moderate => ('Moderate', Colors.orange.shade800),
+      DemandLevel.low => ('Low', Colors.grey.shade700),
     };
     return _pill(label, color);
   }
@@ -220,23 +235,20 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
     maxLines: 1,
     overflow: TextOverflow.ellipsis,
     style: GoogleFonts.montserrat(
-      fontSize: 14,
-      fontWeight: FontWeight.w700,
+      fontSize: 13.5,
+      fontWeight: FontWeight.w600,
       color: Colors.black87,
     ),
   );
 
+  // Rank, product, its trend arrow and demand — on one line.
   Widget _bestSellerRow(int rank, BestSeller item) {
-    final (
-      String trendLabel,
-      IconData trendIcon,
-      Color trendColor,
-    ) = switch (item.trend) {
+    final (String trend, IconData icon, Color color) = switch (item.trend) {
       DemandTrend.rising => ('Rising', Icons.trending_up_rounded, AppTheme.mid),
       DemandTrend.stable => (
         'Stable',
         Icons.trending_flat_rounded,
-        Colors.grey.shade700,
+        Colors.grey.shade600,
       ),
       DemandTrend.declining => (
         'Declining',
@@ -244,132 +256,33 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
         Colors.red.shade700,
       ),
     };
-    final details = [
-      if (item.category.isNotEmpty) item.category,
-      if (item.mostlyWholesale != null)
-        item.mostlyWholesale! ? 'Mostly Wholesale' : 'Mostly Retail',
-      'per ${item.unit}',
-    ].join(' · ');
-
-    return _rowPanel(
-      rank,
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _rank(rank),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _name(item.commodity),
-                const SizedBox(height: 2),
-                Text(
-                  details,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: _muted(),
-                ),
-                const SizedBox(height: 7),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    _demandTag(item.demand),
-                    _pill(trendLabel, trendColor, icon: trendIcon),
-                  ],
-                ),
-                if (item.topBuyerArea.isNotEmpty) ...[
-                  const SizedBox(height: 7),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.place_outlined,
-                        size: 13,
-                        color: Colors.grey[600],
-                      ),
-                      const SizedBox(width: 3),
-                      Expanded(
-                        child: Text(
-                          'Top buyer area: ${item.topBuyerArea}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: _muted(),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
+    return _line(rank, item.commodity, [
+      Tooltip(
+        message: trend,
+        child: Icon(icon, size: 18, color: color),
       ),
-    );
+      _demandTag(item.demand),
+    ]);
   }
 
+  // Rank, area, demand and its share against the busiest area — on one
+  // line.
   Widget _locationRow(int rank, BuyerLocation location) {
     final share = (location.relativeDemand.clamp(0.0, 1.0) * 100).round();
-    return _rowPanel(
-      rank,
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _rank(rank),
-          const SizedBox(width: 11),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(child: _name(location.area)),
-                    const SizedBox(width: 8),
-                    _demandTag(location.demand),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                // Relative demand: this area against the busiest one.
-                Row(
-                  children: [
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: location.relativeDemand,
-                          minHeight: 7,
-                          color: rank == 1 ? AppTheme.dark : AppTheme.mid,
-                          backgroundColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 34,
-                      child: Text(
-                        '$share%',
-                        textAlign: TextAlign.right,
-                        style: GoogleFonts.montserrat(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: AppTheme.dark,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Most purchased: ${location.mostPurchased}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: _muted(),
-                ),
-              ],
-            ),
+    return _line(rank, location.area, [
+      _demandTag(location.demand),
+      SizedBox(
+        width: 38,
+        child: Text(
+          '$share%',
+          textAlign: TextAlign.right,
+          style: GoogleFonts.montserrat(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.dark,
           ),
-        ],
+        ),
       ),
-    );
+    ]);
   }
 }

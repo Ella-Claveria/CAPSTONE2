@@ -30,6 +30,9 @@ test("password reset email carries the reset link", () => {
   assert.ok(mail.text.startsWith("Hello,"));
   assert.ok(mail.text.includes(link));
   assert.ok(mail.html.includes("Reset Password"));
+  // The button only: the web address is not written out in the email.
+  assert.ok(!mail.html.includes("copy and paste this link"));
+  assert.ok(!mail.html.includes(`>${link.replace(/&/g, "&amp;")}<`));
 });
 
 test("a Google-only account is told how to log in and gets no link", () => {
@@ -98,4 +101,20 @@ test("templates build a message Nodemailer accepts", async () => {
   assert.strictEqual(sent.subject, mail.subject);
   assert.strictEqual(sent.to[0].address, "juan@example.com");
   assert.ok(sent.html.includes("AgriTrade+"));
+});
+
+test("the recovery email code says what it is for", () => {
+  const mail = templates.otpEmail({ code: "482731", purpose: "recovery-email" });
+  assert.match(mail.text, /Verify your recovery email/);
+  assert.match(mail.text, /482 731/);
+  assert.match(mail.text, /recovery email of an AgriTrade\+ account/);
+});
+
+test("the password change code and notice say what happened", () => {
+  const code = templates.otpEmail({ code: "482731", purpose: "password-change" });
+  assert.match(code.text, /Confirm your password change/);
+  const notice = templates.passwordChangedEmail({ name: "Juan", when: "Oct 18, 2026, 9:00 AM" });
+  assert.match(notice.subject, /password was changed/);
+  assert.match(notice.text, /Every other device was logged out/);
+  assert.match(notice.text, /Oct 18, 2026, 9:00 AM/);
 });

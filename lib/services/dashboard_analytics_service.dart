@@ -1404,6 +1404,81 @@ class DashboardAnalyticsService {
     );
   }
 
+  /// How much a completed purchase and a buyer search each add to an
+  /// area's demand on the Demand Heatmap: buying shows stronger demand
+  /// than looking, so a purchase counts twice a search.
+  static const int purchaseDemandPoints = 2;
+  static const int searchDemandPoints = 1;
+
+  /// One Demand Heatmap: each buyer area's completed purchases and buyer
+  /// searches for the month together, as a demand score (purchases ×
+  /// [purchaseDemandPoints] + searches × [searchDemandPoints]) that sets
+  /// the heat. Highest score first; an area keeps the location of
+  /// whichever side has one.
+  static List<
+    ({
+      String area,
+      int purchases,
+      int searches,
+      int score,
+      num revenue,
+      double? lat,
+      double? lng,
+    })
+  >
+  combinedDemandByArea(
+    List<({String area, int orderCount, num revenue, double? lat, double? lng})>
+    purchases,
+    List<({String area, int searches, double? lat, double? lng})> searches,
+  ) {
+    final byArea =
+        <
+          String,
+          ({int purchases, int searches, num revenue, double? lat, double? lng})
+        >{};
+    for (final p in purchases) {
+      byArea[p.area] = (
+        purchases: p.orderCount,
+        searches: 0,
+        revenue: p.revenue,
+        lat: p.lat,
+        lng: p.lng,
+      );
+    }
+    for (final q in searches) {
+      final had = byArea[q.area];
+      byArea[q.area] = (
+        purchases: had?.purchases ?? 0,
+        searches: q.searches,
+        revenue: had?.revenue ?? 0,
+        lat: had?.lat ?? q.lat,
+        lng: had?.lng ?? q.lng,
+      );
+    }
+    final list = [
+      for (final e in byArea.entries)
+        (
+          area: e.key,
+          purchases: e.value.purchases,
+          searches: e.value.searches,
+          score:
+              e.value.purchases * purchaseDemandPoints +
+              e.value.searches * searchDemandPoints,
+          revenue: e.value.revenue,
+          lat: e.value.lat,
+          lng: e.value.lng,
+        ),
+    ];
+    list.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      if (byScore != 0) return byScore;
+      final byPurchases = b.purchases.compareTo(a.purchases);
+      if (byPurchases != 0) return byPurchases;
+      return a.area.compareTo(b.area);
+    });
+    return list;
+  }
+
   /// Top buyer search terms logged in [year]/[month] (searchEvents.createdAt)
   /// — the Demand Heatmap's "Top Buyer Searches" panel, refreshed on the
   /// same Month/Year filter as the rest of the page (a search record with

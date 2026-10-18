@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
@@ -88,9 +90,9 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   // 'delivery' or 'pickup' — null until chosen (or auto-picked when only
   // one is possible). See _syncFulfillment.
   String? _fulfillment;
-  // The buyer confirmed the farmer agreed (in Messages) to deliver outside
-  // the listing's standard coverage.
-  bool _longDistanceAgreed = false;
+  // The listing, kept live: when the farmer adds the buyer's area to its
+  // delivery coverage, delivery opens here at once.
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _productSub;
   DateTime? _neededBy;
   Map<String, dynamic>? _liveProduct;
   bool _loadingProduct = true;
@@ -208,7 +210,6 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       _addressController.text = result.readable;
       _locationTouched = false;
       // A new area may be inside or outside the delivery coverage.
-      _longDistanceAgreed = false;
       _syncFulfillment();
     });
     // Fire-and-forget: also keeps users/{uid} up to date, so the admin
@@ -229,6 +230,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
 
   @override
   void dispose() {
+    _productSub?.cancel();
     _nameController.dispose();
     _contactController.dispose();
     _addressController.dispose();
@@ -261,10 +263,10 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
 
   DeliveryReach get _reach => _coverage.reach(_buyerArea);
 
+  // Only where the farmer's own delivery coverage reaches: the buyer cannot
+  // open delivery to an area the farmer has not added.
   bool get _deliveryAllowed =>
-      _offersDelivery &&
-      (_reach == DeliveryReach.covered ||
-          (_reach == DeliveryReach.outside && _longDistanceAgreed));
+      _offersDelivery && _reach == DeliveryReach.covered;
 
   bool get _isLongDistance =>
       _fulfillment == 'delivery' && _reach != DeliveryReach.covered;
@@ -312,22 +314,24 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _loadProduct() async {
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection('products')
-          .doc(widget.productId)
-          .get();
-      if (!mounted) return;
-      setState(() {
-        _liveProduct = snap.data();
-        _loadingProduct = false;
-        _syncFulfillment();
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _loadingProduct = false);
-    }
+  void _loadProduct() {
+    _productSub = FirebaseFirestore.instance
+        .collection('products')
+        .doc(widget.productId)
+        .snapshots()
+        .listen(
+          (snap) {
+            if (!mounted) return;
+            setState(() {
+              _liveProduct = snap.data();
+              _loadingProduct = false;
+              _syncFulfillment();
+            });
+          },
+          onError: (_) {
+            if (mounted) setState(() => _loadingProduct = false);
+          },
+        );
   }
 
   PricingTierQuote get _currentQuote {
@@ -515,7 +519,6 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
       deliveryMethod: method,
       neededBy: _neededBy,
       buyerArea: _buyerArea,
-      longDistanceArranged: _isLongDistance,
     );
 
     if (!mounted) return;
@@ -646,7 +649,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     return null;
   }
 
-  static const Color _pageBackground = Color(0xFFF7F9F6);
+  static const Color _pageBackground = AppTheme.surface;
 
   @override
   Widget build(BuildContext context) {
@@ -1060,9 +1063,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     final String deliverySubtitle = switch (reach) {
       DeliveryReach.covered =>
         'Delivers to ${coverage.areaLabel} · Fee: ${coverage.feeLabel}',
-      DeliveryReach.outside when _longDistanceAgreed =>
-        'Long-distance delivery arranged with the farmer · '
-            'Fee: To be arranged with seller',
+
       _ => 'Standard coverage: ${coverage.areaLabel}',
     };
 
@@ -1121,7 +1122,7 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
           child: Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: selected ? const Color(0xFFF4F9F1) : Colors.white,
+              color: selected ? AppTheme.tint : Colors.white,
               borderRadius: BorderRadius.circular(14),
               border: Border.all(
                 color: selected ? _dark : Colors.grey.shade300,
@@ -1164,45 +1165,50 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
     );
   }
 
-  // Outside the farmer's standard coverage: never treated as deliverable
-  // by default. The buyer can message the farmer, choose pick-up, or —
-  // once the farmer has agreed in Messages — continue with an arranged
-  // long-distance delivery (fee to be arranged; the farmer can still
-  // decline the order).
+  // Outside the farmer's delivery coverage: delivery is not offered, and
+  // the buyer cannot open it themselves. They can pick it up instead, or
+  // ask the farmer to add their area — once the farmer does, delivery opens
+  // here by itself (the listing is kept live).
   Widget _outsideCoverageCard() {
     final warning = Colors.orange.shade800;
+    final pillShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(30),
+    );
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
-        color: Colors.orange.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(14),
+        color: Colors.orange.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.orange.shade200),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.info_outline_rounded, size: 19, color: warning),
+              Icon(Icons.location_off_outlined, size: 18, color: warning),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Delivery may not be available to your location',
-                  style: TextStyle(fontWeight: FontWeight.w700, color: warning),
+                  "Delivery doesn't reach your area",
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: warning,
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 6),
           Text(
-            'This seller\'s standard delivery coverage does not include your '
-            'area. You may message the farmer to ask whether long-distance '
-            'delivery can be arranged.',
+            _offersPickup
+                ? 'Pick it up instead, or ask the farmer to add your area.'
+                : 'Ask the farmer to add your area to their delivery.',
             style: TextStyle(fontSize: 12.5, color: Colors.grey[800]),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -1213,14 +1219,13 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _dark,
                     side: const BorderSide(color: _dark),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
+                    minimumSize: const Size(0, 44),
+                    shape: pillShape,
                   ),
                 ),
               ),
               if (_offersPickup) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () => setState(() => _fulfillment = 'pickup'),
@@ -1228,39 +1233,14 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
                       elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
+                      minimumSize: const Size(0, 44),
+                      shape: pillShape,
                     ),
                     child: const Text('Choose Pick-up'),
                   ),
                 ),
               ],
             ],
-          ),
-          CheckboxListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            controlAffinity: ListTileControlAffinity.leading,
-            activeColor: _dark,
-            value: _longDistanceAgreed,
-            onChanged: (value) => setState(() {
-              _longDistanceAgreed = value ?? false;
-              if (_longDistanceAgreed) {
-                _fulfillment = 'delivery';
-              } else if (_fulfillment == 'delivery') {
-                _fulfillment = null;
-              }
-            }),
-            title: const Text(
-              'The farmer agreed to deliver to my area',
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
-            ),
-            subtitle: Text(
-              'Only tick this after the farmer confirms in Messages. The '
-              'delivery fee will be arranged with the seller.',
-              style: TextStyle(fontSize: 11.5, color: Colors.grey[700]),
-            ),
           ),
         ],
       ),

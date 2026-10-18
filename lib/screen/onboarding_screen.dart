@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
+import '../l10n/tr.dart';
 
 /// First-run intro carousel — shown once on a fresh install, before the app
 /// routes to role selection or login. Both "Skip" and reaching the last card
@@ -71,7 +72,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final t = AppLocalizations.of(context)!;
+    final t = tr(context);
     final texts = _texts(t);
     return Scaffold(
       backgroundColor: Colors.black,

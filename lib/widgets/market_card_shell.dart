@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
+import '../l10n/tr.dart';
 
 /// The shared frame of the Farmer Dashboard's market cards (Best-Selling
 /// Products, Top Buyer Locations, Current Market Average):
@@ -78,7 +79,7 @@ class MarketCardShell extends StatelessWidget {
                     vertical: 5,
                   ),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF4F7F4),
+                    color: AppTheme.surface,
                     borderRadius: BorderRadius.circular(20),
                   ),
                   child: Text(
@@ -114,7 +115,7 @@ class MarketCardEmpty extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7FAF5),
+        color: AppTheme.surface,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
@@ -177,7 +178,7 @@ class MarketCardToggle extends StatelessWidget {
               : Icons.keyboard_arrow_down_rounded,
           size: 18,
         ),
-        label: Text(expanded ? 'Show Less' : 'View All'),
+        label: Text(expanded ? tr(context).showLess : tr(context).viewAll),
         style: TextButton.styleFrom(
           foregroundColor: AppTheme.dark,
           padding: const EdgeInsets.symmetric(horizontal: 10),

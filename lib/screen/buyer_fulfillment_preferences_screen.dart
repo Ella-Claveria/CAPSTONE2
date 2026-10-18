@@ -151,7 +151,7 @@ class _BuyerFulfillmentPreferencesScreenState
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: buyerSubScreenAppBar('Delivery & Pickup'),
+      appBar: buyerSubScreenAppBar('Delivery & Pick-up'),
       body: _loading
           ? const Center(child: CircularProgressIndicator(color: _dark))
           : ListView(
@@ -202,10 +202,10 @@ class _BuyerFulfillmentPreferencesScreenState
                     hintText: 'e.g. Green gate beside the barangay hall',
                     hintStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(24),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(24),
                       borderSide: const BorderSide(color: _dark, width: 1.5),
                     ),
                   ),
@@ -268,7 +268,7 @@ class _BuyerFulfillmentPreferencesScreenState
         return Container(
           padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
           decoration: BoxDecoration(
-            color: const Color(0xFFF4F7F4),
+            color: AppTheme.surface,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Row(

@@ -7,7 +7,7 @@ import '../services/push_notification_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agri_app_bar.dart';
 import '../widgets/permission_rationale_dialog.dart';
-import 'notifications_screen.dart';
+import '../l10n/tr.dart';
 
 /// Profile → Notification Preferences: which notifications also buzz the
 /// phone. Every notification is still kept in the app's Notifications
@@ -79,7 +79,7 @@ class _NotificationPreferencesScreenState
           title: kNotificationRationaleTitle,
           message: kNotificationRationaleMessage,
           denyLabel: 'Not Now',
-          allowLabel: 'Allow Notifications',
+          allowLabel: 'Allow',
         );
         if (!proceed) return;
         await PushNotificationService().setupFCM(requestPermission: true);
@@ -106,8 +106,8 @@ class _NotificationPreferencesScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7FAF7),
-      appBar: const AgriAppBar(title: 'Notification Preferences'),
+      backgroundColor: AppTheme.surface,
+      appBar: AgriAppBar(title: tr(context).notificationSettings),
       body: StreamBuilder<NotificationPrefs>(
         stream: _prefs,
         builder: (context, snapshot) {
@@ -174,23 +174,6 @@ class _NotificationPreferencesScreenState
                 style: AppTheme.body(
                   size: 12.5,
                 ).copyWith(color: Colors.grey[600]),
-              ),
-              const SizedBox(height: 16),
-              OutlinedButton.icon(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const NotificationsScreen(),
-                  ),
-                ),
-                icon: const Icon(Icons.notifications_none_rounded, size: 18),
-                label: const Text('View my notifications'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.dark,
-                  side: const BorderSide(color: AppTheme.dark),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: const StadiumBorder(),
-                ),
               ),
             ],
           );

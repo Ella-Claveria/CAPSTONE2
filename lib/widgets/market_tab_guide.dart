@@ -1,150 +1,137 @@
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../theme/app_theme.dart';
-import 'agri_dialog.dart';
+import 'coach_mark.dart';
 
-/// What each part of the Farmer's Market tab shows, and whose data it is.
-/// The first is the farmer's own; the rest cover the whole marketplace,
-/// which is why they can already have figures on a brand-new account.
-const List<({String title, String scope, String body})> kMarketGuideItems = [
+/// What each card on the Farmer's Market tab shows, and whose data it is,
+/// in the order the cards come down the page. The first is the farmer's
+/// own; the rest cover the whole marketplace, which is why they can already
+/// have figures on a brand-new account.
+const List<({String title, String message})> kMarketGuideItems = [
   (
     title: 'Sales Performance',
-    scope: 'Your sales',
-    body:
-        'Your own revenue from completed orders. It stays empty until '
-        'your first order is completed.',
+    message:
+        'Your own sales: revenue from your completed orders. It stays '
+        'empty until your first order is completed.',
   ),
   (
     title: 'Current Market Average',
-    scope: 'Whole marketplace',
-    body:
-        'The average price other farmers are asking right now for each '
-        'product. Use it as a guide when setting your price.',
+    message:
+        'Whole marketplace: what other farmers are asking right now for '
+        'each product. Use it as a guide when setting your price.',
   ),
   (
     title: 'Best-Selling Products',
-    scope: 'Whole marketplace',
-    body: 'The products buyers purchased most across AgriTrade+ this month.',
+    message:
+        'Whole marketplace: the products buyers purchased most across '
+        'AgriTrade+ this month.',
   ),
   (
     title: 'Top Buyer Locations',
-    scope: 'Whole marketplace',
-    body: 'The areas where the most completed orders came from this month.',
+    message:
+        'Whole marketplace: the areas where the most completed orders came '
+        'from this month.',
   ),
 ];
 
-String _seenKey(String uid) => 'market_tab_guide_seen_$uid';
+/// The Market tab's first-time hints: no popup up front, but as the farmer
+/// scrolls the tab, a small hint at each card when it comes into view —
+/// one at a time and in order, the next only after the one before has gone
+/// (tapped away, or scrolled past). Each is shown once per account on this
+/// device; the place reached is remembered, so a farmer who stops halfway
+/// carries on from there next time.
+///
+/// Put [keys] on the four cards, in [kMarketGuideItems]' order, and call
+/// [onScroll] from the tab's scroll notifications.
+class MarketTabHints {
+  /// The signed-in account, whose progress is remembered.
+  final String? Function() currentUid;
 
-/// Shows the Market tab guide the first time this account opens the tab on
-/// this device, and never again after it is closed.
-Future<void> showMarketTabGuideOnce(BuildContext context) async {
-  final uid = FirebaseAuth.instance.currentUser?.uid;
-  if (uid == null) return;
-  final SharedPreferences prefs;
-  try {
-    prefs = await SharedPreferences.getInstance();
-  } catch (_) {
-    return;
+  MarketTabHints({this.currentUid = _signedInUid});
+
+  static String? _signedInUid() {
+    try {
+      return FirebaseAuth.instance.currentUser?.uid;
+    } catch (_) {
+      return null;
+    }
   }
-  if (prefs.getBool(_seenKey(uid)) == true) return;
-  if (!context.mounted) return;
-  await showMarketTabGuide(context);
-  await prefs.setBool(_seenKey(uid), true);
-}
 
-/// The guide itself.
-Future<void> showMarketTabGuide(BuildContext context) {
-  return showAgriDialog<void>(
-    context: context,
-    builder: (dialogContext) => AgriDialog(
-      scrollable: true,
-      title: const Text('Your Market tab'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Some cards show your own sales. Others show the whole '
-            'marketplace, so they can already have figures even if you '
-            'have not sold anything yet.',
-            style: GoogleFonts.montserrat(
-              fontSize: 12.5,
-              height: 1.4,
-              color: Colors.grey[700],
-            ),
-          ),
-          const SizedBox(height: 12),
-          for (final item in kMarketGuideItems)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF7FAF5),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            item.title,
-                            style: GoogleFonts.montserrat(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.black87,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 3.5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppTheme.accent.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            item.scope,
-                            style: GoogleFonts.montserrat(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              color: AppTheme.dark,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      item.body,
-                      style: GoogleFonts.montserrat(
-                        fontSize: 12,
-                        height: 1.4,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-        ],
+  final List<GlobalKey> keys = [for (final _ in kMarketGuideItems) GlobalKey()];
+
+  // The next card to explain; null until read from storage.
+  int? _next;
+  bool _loading = false;
+  bool _showing = false;
+  // Only once the farmer has scrolled: the tab opening is not a reason to
+  // show anything.
+  bool _scrolled = false;
+
+  static String _storageKey(String uid) => 'market_tab_hints_next_$uid';
+
+  Future<void> _load() async {
+    if (_next != null || _loading) return;
+    _loading = true;
+    final uid = currentUid();
+    var next = kMarketGuideItems.length; // nothing to show without one
+    if (uid != null) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        next = prefs.getInt(_storageKey(uid)) ?? 0;
+      } catch (_) {}
+    }
+    _next = next;
+    _loading = false;
+  }
+
+  Future<void> _save(int next) async {
+    final uid = currentUid();
+    if (uid == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_storageKey(uid), next);
+    } catch (_) {}
+  }
+
+  /// From the tab's scroll view. [userScroll]: the farmer moved it (not a
+  /// layout change or a refresh).
+  void onScroll(BuildContext context, {required bool userScroll}) {
+    if (userScroll) _scrolled = true;
+    _check(context);
+  }
+
+  Future<void> _check(BuildContext context) async {
+    if (!_scrolled || _showing) return;
+    await _load();
+    final index = _next!;
+    if (index >= keys.length || _showing || !context.mounted) return;
+    final top = sectionTopFraction(keys[index]);
+    if (top == null ||
+        top < kSectionHintBandTop ||
+        top > kSectionHintBandBottom) {
+      return;
+    }
+
+    _showing = true;
+    final item = kMarketGuideItems[index];
+    await showSectionHint(
+      context: context,
+      step: CoachMarkStep(
+        targetKey: keys[index],
+        title: item.title,
+        message: item.message,
       ),
-      actions: [
-        AgriDialogButton(
-          label: 'Got it',
-          kind: AgriButtonKind.primary,
-          onPressed: () => Navigator.pop(dialogContext),
-        ),
-      ],
-    ),
-  );
+      progress: '${index + 1}/${keys.length}',
+    );
+    _next = index + 1;
+    _showing = false;
+    await _save(index + 1);
+    // The next card may already be in place.
+    if (context.mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) _check(context);
+      });
+    }
+  }
 }

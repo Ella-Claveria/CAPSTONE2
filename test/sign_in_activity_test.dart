@@ -88,7 +88,7 @@ void main() {
 
     await tester.tap(find.text('Remove'));
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(TextButton, 'Remove').last);
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Remove').last);
     await tester.pumpAndSettle();
     expect(removed, ['other']);
   });
@@ -96,6 +96,6 @@ void main() {
   testWidgets('an account with no recorded devices says so', (tester) async {
     await pump(tester, list: const []);
     expect(find.text('No devices recorded yet.'), findsOneWidget);
-    expect(find.text('Change Password'), findsOneWidget);
+    expect(find.text('Change Password'), findsNothing);
   });
 }

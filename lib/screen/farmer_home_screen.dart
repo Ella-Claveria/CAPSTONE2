@@ -6,14 +6,17 @@ import '../services/notification_permission_prompt.dart';
 import '../services/push_notification_service.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/coach_mark.dart';
+import '../widgets/swipeable_tabs.dart';
 import '../widgets/unread_messages_dot.dart';
+import '../widgets/docked_nav_bar.dart';
+import '../widgets/page_header.dart';
 import 'add_product_screen.dart';
 import 'market_tab.dart';
 import 'chat_list_screen.dart';
 import 'farmer_orders_tab.dart';
 import 'farmer_profile_tab.dart';
 import 'notifications_screen.dart';
-import '../l10n/app_localizations.dart';
+import '../l10n/tr.dart';
 
 // A one-shot "command channel", not persisted UI state: setting this while
 // a FarmerHomeScreen is already mounted (e.g. from a notification tap, see
@@ -38,6 +41,13 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
 
   // 0 = Market, 1 = Messages, 2 = Orders, 3 = Profile
   late int _selectedIndex = widget.initialIndex;
+
+  // The bottom bar slides away while a long page is scrolled down
+  // (NavBarAutoHide), and is back on any scroll up or tab change.
+  bool _navHidden = false;
+  void _setNavHidden(bool hidden) {
+    if (hidden != _navHidden && mounted) setState(() => _navHidden = hidden);
+  }
 
   final _addProductKey = GlobalKey();
   final _ordersTabKey = GlobalKey();
@@ -128,9 +138,9 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
         final shouldExit = await showAgriConfirm(
           context: context,
           icon: Icons.exit_to_app,
-          title: 'Exit App?',
-          message: 'Are you sure you want to close AgriTrade?',
-          confirmLabel: 'Exit',
+          title: tr(context).exitAppTitle,
+          message: tr(context).exitAppMessage,
+          confirmLabel: tr(context).exit,
         );
         if (shouldExit) {
           SystemNavigator.pop();
@@ -139,74 +149,57 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
       child: Scaffold(
         backgroundColor: _bg,
         // ---- Bottom navigation bar (Market · Messages · + · Orders · Profile) ----
-        bottomNavigationBar: SafeArea(
-          top: false,
-          child: Container(
-            height: 68,
-            margin: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.62),
-              borderRadius: BorderRadius.circular(36),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.72),
-                width: 1.2,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF8EB99A).withValues(alpha: 0.22),
-                  blurRadius: 20,
-                  spreadRadius: 1,
-                  offset: const Offset(0, 5),
-                ),
-              ],
+        // Docked to the bottom edge (not floating), Android-style.
+        bottomNavigationBar: DockedNavBar(
+          hidden: _navHidden,
+          children: [
+            _navItem(
+              0,
+              Icons.storefront_outlined,
+              Icons.storefront,
+              tr(context).navMarket,
             ),
-            child: Row(
-              children: [
-                _navItem(
-                  0,
-                  Icons.storefront_outlined,
-                  Icons.storefront,
-                  AppLocalizations.of(context)!.navMarket,
-                ),
-                _navItem(
-                  1,
-                  Icons.mail_outline,
-                  Icons.mail,
-                  AppLocalizations.of(context)!.navMessages,
-                  showUnreadDot: true,
-                ),
-                _buildAddButton(),
-                _navItem(
-                  2,
-                  Icons.shopping_bag_outlined,
-                  Icons.shopping_bag,
-                  AppLocalizations.of(context)!.navOrders,
-                  key: _ordersTabKey,
-                ),
-                _navItem(
-                  3,
-                  Icons.person_outline,
-                  Icons.person,
-                  AppLocalizations.of(context)!.navProfile,
-                ),
-              ],
+            _navItem(
+              1,
+              Icons.mail_outline,
+              Icons.mail,
+              tr(context).navMessages,
+              showUnreadDot: true,
             ),
-          ),
+            _buildAddButton(),
+            _navItem(
+              2,
+              Icons.shopping_bag_outlined,
+              Icons.shopping_bag,
+              tr(context).navOrders,
+              key: _ordersTabKey,
+            ),
+            _navItem(
+              3,
+              Icons.person_outline,
+              Icons.person,
+              tr(context).navProfile,
+            ),
+          ],
         ),
 
         // ---- Each tab lives in its own file now ----
         // Note: no longer `const [...]` — MarketTab now takes a callback
         // closure (onNavigateToTab), which can't be const.
-        // No app bar: every tab starts with its own header row — logo and
-        // title, see PageHeader. SafeArea keeps that row clear of the
-        // status bar, and the overlay style keeps the status bar icons
-        // dark on the light background.
-        body: AnnotatedRegion<SystemUiOverlayStyle>(
-          value: SystemUiOverlayStyle.dark,
-          child: SafeArea(
-            bottom: false,
-            child: IndexedStack(
+        // No app bar: every tab starts with its own green header — logo and
+        // title, see PageHeader — and the status bar strip above it is the
+        // same green (PageHeaderSafeArea).
+        body: PageHeaderSafeArea(
+          // Swipe left or right to move between the tabs, as well as
+          // tapping them in the bar below.
+          child: NavBarAutoHide(
+            onHiddenChanged: _setNavHidden,
+            child: SwipeableTabs(
               index: _selectedIndex,
+              onIndexChanged: (i) => setState(() {
+                _selectedIndex = i;
+                _navHidden = false;
+              }),
               children: [
                 MarketTab(
                   onNavigateToTab: (i) => setState(() => _selectedIndex = i),
@@ -240,7 +233,10 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     );
     return Expanded(
       child: InkWell(
-        onTap: () => setState(() => _selectedIndex = index),
+        onTap: () => setState(() {
+          _selectedIndex = index;
+          _navHidden = false;
+        }),
         child: Column(
           key: key,
           mainAxisAlignment: MainAxisAlignment.center,

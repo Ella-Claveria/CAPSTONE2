@@ -18,6 +18,7 @@ import 'message_management_screens.dart';
 import 'chat_navigation.dart';
 import 'message_search_screen.dart';
 import '../widgets/agri_empty_state.dart';
+import '../l10n/tr.dart';
 
 /// Which conversations a [ChatListScreen] shows.
 enum ChatListMode {
@@ -291,7 +292,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
   // message-management menu on the right — same for Farmer and Buyer.
   Widget _header() {
     // The menu sits on the title's own row, opposite it.
-    return PageHeader(title: 'Messages', titleTrailing: _menuButton());
+    return PageHeader(
+      title: tr(context).navMessages,
+      titleTrailing: _menuButton(),
+    );
   }
 
   Widget _searchBar() {
@@ -322,9 +326,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
       child: Row(
         children: [
-          _filterChip('All', 'all'),
+          _filterChip(tr(context).filterAll, 'all'),
           const SizedBox(width: 8),
-          _filterChip('Unread', 'unread'),
+          _filterChip(tr(context).filterUnread, 'unread'),
         ],
       ),
     );
@@ -543,7 +547,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         children: [
           SlidableAction(
             onPressed: (_) => _togglePinned(conversationId),
-            backgroundColor: const Color(0xFFEAF4E7),
+            backgroundColor: AppTheme.tint,
             foregroundColor: _dark,
             icon: isPinned ? Icons.push_pin : Icons.push_pin_outlined,
             label: isPinned ? 'Unpin' : 'Pin',
@@ -565,7 +569,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           if (isArchived)
             SlidableAction(
               onPressed: (_) => _toggleArchived(conversationId, data, myUid),
-              backgroundColor: const Color(0xFFEAF4E7),
+              backgroundColor: AppTheme.tint,
               foregroundColor: _dark,
               icon: Icons.unarchive_outlined,
               label: 'Unarchive',

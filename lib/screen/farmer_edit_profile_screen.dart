@@ -1,5 +1,6 @@
 import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
+import '../widgets/recovery_email_code_dialog.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -12,9 +13,11 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../services/auth_service.dart';
 import '../services/cloudinary_service.dart';
+import '../services/geocoding_service.dart';
 import '../services/ph_mobile.dart';
 import '../widgets/buyer_location_picker.dart';
 import 'set_farm_location_screen.dart';
+import '../l10n/tr.dart';
 
 class EditProfileScreen extends StatefulWidget {
   const EditProfileScreen({super.key});
@@ -50,6 +53,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool _savingLocation = false;
   bool _initialLoading = true;
   bool _recoveryEmailVerified = false;
+  // The recovery email as saved on the account (what Verified is about).
+  String _savedRecoveryEmail = '';
+  bool _verifyingRecovery = false;
 
   User? get _user => FirebaseAuth.instance.currentUser;
 
@@ -89,12 +95,18 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         _phoneController.text = phMobileLocalDigits(
           (data['mobileNumber'] ?? data['phone'])?.toString(),
         );
-        _recoveryEmailController.text =
-            data['recoveryEmail']?.toString() ?? user.email ?? '';
+        // A recovery email is a second address: empty until the user adds
+        // one (never pre-filled with the login email), and Verified only
+        // once its code has been entered.
+        final storedRecovery = (data['recoveryEmail'] ?? '').toString().trim();
+        _recoveryEmailController.text = _sameAsLogin(storedRecovery)
+            ? ''
+            : storedRecovery;
+        _savedRecoveryEmail = _recoveryEmailController.text;
         _recoveryEmailVerified =
-            data['recoveryEmailVerified'] == true ||
-            _recoveryEmailController.text == user.email &&
-                user.emailVerified == true;
+            _savedRecoveryEmail.isNotEmpty &&
+            data['recoveryEmailVerified'] == true;
+        _recoveryEmailController.addListener(() => setState(() {}));
         _photoUrl = data['photoUrl']?.toString();
         _role = data['role']?.toString();
         // Combine barangay/municipality/province into one display string,
@@ -123,6 +135,22 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     if (!mounted) return;
     setState(() => _initialLoading = false);
+    _lookUpPinPlace();
+  }
+
+  // The place the farm pin is actually in (barangay, town, province),
+  // looked up from its coordinates. Until it is known — or if the lookup
+  // fails — the registered location stands in.
+  String? _pinPlace;
+
+  Future<void> _lookUpPinPlace() async {
+    final lat = _latitude, lng = _longitude;
+    // Only farmers have the Farm Location box.
+    if (lat == null || lng == null || _role != 'farmer') return;
+    final address = await GeocodingService.reverseGeocode(lat, lng);
+    if (!mounted || lat != _latitude || lng != _longitude) return;
+    final place = address?.readable.trim() ?? '';
+    setState(() => _pinPlace = place.isEmpty ? null : place);
   }
 
   @override
@@ -161,6 +189,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       _showMessage('Please enter a valid recovery email.');
       return;
     }
+    if (_sameAsLogin(recoveryEmail)) {
+      _showMessage(_sameAsLoginMessage);
+      return;
+    }
 
     setState(() => _loading = true);
     try {
@@ -176,23 +208,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           'location': location, // simple combined string; split into
           // barangay/municipality/province fields instead if your
           // schema needs them separately.
+          // An emptied recovery email field removes the saved one.
+          if (_recoveryRemoved) ...{
+            'recoveryEmail': FieldValue.delete(),
+            'recoveryEmailVerified': FieldValue.delete(),
+            'recoveryEmailVerifiedAt': FieldValue.delete(),
+          },
         };
-
-        final previousRecoveryEmail =
-            (await FirebaseFirestore.instance
-                    .collection('users')
-                    .doc(user.uid)
-                    .get())
-                .data()?['recoveryEmail']
-                ?.toString();
-        final recoveryChanged =
-            recoveryEmail.isNotEmpty &&
-            recoveryEmail != (previousRecoveryEmail ?? user.email);
-        if (recoveryChanged) {
-          await user.verifyBeforeUpdateEmail(recoveryEmail);
-          updateData['recoveryEmail'] = recoveryEmail;
-          updateData['recoveryEmailVerified'] = false;
-        }
 
         if (_pickedPhoto != null) {
           final uploadedUrl = await _cloudinaryService.uploadImage(
@@ -216,25 +238,68 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             .set(updateData, SetOptions(merge: true));
       }
       if (!mounted) return;
-      _showMessage(
-        recoveryEmail.isNotEmpty && !_recoveryEmailVerified
-            ? 'Profile updated. Check your recovery email to verify it.'
-            : 'Profile updated!',
-      );
+      // A new recovery email is saved — and verified — by entering the code
+      // emailed to it (never by changing the sign-in email).
+      if (_recoveryChanged) {
+        setState(() => _loading = false);
+        await _verifyRecovery();
+        if (!mounted) return;
+      } else {
+        if (_recoveryRemoved) {
+          _savedRecoveryEmail = '';
+          _recoveryEmailVerified = false;
+        }
+        _showMessage('Profile updated!');
+      }
       Navigator.pop(context);
-    } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-      _showMessage(
-        e.code == 'requires-recent-login'
-            ? 'Please log in again before changing your recovery email.'
-            : 'Could not verify that recovery email. Please try again.',
-      );
     } catch (e) {
       if (!mounted) return;
       _showMessage('Could not save changes. Please try again.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  // A saved recovery email whose field was emptied.
+  bool get _recoveryRemoved =>
+      _savedRecoveryEmail.isNotEmpty &&
+      _recoveryEmailController.text.trim().isEmpty;
+
+  bool get _recoveryChanged {
+    final typed = _recoveryEmailController.text.trim();
+    return typed.isNotEmpty &&
+        typed.toLowerCase() != _savedRecoveryEmail.toLowerCase();
+  }
+
+  // A recovery email of its own is in the field (not empty, not the
+  // login email) — only then is there a status to show.
+  bool get _hasOwnRecoveryEmail {
+    final typed = _recoveryEmailController.text.trim();
+    return typed.isNotEmpty && !_sameAsLogin(typed);
+  }
+
+  static const String _sameAsLoginMessage =
+      'Use a different email from the one you log in with.';
+
+  // The login email cannot be its own recovery email.
+  bool _sameAsLogin(String email) {
+    final login = (_user?.email ?? '').trim().toLowerCase();
+    return email.isNotEmpty && email.trim().toLowerCase() == login;
+  }
+
+  // Emails a code to the recovery email in the field and asks for it.
+  Future<void> _verifyRecovery() async {
+    final email = _recoveryEmailController.text.trim();
+    if (email.isEmpty || _verifyingRecovery) return;
+    setState(() => _verifyingRecovery = true);
+    final verified = await verifyRecoveryEmail(context, email);
+    if (!mounted) return;
+    setState(() {
+      _verifyingRecovery = false;
+      // Requesting the code saved the address, verified or not.
+      _savedRecoveryEmail = email;
+      _recoveryEmailVerified = verified;
+    });
   }
 
   void _showMessage(String message) {
@@ -294,13 +359,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   // The buyer's location: the same popup as Place Order and Delivery &
   // Pickup, saved the same way — the readable area on the profile, the
   // coordinates (when there are any) only under private/geo.
-  Future<void> _editBuyerLocation() async {
+  Future<void> _editBuyerLocation([BuildContext? fieldContext]) async {
     final user = _user;
     if (user == null || _savingLocation) return;
     FocusManager.instance.primaryFocus?.unfocus();
+    // The choices open right under the Location field.
     final picked = await showBuyerLocationOptions(
       context,
       initial: _buyerLocation,
+      anchorContext: fieldContext,
     );
     if (picked == null || !mounted) return;
 
@@ -339,7 +406,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() {
       _latitude = picked.latitude;
       _longitude = picked.longitude;
+      _pinPlace = null;
     });
+    _lookUpPinPlace();
     _showMessage('Farm location saved!');
   }
 
@@ -348,8 +417,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F8E9),
-        borderRadius: BorderRadius.circular(14),
+        color: AppTheme.tint,
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(color: _fieldBorder, width: 1.2),
       ),
       child: Row(
@@ -372,9 +441,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   ),
                 ),
                 const SizedBox(height: 2),
+                // The place the pin is in (barangay, town, province), not
+                // its coordinates; the registered location until known.
                 Text(
                   hasLocation
-                      ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
+                      ? (_pinPlace ??
+                            (_locationController.text.trim().isNotEmpty
+                                ? _locationController.text.trim()
+                                : 'Set on the map'))
                       : 'Not pinned yet — buyers and admin can\'t see your farm on the map.',
                   style: GoogleFonts.montserrat(
                     fontSize: 11.5,
@@ -407,15 +481,15 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       fillColor: Colors.white,
       contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
       border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(30),
         borderSide: const BorderSide(color: _fieldBorder, width: 1.2),
       ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(30),
         borderSide: const BorderSide(color: _fieldBorder, width: 1.2),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(30),
         borderSide: const BorderSide(color: _dark, width: 1.6),
       ),
     );
@@ -504,11 +578,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      appBar: const AgriAppBar(title: 'Edit Profile'),
+      appBar: AgriAppBar(title: tr(context).editProfile),
       body: _initialLoading
           ? const Center(child: CircularProgressIndicator(color: _dark))
           : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+              // Room between the header and the photo.
+              padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -541,18 +616,68 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     controller: _recoveryEmailController,
                     keyboardType: TextInputType.emailAddress,
                     style: GoogleFonts.montserrat(fontSize: 14),
-                    decoration: _fieldDecoration(Icons.security_outlined).copyWith(
-                      helperText: _recoveryEmailVerified
-                          ? 'Verified'
-                          : 'A verification link will be sent when you change it.',
-                      helperStyle: TextStyle(
-                        color: _recoveryEmailVerified
-                            ? _dark
-                            : Colors.grey[600],
-                        fontSize: 11,
+                    decoration: _fieldDecoration(Icons.security_outlined)
+                        .copyWith(
+                          hintText: 'Add a backup email',
+                          // Verified / Not verified only for a second
+                          // address (not the login email): Verified once
+                          // its code was entered, a newly typed one not yet.
+                          suffixIcon: !_hasOwnRecoveryEmail
+                              ? null
+                              : Padding(
+                                  padding: const EdgeInsets.only(right: 10),
+                                  child: RecoveryEmailStatusChip(
+                                    verified:
+                                        _recoveryEmailVerified &&
+                                        !_recoveryChanged,
+                                  ),
+                                ),
+                          suffixIconConstraints: const BoxConstraints(),
+                          errorText: _sameAsLogin(_recoveryEmailController.text)
+                              ? _sameAsLoginMessage
+                              : null,
+                          helperText:
+                              !_hasOwnRecoveryEmail ||
+                                  (_recoveryEmailVerified && !_recoveryChanged)
+                              ? null
+                              : 'We will email it a 6-digit code to verify it.',
+                          helperStyle: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 11,
+                          ),
+                        ),
+                  ),
+                  // A saved but unverified address can be verified now.
+                  if (!_recoveryEmailVerified &&
+                      !_recoveryChanged &&
+                      _hasOwnRecoveryEmail)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _verifyingRecovery ? null : _verifyRecovery,
+                        icon: _verifyingRecovery
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: _dark,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.mark_email_read_outlined,
+                                size: 16,
+                              ),
+                        label: const Text('Verify now'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: _dark,
+                          textStyle: GoogleFonts.montserrat(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
                   const SizedBox(height: 14),
 
                   _fieldLabel('PHONE NUMBER'),
@@ -576,31 +701,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
                   _fieldLabel('LOCATION'),
                   if (_role == 'buyer')
-                    TextField(
-                      controller: _locationController,
-                      readOnly: true,
-                      onTap: _editBuyerLocation,
-                      style: GoogleFonts.montserrat(fontSize: 14),
-                      decoration: _fieldDecoration(Icons.location_on_outlined)
-                          .copyWith(
-                            hintText: 'Tap to set your location',
-                            suffixIcon: _savingLocation
-                                ? const Padding(
-                                    padding: EdgeInsets.all(14),
-                                    child: SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: _dark,
+                    Builder(
+                      builder: (fieldContext) => TextField(
+                        controller: _locationController,
+                        readOnly: true,
+                        onTap: () => _editBuyerLocation(fieldContext),
+                        style: GoogleFonts.montserrat(fontSize: 14),
+                        decoration: _fieldDecoration(Icons.location_on_outlined)
+                            .copyWith(
+                              hintText: 'Tap to set your location',
+                              suffixIcon: _savingLocation
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(14),
+                                      child: SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: _dark,
+                                        ),
                                       ),
+                                    )
+                                  : const Icon(
+                                      Icons.keyboard_arrow_down_rounded,
+                                      color: Colors.grey,
                                     ),
-                                  )
-                                : const Icon(
-                                    Icons.chevron_right,
-                                    color: Colors.grey,
-                                  ),
-                          ),
+                            ),
+                      ),
                     )
                   else
                     TextField(
@@ -637,7 +764,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                             ),
                           )
                         : Text(
-                            'Save Changes',
+                            tr(context).saveChanges,
                             style: GoogleFonts.montserrat(
                               fontSize: 15,
                               fontWeight: FontWeight.bold,

@@ -94,13 +94,13 @@ void main() {
     expect(find.text('AgriTrade+ Privacy Policy'), findsOneWidget);
   });
 
-  test('no official name, contact or date is made up', () {
+  test('no date is made up; the contact is the team support email', () {
     for (final doc in [kTermsOfService, kPrivacyPolicy, kAdminGuidelines]) {
       expect(doc.effectiveDate, isNull, reason: doc.title);
       expect(doc.lastUpdated, isNull, reason: doc.title);
     }
-    expect(kPolicyContact, startsWith('['));
-    expect(kPolicyOperator, startsWith('['));
-    expect(kPolicyPrivacyOfficer, startsWith('['));
+    expect(kPolicyContact, contains('agritrade.team@gmail.com'));
+    expect(kPolicyOperator, 'the AgriTrade+ Team');
+    expect(kPolicyPrivacyOfficer, contains('agritrade.team@gmail.com'));
   });
 }

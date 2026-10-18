@@ -314,7 +314,7 @@ class _BuyerMapViewState extends State<BuyerMapView> {
   // somewhere else. The saved area text is still shown in the card.
   Widget _unavailable() {
     return Container(
-      color: const Color(0xFFF4F7F4),
+      color: AppTheme.surface,
       alignment: const Alignment(0, -0.35),
       child: const AgriEmptyState(
         icon: Icons.location_off_outlined,

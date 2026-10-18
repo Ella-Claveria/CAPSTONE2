@@ -333,12 +333,22 @@ class MessageService {
         .snapshots();
   }
 
+  /// The buyer's one-tap request for a livestock listing's health
+  /// certificate (the suggestion over the chat's message box). Saved as
+  /// 'kind' on an ordinary text message, so it reads like any other.
+  static const String certificateRequestKind = 'certificateRequest';
+  static const String certificateRequestText =
+      "Can I see the animal's health certificate?";
+
   Future<void> sendMessage({
     required String conversationId,
     required String otherUserId,
     String? text,
     String? imageUrl,
     Map<String, dynamic>? replyTo,
+    // What kind of message this is beyond its text, e.g.
+    // [certificateRequestKind]. Left out for an ordinary message.
+    String? kind,
   }) async {
     await _requireOnline();
     final trimmed = text?.trim() ?? '';
@@ -363,6 +373,7 @@ class MessageService {
     if (replyTo != null) {
       messageData['replyTo'] = replyTo;
     }
+    if (kind != null) messageData['kind'] = kind;
 
     batch.set(msgRef, messageData);
     batch.update(convRef, {

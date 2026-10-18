@@ -111,7 +111,7 @@ class NotificationCard extends StatelessWidget {
   });
 
   static const Color _dark = AppTheme.dark;
-  static const Color _unreadBackground = Color(0xFFF1F8F1);
+  static const Color _unreadBackground = AppTheme.tint;
   static const Color _unreadDot = Color(0xFF2E7D32);
 
   @override

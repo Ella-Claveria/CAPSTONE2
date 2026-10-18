@@ -91,9 +91,7 @@ class NoInternetScreen extends StatelessWidget {
                       backgroundColor: AppTheme.dark,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: const StadiumBorder(),
                     ),
                   ),
                 ),

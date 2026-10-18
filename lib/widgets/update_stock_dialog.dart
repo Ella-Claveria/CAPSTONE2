@@ -108,8 +108,8 @@ class _UpdateStockDialogState extends State<UpdateStockDialog> {
             ),
             onSubmitted: (_) => _save(),
             decoration: InputDecoration(
+              // The app's curved field (AppTheme), like every other.
               labelText: 'Available Stock (${widget.unit})',
-              border: const OutlineInputBorder(),
             ),
           ),
         ],

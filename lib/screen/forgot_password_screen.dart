@@ -171,22 +171,23 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   List<Widget> _confirmation() {
     final canResend = !_sending && _cooldown <= 0;
     return [
+      // Smaller than the logo above it, so the two do not compete.
       Center(
         child: Container(
-          width: 84,
-          height: 84,
+          width: 56,
+          height: 56,
           decoration: BoxDecoration(
             color: AppTheme.accent.withValues(alpha: 0.6),
             shape: BoxShape.circle,
           ),
           child: const Icon(
             Icons.mark_email_read_outlined,
-            size: 42,
+            size: 28,
             color: AppTheme.mid,
           ),
         ),
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 14),
       Center(child: Text('Check Your Email', style: AppTheme.heading(21))),
       const SizedBox(height: 8),
       Text(
@@ -283,7 +284,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   // screen below; the request, cooldown and leave question are the same
   // code.
   // ================================================================
-  static const _adminGreen = Color(0xFF003B1F);
+  static const _adminGreen = AppTheme.dark;
   static const _adminMuted = Color(0xFF6B7468);
   static const _adminBorder = Color(0xFFDDE2DA);
   // The field and the buttons are pills, like the sign-in form's and the

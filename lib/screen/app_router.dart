@@ -13,6 +13,7 @@ import '../services/push_notification_service.dart';
 import '../services/session_timeout_service.dart';
 import '../widgets/branded_loading_screen.dart';
 import '../widgets/no_internet_screen.dart';
+import '../widgets/walking_farmer_loader.dart';
 
 /// Gatekeeper shown right after the native splash: a fresh install sees the
 /// onboarding carousel first, then every launch — first-run or not — sends
@@ -74,8 +75,19 @@ class _AppRouterState extends State<AppRouter> {
       if (!mounted) return;
       _route();
     } else {
+      if (!await _afterWalk()) return;
       setState(() => _needsOnboarding = true);
     }
+  }
+
+  // The splash stays up until the farmer has walked all the way across,
+  // even when a fast phone has finished loading sooner (loading runs during
+  // the walk, so a slow start never waits longer). Only the first time in
+  // an app run; "No internet" is never held back. False when this screen
+  // is gone by then.
+  Future<bool> _afterWalk() async {
+    await WalkingFarmerLoader.untilWalkDone();
+    return mounted;
   }
 
   Future<void> _finishOnboarding() async {
@@ -193,10 +205,13 @@ class _AppRouterState extends State<AppRouter> {
       emailVerified: refreshedUser.emailVerified,
       authenticatedEmail: refreshedUser.email,
     );
+    if (!await _afterWalk()) return;
+    if (!mounted) return;
     await applyAuthRouteResult(context, result);
   }
 
-  void _goTo(Widget screen) {
+  Future<void> _goTo(Widget screen) async {
+    if (!await _afterWalk()) return;
     if (!mounted) return;
     Navigator.pushReplacement(context, fadeSlideRoute(screen));
   }

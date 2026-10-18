@@ -115,6 +115,8 @@ class _ReportUserFormState extends State<_ReportUserForm> {
           DropdownButtonFormField<String>(
             initialValue: _reason,
             isExpanded: true,
+            dropdownColor: Colors.white,
+            borderRadius: BorderRadius.circular(16),
             hint: const Text('Select a reason'),
             items: [
               for (final reason in widget.reasons)

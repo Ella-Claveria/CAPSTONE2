@@ -121,7 +121,7 @@ class _ConversationInfoScreenState extends State<ConversationInfoScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F9F5),
+      backgroundColor: AppTheme.surface,
       appBar: const AgriAppBar(title: 'Conversation Info'),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: _profile,

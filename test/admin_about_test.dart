@@ -57,10 +57,10 @@ void main() {
       expect(find.text('Admin Portal'), findsOneWidget);
       // The build's version is read once per run, in the first test.
       if (size.width > 1000) expect(find.text('1.0.0'), findsOneWidget);
-      expect(find.text('Academic Capstone Project'), findsOneWidget);
-      // Not given yet: marked, not invented.
-      expect(find.text('[Project team name — to be provided]'), findsOne);
-      expect(find.text('[School name — to be provided]'), findsOneWidget);
+      // No team, school or project-type rows.
+      expect(find.text('Developed by'), findsNothing);
+      expect(find.text('Institution'), findsNothing);
+      expect(find.text('Project type'), findsNothing);
 
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
