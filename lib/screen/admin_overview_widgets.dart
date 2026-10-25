@@ -4,9 +4,12 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../data/commodity_master_list.dart';
 import '../services/dashboard_analytics_service.dart';
 import '../services/market_price_helpers.dart';
 import '../widgets/shimmer.dart';
+import 'admin_analytics_widgets.dart'
+    show AdminCommoditySearchField, matchCommodities;
 import 'admin_filter_controls.dart';
 import 'admin_dashboard_screen.dart'
     show AdminThemeScope, AdminPalette, AdminRadii;
@@ -282,8 +285,9 @@ class AdminPeriodDropdown extends StatelessWidget {
             ),
           ),
       ],
+      // A slim pill, as small as the portal's other buttons.
       child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
+        padding: const EdgeInsets.fromLTRB(12, 5, 8, 5),
         decoration: BoxDecoration(
           color: c.surface,
           borderRadius: BorderRadius.circular(AdminRadii.pill),
@@ -296,12 +300,12 @@ class AdminPeriodDropdown extends StatelessWidget {
               label(months),
               style: TextStyle(
                 color: c.textPrimary,
-                fontSize: 12.5,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.expand_more_rounded, size: 18, color: c.textSecondary),
+            Icon(Icons.expand_more_rounded, size: 16, color: c.textSecondary),
           ],
         ),
       ),
@@ -435,7 +439,7 @@ Widget adminLegendDot(Color color) => Container(
 );
 
 // "₱20k", "₱1.5M" — axis labels only; exact figures use formatPeso.
-String _compactPeso(double value) {
+String adminCompactPeso(double value) {
   String trim(double v) =>
       v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
   if (value >= 1000000) return '₱${trim(value / 1000000)}M';
@@ -445,7 +449,7 @@ String _compactPeso(double value) {
 
 // The next "round" number at or above [value] that divides into 4 even
 // steps, for the top of the value axis.
-double _axisTop(double value) {
+double adminAxisTop(double value) {
   if (value <= 0) return 4;
   final magnitude = math
       .pow(10, (math.log(value) / math.ln10).floor())
@@ -457,9 +461,11 @@ double _axisTop(double value) {
   return 10 * magnitude;
 }
 
-/// SALES PERFORMANCE — revenue of completed orders, one bar per calendar
-/// month of the selected period (see
-/// [DashboardAnalyticsService.monthlyCompletedSales]).
+/// SALES PERFORMANCE — one product at a time: its demand month by month
+/// from completed orders (see [DashboardAnalyticsService.monthlyDemandFor]),
+/// so the months it sells best, and where it drops, show. The Admin picks
+/// the product with a search, narrowed by a category filter; it opens on
+/// the period's best seller.
 class AdminSalesPerformanceCard extends StatefulWidget {
   /// Every order; only the completed ones are counted.
   final List<Map<String, dynamic>> orders;
@@ -473,106 +479,196 @@ class AdminSalesPerformanceCard extends StatefulWidget {
 class _AdminSalesPerformanceCardState extends State<AdminSalesPerformanceCard> {
   int _months = AdminPeriodDropdown.initial;
 
+  /// Null for every category.
+  String? _category;
+
+  /// Null until the Admin picks one: the period's best seller is shown.
+  String? _product;
+
+  // The products the search offers: the commodities of [_category].
+  List<String> _productOptions() => matchCommodities([
+    for (final commodity in CommodityRegistry.instance.all)
+      if (_category == null || commodity.category == _category) commodity.name,
+  ], '');
+
+  // The product shown: the one picked, while it is in the category; else
+  // the category's best seller of the period; else its first product.
+  String? _shownProduct(List<String> options, DateTime now) {
+    if (_product != null && options.contains(_product)) return _product;
+    final ranked = DashboardAnalyticsService.monthlyProductSales(
+      widget.orders,
+      now: now,
+      months: _months,
+      limit: 1000,
+    );
+    for (final p in ranked) {
+      if (options.contains(p.name)) return p.name;
+    }
+    return options.isEmpty ? null : options.first;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = AdminThemeScope.of(context).palette;
-    final sales = DashboardAnalyticsService.monthlyCompletedSales(
-      widget.orders,
-      now: DateTime.now(),
-      months: _months,
-    );
-    final total = sales.fold<double>(0, (sum, m) => sum + m.revenue);
-    final orderCount = sales.fold<int>(0, (sum, m) => sum + m.orders);
-    final highest = sales.fold<double>(0, (m, s) => math.max(m, s.revenue));
+    return ListenableBuilder(
+      listenable: CommodityRegistry.instance,
+      builder: (context, _) {
+        final now = DateTime.now();
+        final options = _productOptions();
+        final product = _shownProduct(options, now);
+        final demand = product == null
+            ? const <
+                ({DateTime month, double quantity, double revenue, int orders})
+              >[]
+            : DashboardAnalyticsService.monthlyDemandFor(
+                widget.orders,
+                product: product,
+                now: now,
+                months: _months,
+              );
+        final sold = demand.any((m) => m.orders > 0);
 
-    return AdminChartCard(
-      title: 'Sales Performance',
-      subtitle: 'Monthly sales from completed orders',
-      trailing: AdminPeriodDropdown(
-        months: _months,
-        onChanged: (months) => setState(() => _months = months),
-      ),
-      child: total <= 0
-          ? const AdminChartEmpty(
-              icon: Icons.show_chart_rounded,
-              message:
-                  'No completed sales data available for the selected '
-                  'period yet.',
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Text(
-                      formatPeso(total),
-                      style: TextStyle(
-                        color: c.textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
+        return AdminChartCard(
+          title: 'Sales Performance',
+          subtitle: 'Monthly demand for a product, from completed orders',
+          trailing: AdminPeriodDropdown(
+            months: _months,
+            onChanged: (months) => setState(() => _months = months),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  _categoryFilter(),
+                  if (options.isNotEmpty)
+                    AdminCommoditySearchField(
+                      // A new field when the product changes, so it shows it.
+                      key: ValueKey('$_category/$product'),
+                      commodities: options,
+                      selected: product,
+                      onSelected: (name) => setState(() => _product = name),
                     ),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        '$orderCount completed '
-                        '${orderCount == 1 ? 'order' : 'orders'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: c.textSecondary,
-                          fontSize: 12.5,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Expanded(child: _chart(c, sales, highest)),
-                const SizedBox(height: 10),
-                Center(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      adminLegendDot(adminGreenAt(c, 1)),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Total Sales (₱)',
-                        style: TextStyle(
-                          color: c.textSecondary,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                    ],
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (product == null)
+                const Expanded(
+                  child: AdminChartEmpty(
+                    icon: Icons.category_outlined,
+                    message: 'No products in this category yet.',
                   ),
-                ),
+                )
+              else if (!sold)
+                Expanded(
+                  child: AdminChartEmpty(
+                    icon: Icons.show_chart_rounded,
+                    message:
+                        'No completed orders of $product in the last '
+                        '$_months months.',
+                  ),
+                )
+              else ...[
+                _figures(c, product, demand),
+                const SizedBox(height: 10),
+                Expanded(child: _chart(c, product, demand)),
               ],
-            ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _categoryFilter() {
+    final categories = CommodityRegistry.instance.categories..sort();
+    return Tooltip(
+      message: 'Search products in one category',
+      child: AdminPillDropdown<String?>(
+        value: categories.contains(_category) ? _category : null,
+        width: 180,
+        icon: Icons.category_outlined,
+        items: [
+          const DropdownMenuItem(value: null, child: Text('All Categories')),
+          for (final name in categories)
+            DropdownMenuItem(value: name, child: Text(name)),
+        ],
+        onChanged: (value) => setState(() => _category = value),
+      ),
+    );
+  }
+
+  // The product's totals for the period, and its best month.
+  Widget _figures(
+    AdminPalette c,
+    String product,
+    List<({DateTime month, double quantity, double revenue, int orders})>
+    demand,
+  ) {
+    final unit = unitForCommodity(product);
+    final quantity = demand.fold<double>(0, (s, m) => s + m.quantity);
+    final revenue = demand.fold<double>(0, (s, m) => s + m.revenue);
+    final orders = demand.fold<int>(0, (s, m) => s + m.orders);
+    final best = demand.reduce((a, b) => b.quantity > a.quantity ? b : a);
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.end,
+      spacing: 8,
+      runSpacing: 4,
+      children: [
+        Text(
+          '${formatStock(quantity, unit)} sold',
+          style: TextStyle(
+            color: c.textPrimary,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 2),
+          child: Text(
+            '${formatPeso(revenue)} · $orders completed '
+            '${orders == 1 ? 'order' : 'orders'} · Best month: '
+            '${DateFormat('MMMM').format(best.month)} '
+            '(${formatStock(best.quantity, unit)})',
+            style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _chart(
     AdminPalette c,
-    List<({DateTime month, double revenue, int orders})> sales,
-    double highest,
+    String product,
+    List<({DateTime month, double quantity, double revenue, int orders})>
+    demand,
   ) {
-    final top = _axisTop(highest);
+    final unit = unitForCommodity(product);
+    final highest = demand.fold<double>(0, (m, s) => math.max(m, s.quantity));
+    final top = adminAxisTop(highest);
     final axisStyle = TextStyle(color: c.textSecondary, fontSize: 11);
     final now = DateTime.now();
-    final spansYears = sales.first.month.year != sales.last.month.year;
-
+    final spansYears = demand.first.month.year != demand.last.month.year;
     final line = adminGreenAt(c, 1);
 
-    // An area line: each month a point, joined and filled underneath, so
-    // the rise and fall across the period reads at a glance.
+    String axisLabel(double value) {
+      final v = value == value.roundToDouble()
+          ? value.toStringAsFixed(0)
+          : value.toStringAsFixed(1);
+      return value >= 1000
+          ? '${(value / 1000).toStringAsFixed(value % 1000 == 0 ? 0 : 1)}k'
+          : v;
+    }
+
     return LineChart(
       LineChartData(
         minY: 0,
         maxY: top,
         minX: 0,
-        maxX: (sales.length - 1).toDouble(),
+        maxX: (demand.length - 1).toDouble(),
         borderData: FlBorderData(show: false),
         gridData: FlGridData(
           verticalInterval: 1,
@@ -586,14 +682,16 @@ class _AdminSalesPerformanceCardState extends State<AdminSalesPerformanceCard> {
           topTitles: const AxisTitles(),
           rightTitles: const AxisTitles(),
           leftTitles: AxisTitles(
+            axisNameWidget: Text(unit, style: axisStyle),
+            axisNameSize: 16,
             sideTitles: SideTitles(
               showTitles: true,
-              reservedSize: 48,
+              reservedSize: 40,
               interval: top / 4,
               getTitlesWidget: (value, meta) => Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: Text(
-                  _compactPeso(value),
+                  axisLabel(value),
                   textAlign: TextAlign.right,
                   style: axisStyle,
                 ),
@@ -608,13 +706,13 @@ class _AdminSalesPerformanceCardState extends State<AdminSalesPerformanceCard> {
               getTitlesWidget: (value, meta) {
                 final i = value.toInt();
                 // Whole months only — never a label between two points.
-                if (value != i || i < 0 || i >= sales.length) {
+                if (value != i || i < 0 || i >= demand.length) {
                   return const SizedBox.shrink();
                 }
                 return Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
-                    DateFormat('MMM').format(sales[i].month),
+                    DateFormat('MMM').format(demand[i].month),
                     style: axisStyle,
                   ),
                 );
@@ -625,13 +723,15 @@ class _AdminSalesPerformanceCardState extends State<AdminSalesPerformanceCard> {
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
             getTooltipColor: (_) => c.textPrimary,
+            fitInsideHorizontally: true,
             getTooltipItems: (spots) => [
               for (final spot in spots)
                 () {
-                  final m = sales[spot.x.toInt()];
+                  final m = demand[spot.x.toInt()];
                   final sameYear = !spansYears && m.month.year == now.year;
                   return LineTooltipItem(
                     '${DateFormat(sameYear ? 'MMMM' : 'MMMM y').format(m.month)}\n'
+                    '${formatStock(m.quantity, unit)} · '
                     '${formatPeso(m.revenue)} · ${m.orders} '
                     '${m.orders == 1 ? 'order' : 'orders'}',
                     TextStyle(
@@ -648,8 +748,8 @@ class _AdminSalesPerformanceCardState extends State<AdminSalesPerformanceCard> {
         lineBarsData: [
           LineChartBarData(
             spots: [
-              for (var i = 0; i < sales.length; i++)
-                FlSpot(i.toDouble(), sales[i].revenue),
+              for (var i = 0; i < demand.length; i++)
+                FlSpot(i.toDouble(), demand[i].quantity),
             ],
             isCurved: true,
             // Keeps the curve from dipping below a month's real value.
@@ -658,9 +758,10 @@ class _AdminSalesPerformanceCardState extends State<AdminSalesPerformanceCard> {
             barWidth: 2.5,
             isStrokeCapRound: true,
             dotData: FlDotData(
-              getDotPainter: (_, _, _, _) => FlDotCirclePainter(
-                radius: 4,
-                color: line,
+              // The best month stands out.
+              getDotPainter: (spot, _, _, _) => FlDotCirclePainter(
+                radius: spot.y == highest && highest > 0 ? 5.5 : 4,
+                color: spot.y == highest && highest > 0 ? c.amber : line,
                 strokeWidth: 2,
                 strokeColor: c.surface,
               ),

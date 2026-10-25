@@ -31,7 +31,17 @@ class _SwipeableTabsState extends State<SwipeableTabs> {
   );
 
   // The page a swipe (or a slide this widget started) last landed on.
-  late int _page = widget.index;
+  // Set in initState, not with a `late` initializer: that would only run
+  // on the first read — in didUpdateWidget, once [index] already holds the
+  // newly tapped tab — so the very first tap after opening would look like
+  // "already there" and do nothing.
+  late int _page;
+
+  @override
+  void initState() {
+    super.initState();
+    _page = widget.index;
+  }
 
   @override
   void didUpdateWidget(SwipeableTabs oldWidget) {

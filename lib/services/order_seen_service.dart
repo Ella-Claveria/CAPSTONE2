@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Remembers, per account and per role, the newest order activity the user
@@ -13,6 +14,11 @@ class OrderSeenStore {
   final String role;
 
   const OrderSeenStore({required this.uid, required this.role});
+
+  /// Ticks after every [save], so anything else showing unseen orders (the
+  /// Orders dot in the bottom bar) re-reads the store and clears together
+  /// with the tab badges.
+  static final ValueNotifier<int> saved = ValueNotifier<int>(0);
 
   String get _key => 'orders_seen_${role}_$uid';
 
@@ -34,6 +40,7 @@ class OrderSeenStore {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_key, jsonEncode(seen));
+      saved.value++;
     } catch (_) {
       // Best effort — the badge just shows again next launch.
     }

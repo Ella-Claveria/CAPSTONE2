@@ -19,7 +19,7 @@
 // see AuthService.completeRegistration's doc comment for why.
 // ============================================================
 
-import '../widgets/agri_app_bar.dart';
+import '../widgets/app_back_button.dart';
 import '../widgets/email_delivery_notice.dart';
 import '../widgets/email_request_leave_guard.dart';
 import '../widgets/otp_code_field.dart';
@@ -423,178 +423,193 @@ class _EmailVerificationScreenState extends State<EmailVerificationScreen> {
       },
       child: Scaffold(
         backgroundColor: AppTheme.bgLight,
-        appBar: AgriAppBar(
-          onBack: _onBack,
-          backEnabled: !busy,
-          backTooltip: 'Back to login',
-        ),
+        // No coloured header: this screen has no title bar, only a Back
+        // button floating at the top left, as on Forgot Password.
         body: SafeArea(
-          child: Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 420),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // ---- Envelope icon ----
-                    Container(
-                      width: 84,
-                      height: 84,
-                      decoration: const BoxDecoration(
-                        color: AppTheme.accent,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.mark_email_unread_outlined,
-                        size: 42,
-                        color: AppTheme.dark,
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-
-                    // Lilita One for the heading; the wordmark and everything
-                    // else on this screen are Montserrat (AppTheme's helpers).
-                    const AgriTradeText(fontSize: 30),
-                    const SizedBox(height: 14),
-
-                    Text(
-                      'Verify Your Email',
-                      style: const TextStyle(
-                        fontFamily: AppTheme.brandFontFamily,
-                        fontSize: 24,
-                        color: Colors.black87,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 10),
-
-                    Text(
-                      // "Requested", not "sent": this text is on screen
-                      // whether or not the email has gone out yet.
-                      "We've requested a verification email with a 6-digit "
-                      'code for:',
-                      style: AppTheme.body(size: 13.5),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 10),
-
-                    // Where the code went — masked, never the full address.
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.accent.withValues(alpha: 0.45),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        maskEmail(widget.email),
-                        style: AppTheme.label().copyWith(
-                          color: AppTheme.dark,
-                          fontSize: 13.5,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-
-                    _buildCodeInput(),
-                    const SizedBox(height: 10),
-
-                    Text(
-                      'The code expires in 10 minutes.',
-                      style: AppTheme.body(size: 12),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 20),
-
-                    // ---- Verify ----
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: canVerify ? _verify : null,
-                        style: AppTheme.primaryButton(),
-                        child: busy
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : Text('Verify Code', style: AppTheme.buttonText()),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-
-                    // ---- Resend, with cooldown ----
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton(
-                        onPressed: canResend
-                            ? () => _requestCode(resend: true)
-                            : null,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          side: const BorderSide(color: AppTheme.mid),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(30),
+          child: Stack(
+            children: [
+              Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(
+                    28,
+                    12 + AppBackButton.size,
+                    28,
+                    24,
+                  ),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // ---- Envelope icon ----
+                        Container(
+                          width: 84,
+                          height: 84,
+                          decoration: const BoxDecoration(
+                            color: AppTheme.accent,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.mark_email_unread_outlined,
+                            size: 42,
+                            color: AppTheme.dark,
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (_requesting) ...[
-                              const SizedBox(
-                                height: 14,
-                                width: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.grey,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                            ],
-                            Text(
-                              _requesting
-                                  ? 'Sending code…'
-                                  : _cooldown > 0
-                                  ? 'Resend Code in ${_cooldown}s'
-                                  : 'Resend Code',
-                              style: AppTheme.body(
-                                color: canResend ? AppTheme.dark : Colors.grey,
-                                size: 14,
-                              ).copyWith(fontWeight: FontWeight.w600),
-                            ),
-                          ],
+                        const SizedBox(height: 18),
+
+                        // Montserrat throughout, the heading included.
+                        const AgriTradeText(fontSize: 30),
+                        const SizedBox(height: 14),
+
+                        Text(
+                          'Verify Your Email',
+                          style: AppTheme.heading(24),
+                          textAlign: TextAlign.center,
                         ),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
+                        const SizedBox(height: 10),
 
-                    // ---- Escape hatch ----
-                    TextButton(
-                      onPressed: busy ? null : _useDifferentAccount,
-                      child: Text(
-                        'Use a different account',
-                        style: AppTheme.body(size: 13),
-                      ),
-                    ),
+                        Text(
+                          // "Requested", not "sent": this text is on screen
+                          // whether or not the email has gone out yet.
+                          "We've requested a verification email with a 6-digit "
+                          'code for:',
+                          style: AppTheme.body(size: 13.5),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 10),
 
-                    const SizedBox(height: 8),
-                    const EmailDeliveryNotice(
-                      text:
-                          'Please check your Inbox, including your Spam or '
-                          'Junk folder. The email may take a few minutes to '
-                          'arrive. If it is in Spam, mark it as "Not spam".',
+                        // Where the code went — masked, never the full address.
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accent.withValues(alpha: 0.45),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            maskEmail(widget.email),
+                            style: AppTheme.label().copyWith(
+                              color: AppTheme.dark,
+                              fontSize: 13.5,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        const SizedBox(height: 22),
+
+                        _buildCodeInput(),
+                        const SizedBox(height: 10),
+
+                        Text(
+                          'The code expires in 10 minutes.',
+                          style: AppTheme.body(size: 12),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 20),
+
+                        // ---- Verify ----
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: canVerify ? _verify : null,
+                            style: AppTheme.primaryButton(),
+                            child: busy
+                                ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text(
+                                    'Verify Code',
+                                    style: AppTheme.buttonText(),
+                                  ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // ---- Resend, with cooldown ----
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton(
+                            onPressed: canResend
+                                ? () => _requestCode(resend: true)
+                                : null,
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                              side: const BorderSide(color: AppTheme.mid),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_requesting) ...[
+                                  const SizedBox(
+                                    height: 14,
+                                    width: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                ],
+                                Text(
+                                  _requesting
+                                      ? 'Sending code…'
+                                      : _cooldown > 0
+                                      ? 'Resend Code in ${_cooldown}s'
+                                      : 'Resend Code',
+                                  style: AppTheme.body(
+                                    color: canResend
+                                        ? AppTheme.dark
+                                        : Colors.grey,
+                                    size: 14,
+                                  ).copyWith(fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+
+                        // ---- Escape hatch ----
+                        TextButton(
+                          onPressed: busy ? null : _useDifferentAccount,
+                          child: Text(
+                            'Use a different account',
+                            style: AppTheme.body(size: 13),
+                          ),
+                        ),
+
+                        const SizedBox(height: 8),
+                        const EmailDeliveryNotice(
+                          text:
+                              'Please check your Inbox, including your Spam or '
+                              'Junk folder. The email may take a few minutes to '
+                              'arrive. If it is in Spam, mark it as "Not spam".',
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
+              // Back to login (greyed out while busy).
+              Positioned(
+                top: 8,
+                left: 12,
+                child: Opacity(
+                  opacity: busy ? 0.4 : 1,
+                  child: AppBackButton(onPressed: busy ? () {} : _onBack),
+                ),
+              ),
+            ],
           ),
         ),
       ),

@@ -1,9 +1,9 @@
 import '../widgets/agri_app_bar.dart';
 import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../widgets/agri_dialog.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:typed_data';
 
 import '../services/cloudinary_service.dart';
 import '../services/review_service.dart';
@@ -251,17 +251,21 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
                 style: TextStyle(color: Colors.grey[600], fontSize: 12),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 16),
+            Text('Description', style: AppTheme.label()),
+            const SizedBox(height: 8),
+            // The app's standard field (AppTheme), like every other, with
+            // the "n/50" count under its right edge; typing stops at the
+            // limit.
             TextField(
               controller: _commentController,
-              minLines: 4,
-              maxLines: 6,
-              decoration: InputDecoration(
-                labelText: 'Description',
-                hintText: 'Share your experience with this product...',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                ),
+              minLines: 3,
+              maxLines: 4,
+              maxLength: ReviewService.maxCommentLength,
+              maxLengthEnforcement: MaxLengthEnforcement.enforced,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'Share your experience with this product…',
               ),
             ),
             const SizedBox(height: 12),

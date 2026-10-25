@@ -748,7 +748,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       backgroundColor: _dark,
                       disabledBackgroundColor: Colors.grey.shade400,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
                       ),

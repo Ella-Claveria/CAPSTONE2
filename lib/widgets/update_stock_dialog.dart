@@ -1,7 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/commodity_master_list.dart';
 import 'agri_dialog.dart';
+
+/// The most Available Stock a listing can have: four digits.
+const int kMaxStock = 9999;
+
+/// Keeps a stock field to at most four digits before the decimal point —
+/// whole numbers only when [countBased] (pieces, head), otherwise up to two
+/// decimals (kg). Used by Add Product and Update Available Stock.
+List<TextInputFormatter> stockInputFormatters(bool countBased) {
+  final allowed = countBased
+      ? RegExp(r'^\d{0,4}$')
+      : RegExp(r'^\d{0,4}(\.\d{0,2})?$');
+  return [
+    TextInputFormatter.withFunction(
+      (oldValue, newValue) =>
+          allowed.hasMatch(newValue.text) ? newValue : oldValue,
+    ),
+  ];
+}
 
 /// The "Update Available Stock" dialog for one listing. Resolves to the
 /// new quantity when Save is tapped with a valid one, or to null when the
@@ -81,6 +100,13 @@ class _UpdateStockDialogState extends State<UpdateStockDialog> {
       );
       return;
     }
+    if (parsed.floor() > kMaxStock) {
+      widget.onInvalid?.call(
+        context,
+        'Available Stock can be at most 9,999 ${widget.unit}.',
+      );
+      return;
+    }
     Navigator.of(context).pop<num?>(parsed);
   }
 
@@ -106,6 +132,8 @@ class _UpdateStockDialogState extends State<UpdateStockDialog> {
             keyboardType: TextInputType.numberWithOptions(
               decimal: !_countBased,
             ),
+            // Four digits at most (see kMaxStock).
+            inputFormatters: stockInputFormatters(_countBased),
             onSubmitted: (_) => _save(),
             decoration: InputDecoration(
               // The app's curved field (AppTheme), like every other.

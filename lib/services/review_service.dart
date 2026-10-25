@@ -4,6 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'connectivity_service.dart';
 
 class ReviewService {
+  /// The longest review description, in characters.
+  static const int maxCommentLength = 50;
+
   final _db = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
 
@@ -58,6 +61,9 @@ class ReviewService {
       final trimmedComment = comment.trim();
       if (trimmedComment.isEmpty) {
         return 'Please add a short review description.';
+      }
+      if (trimmedComment.length > maxCommentLength) {
+        return 'Keep the review description to $maxCommentLength characters or fewer.';
       }
 
       // One review per order (doc ID == orderId), so re-submitting edits

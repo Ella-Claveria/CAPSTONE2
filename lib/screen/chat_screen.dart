@@ -13,6 +13,7 @@ import '../services/cloudinary_service.dart';
 import '../services/conversation_prefs_service.dart';
 import '../widgets/open_in_maps_button.dart';
 import '../widgets/agri_refresh_indicator.dart';
+import '../widgets/online_dot.dart';
 import '../widgets/profile_avatar.dart';
 import '../widgets/receipt_message_card.dart';
 import 'chat_attachments.dart';
@@ -68,11 +69,13 @@ class _ChatScreenState extends State<ChatScreen> {
   static const Color _bg = Colors.white;
 
   final MessageService _messageService = MessageService();
-  late final Stream<DocumentSnapshot<Map<String, dynamic>>>
-  _otherProfileStream = FirebaseFirestore.instance
-      .collection('publicProfiles')
-      .doc(widget.otherUserId)
-      .snapshots();
+  // The other person's public profile, live — their real name and photo.
+  // What the opener passed in (widget.otherUserName / otherUserPhotoUrl) is
+  // only a placeholder until it loads: it can be out of date (a renamed
+  // account, an old notification, an order's saved name).
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _otherProfileSub;
+  Map<String, dynamic>? _otherProfile;
+  bool _otherProfileLoaded = false;
   // Created once for this chat, never in build(). A stream made in build()
   // is a brand-new Firestore subscription on every rebuild — and opening
   // the keyboard rebuilds this screen (it reads MediaQuery) — so the
@@ -122,12 +125,24 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final ConversationPrefs _prefs = ConversationPrefs.instance;
 
+  /// The other person's real name: from their live profile once it has
+  /// loaded, else the name this chat was opened with.
+  String get _realName {
+    final live = _otherProfile?['name']?.toString().trim() ?? '';
+    return live.isNotEmpty ? live : widget.otherUserName;
+  }
+
   /// What this user calls the other person in this conversation: their
   /// nickname here if one is set (see Conversation Info), else their real
   /// name. Display only — anything saved or sent (replies, orders,
-  /// reports) keeps using widget.otherUserName.
-  String get _name =>
-      _prefs.displayName(widget.conversationId, widget.otherUserName);
+  /// reports) uses [_realName].
+  String get _name => _prefs.displayName(widget.conversationId, _realName);
+
+  /// The other person's photo: from their live profile once it has loaded.
+  String? get _otherPhotoUrl {
+    if (!_otherProfileLoaded) return widget.otherUserPhotoUrl;
+    return _otherProfile?['photoUrl']?.toString();
+  }
 
   // Replies store the real name; show the nickname for the other person.
   String _replySenderLabel(Map<String, dynamic> replyTo) =>
@@ -145,6 +160,17 @@ class _ChatScreenState extends State<ChatScreen> {
     _prefs.addListener(_onPrefsChanged);
     _prefs.load(FirebaseAuth.instance.currentUser?.uid);
     _controller.addListener(_onComposerChanged);
+    _otherProfileSub = FirebaseFirestore.instance
+        .collection('publicProfiles')
+        .doc(widget.otherUserId)
+        .snapshots()
+        .listen((snap) {
+          if (!mounted) return;
+          setState(() {
+            _otherProfile = snap.data();
+            _otherProfileLoaded = true;
+          });
+        }, onError: (_) {});
     // Zero out this user's unread badge for this thread as soon as they open it.
     _messageService
         .markConversationRead(widget.conversationId)
@@ -486,6 +512,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _otherProfileSub?.cancel();
     _prefs.removeListener(_onPrefsChanged);
     _typingTimer?.cancel();
     _typingExpiryTimer?.cancel();
@@ -550,7 +577,7 @@ class _ChatScreenState extends State<ChatScreen> {
         'senderId': senderId,
         'senderName': isMe
             ? (FirebaseAuth.instance.currentUser?.displayName ?? 'You')
-            : widget.otherUserName,
+            : _realName,
         'text': quote,
       };
     });
@@ -638,8 +665,8 @@ class _ChatScreenState extends State<ChatScreen> {
         builder: (_) => ConversationInfoScreen(
           conversationId: widget.conversationId,
           otherUserId: widget.otherUserId,
-          otherUserName: widget.otherUserName,
-          otherUserPhotoUrl: widget.otherUserPhotoUrl,
+          otherUserName: _realName,
+          otherUserPhotoUrl: _otherPhotoUrl,
           productId: _productId,
           productName: _productName,
         ),
@@ -721,21 +748,27 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
         titleWidget: Row(
           children: [
-            // Live from publicProfiles so a photo change shows up here too;
-            // the URL passed in is only the placeholder until it loads.
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: _otherProfileStream,
-              builder: (context, snapshot) {
-                final profile = snapshot.data?.data();
-                final livePhotoUrl = profile?['photoUrl']?.toString();
-                return ProfileAvatar(
-                  photoUrl: snapshot.hasData
-                      ? livePhotoUrl
-                      : widget.otherUserPhotoUrl,
+            // Name and photo both live from the profile (see
+            // _otherProfileSub), so they always belong to the same person.
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                ProfileAvatar(
+                  photoUrl: _otherPhotoUrl,
                   name: _name,
                   radius: 18,
-                );
-              },
+                ),
+                Positioned(
+                  right: -1,
+                  bottom: -1,
+                  // Shown only while the other person is really online, as
+                  // on the Messages list.
+                  child: OnlineDot(
+                    key: ValueKey(widget.otherUserId),
+                    userId: widget.otherUserId,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(width: 10),
             Expanded(
@@ -759,7 +792,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 fallbackImageUrl: _productImageUrl,
                 fallbackImageBytes: widget.productImageBytes,
                 sellerId: widget.otherUserId,
-                sellerName: widget.otherUserName,
+                sellerName: _realName,
                 viewerIsFarmer: _viewerIsFarmer,
                 onSendOptions: _sendOrderOptions,
                 onTapDetails: _startNegotiation,
@@ -848,7 +881,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                             OrderOptionsMessageCard(
                                               data: data,
                                               sellerId: widget.otherUserId,
-                                              sellerName: widget.otherUserName,
+                                              sellerName: _realName,
                                               fallbackProductId: _productId,
                                               fallbackProductName: _productName,
                                               onDraftMessage: _setDraft,

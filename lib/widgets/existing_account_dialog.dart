@@ -62,6 +62,9 @@ Future<ExistingAccountChoice> showExistingAccountDialog(
       icon: Icons.info_outline_rounded,
       title: Text(copy.title),
       content: Text(copy.message),
+      // One layout whichever of the buttons below it has: Go to Login on
+      // top, then the others, all the same slim size.
+      stackedActions: true,
       actions: [
         if (copy.cancellable)
           AgriDialogButton(

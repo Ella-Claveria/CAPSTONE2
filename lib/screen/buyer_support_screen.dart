@@ -102,7 +102,7 @@ class _BuyerSupportScreenState extends State<BuyerSupportScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: const StadiumBorder(),
                     ),
                     child: _sending

@@ -27,7 +27,11 @@ class AppBackIcon extends StatefulWidget {
   /// against an arbitrary image.
   final bool overImage;
 
-  const AppBackIcon({super.key, this.overImage = false});
+  /// True inside an app bar's own band (AgriAppBar), where nothing ever
+  /// scrolls under the button: just the dark green arrow, never a circle.
+  final bool onBar;
+
+  const AppBackIcon({super.key, this.overImage = false, this.onBar = false});
 
   static const double size = 40;
 
@@ -77,8 +81,13 @@ class _AppBackIconState extends State<AppBackIcon> {
     // A coloured (dark green) header already keeps the white arrow
     // readable, so the circle only comes in on a light header or over a
     // photo.
-    final showCircle = widget.overImage || (_scrolled && !onDark);
-    final arrowColor = (!showCircle && onDark) ? Colors.white : AppTheme.mid;
+    final showCircle =
+        widget.overImage || (_scrolled && !onDark && !widget.onBar);
+    final arrowColor = (!showCircle && onDark)
+        ? Colors.white
+        : widget.onBar
+        ? AppTheme.dark
+        : AppTheme.mid;
 
     return SizedBox(
       width: AppBackIcon.size,

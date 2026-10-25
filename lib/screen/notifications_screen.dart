@@ -276,7 +276,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         currentGroup = group;
         rows.add(
           Padding(
-            padding: EdgeInsets.fromLTRB(4, rows.isEmpty ? 4 : 14, 4, 8),
+            padding: EdgeInsets.fromLTRB(16, rows.isEmpty ? 4 : 18, 16, 6),
             child: Text(
               group,
               style: const TextStyle(
@@ -288,7 +288,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
         );
       } else {
-        rows.add(const SizedBox(height: 8));
+        // Flat rows, a hairline between them — not floating cards.
+        rows.add(
+          Divider(
+            height: 1,
+            thickness: 1,
+            indent: 16,
+            endIndent: 16,
+            color: Colors.grey[200],
+          ),
+        );
       }
       final data = doc.data();
       rows.add(
@@ -302,10 +311,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         ),
       );
     }
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-      children: rows,
-    );
+    return ListView(padding: const EdgeInsets.only(bottom: 24), children: rows);
   }
 
   Widget _emptyState(bool noNotificationsAtAll) {

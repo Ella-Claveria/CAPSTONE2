@@ -118,19 +118,14 @@ class NotificationCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final warning = type == 'moderation_warning';
 
+    // A flat, full-width row (the list puts a divider between rows); an
+    // unread one is tinted green.
     return Material(
       color: isRead ? Colors.white : _unreadBackground,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(
-          color: isRead ? Colors.grey.shade300 : const Color(0xFFC8E6C9),
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

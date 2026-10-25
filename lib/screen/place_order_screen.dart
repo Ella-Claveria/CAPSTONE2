@@ -1169,10 +1169,19 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
   // the buyer cannot open it themselves. They can pick it up instead, or
   // ask the farmer to add their area — once the farmer does, delivery opens
   // here by itself (the listing is kept live).
+  //
+  // Two small, equal buttons — Message and Choose Pick-up — which go away
+  // once Pick-up is chosen (the choice is made; only the note stays).
   Widget _outsideCoverageCard() {
     final warning = Colors.orange.shade800;
-    final pillShape = RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(30),
+    final pickedUp = _fulfillment == 'pickup';
+    const pillShape = StadiumBorder();
+    const compact = Size(0, 36);
+    const buttonPadding = EdgeInsets.symmetric(horizontal: 12);
+    const buttonText = TextStyle(
+      fontFamily: 'Montserrat',
+      fontSize: 12.5,
+      fontWeight: FontWeight.w600,
     );
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -1203,45 +1212,56 @@ class _PlaceOrderScreenState extends State<PlaceOrderScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            _offersPickup
+            pickedUp
+                ? 'You chose pick-up for this order.'
+                : _offersPickup
                 ? 'Pick it up instead, or ask the farmer to add your area.'
                 : 'Ask the farmer to add your area to their delivery.',
             style: TextStyle(fontSize: 12.5, color: Colors.grey[800]),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _messaging ? null : _messageFarmer,
-                  icon: const Icon(Icons.chat_bubble_outline, size: 16),
-                  label: const Text('Message Farmer'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _dark,
-                    side: const BorderSide(color: _dark),
-                    minimumSize: const Size(0, 44),
-                    shape: pillShape,
-                  ),
-                ),
-              ),
-              if (_offersPickup) ...[
-                const SizedBox(width: 10),
+          if (!pickedUp) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
                 Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => setState(() => _fulfillment = 'pickup'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _dark,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      minimumSize: const Size(0, 44),
+                  child: OutlinedButton.icon(
+                    onPressed: _messaging ? null : _messageFarmer,
+                    icon: const Icon(Icons.chat_bubble_outline, size: 15),
+                    label: const Text('Message'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _dark,
+                      side: const BorderSide(color: _dark),
+                      minimumSize: compact,
+                      padding: buttonPadding,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: buttonText,
                       shape: pillShape,
                     ),
-                    child: const Text('Choose Pick-up'),
                   ),
                 ),
+                if (_offersPickup) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () => setState(() => _fulfillment = 'pickup'),
+                      icon: const Icon(Icons.storefront_outlined, size: 15),
+                      label: const Text('Choose Pick-up'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _dark,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        minimumSize: compact,
+                        padding: buttonPadding,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: buttonText,
+                        shape: pillShape,
+                      ),
+                    ),
+                  ),
+                ],
               ],
-            ],
-          ),
+            ),
+          ],
         ],
       ),
     );

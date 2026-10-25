@@ -5,13 +5,16 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
 import 'app_back_button.dart';
+import 'docked_nav_bar.dart';
+import 'page_header.dart';
 
 /// The header of every inner screen (anything opened on top of the main
 /// tabs — the tabs themselves use PageHeader). One widget, so the screens
-/// cannot drift apart: the same dark green band as the tabs' header, with
-/// rounded bottom corners, a white title and white icons, the same height,
-/// Back button and title position. The status bar above it is the same
-/// green.
+/// cannot drift apart: the same band as the tabs' header — the bottom
+/// bar's design (pure white, its rounded corners at the bottom, its soft
+/// shadow) attached to the top edge — with a dark green title and icons,
+/// the same height, Back button and title position. The status bar above
+/// it is the same white.
 ///
 /// It gets out of the way while reading: scrolling down the page slides
 /// the bar up out of sight (the green status bar strip stays), and any
@@ -60,11 +63,12 @@ class AgriAppBar extends StatefulWidget implements PreferredSizeWidget {
     this.hideOnScroll,
   });
 
-  /// The band's colour — the brand's dark green, as on the tabs' header.
-  static const Color background = AppTheme.dark;
+  /// The band's colour — the bottom bar's pure white, as on the tabs'
+  /// header.
+  static const Color background = PageHeader.background;
 
   /// Title and icons on the band.
-  static const Color foreground = Colors.white;
+  static const Color foreground = AppTheme.dark;
 
   static const double height = 60;
 
@@ -85,7 +89,7 @@ class AgriAppBar extends StatefulWidget implements PreferredSizeWidget {
 class _AgriAppBarState extends State<AgriAppBar> {
   static const Duration _slide = Duration(milliseconds: 220);
   static const BorderRadius _corners = BorderRadius.vertical(
-    bottom: Radius.circular(20),
+    bottom: Radius.circular(DockedNavBar.cornerRadius),
   );
 
   ScrollNotificationObserverState? _observer;
@@ -164,7 +168,7 @@ class _AgriAppBarState extends State<AgriAppBar> {
           ? Padding(
               padding: const EdgeInsets.only(left: 4),
               child: IconButton(
-                icon: const AppBackIcon(),
+                icon: const AppBackIcon(onBar: true),
                 tooltip: widget.backTooltip,
                 onPressed: widget.backEnabled
                     ? (widget.onBack ?? () => Navigator.of(context).maybePop())
@@ -187,10 +191,10 @@ class _AgriAppBarState extends State<AgriAppBar> {
       actions: [...?widget.actions, const SizedBox(width: 4)],
     );
 
-    // Light status bar icons on the green, whether or not the bar itself
-    // is showing.
+    // Dark status bar icons on the light band, whether or not the bar
+    // itself is showing.
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: SystemUiOverlayStyle.dark,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -200,18 +204,28 @@ class _AgriAppBarState extends State<AgriAppBar> {
             child: SizedBox(height: MediaQuery.paddingOf(context).top),
           ),
           // Slides up behind the status bar strip when hidden; the page
-          // below follows the bar's height, so it gains the room.
+          // below follows the bar's height, so it gains the room. Clipped
+          // only above, so the bar never shows over the status bar strip
+          // but its shadow still falls on the page below.
           ClipRect(
+            clipper: const _BelowOnly(),
             child: AnimatedAlign(
               duration: _slide,
               curve: Curves.easeOutCubic,
               alignment: Alignment.bottomCenter,
               heightFactor: _hidden ? 0 : 1,
-              child: Material(
-                color: AgriAppBar.background,
-                shape: const RoundedRectangleBorder(borderRadius: _corners),
-                clipBehavior: Clip.antiAlias,
-                child: SizedBox(height: AgriAppBar.height, child: bar),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AgriAppBar.background,
+                  borderRadius: _corners,
+                  boxShadow: DockedNavBar.shadow,
+                ),
+                child: Material(
+                  type: MaterialType.transparency,
+                  shape: const RoundedRectangleBorder(borderRadius: _corners),
+                  clipBehavior: Clip.antiAlias,
+                  child: SizedBox(height: AgriAppBar.height, child: bar),
+                ),
               ),
             ),
           ),
@@ -219,4 +233,17 @@ class _AgriAppBarState extends State<AgriAppBar> {
       ),
     );
   }
+}
+
+// Clips to the bar and the room below it (where its shadow falls), but
+// nothing above.
+class _BelowOnly extends CustomClipper<Rect> {
+  const _BelowOnly();
+
+  @override
+  Rect getClip(Size size) =>
+      Rect.fromLTRB(-40, 0, size.width + 40, size.height + 40);
+
+  @override
+  bool shouldReclip(_BelowOnly oldClipper) => false;
 }

@@ -232,7 +232,11 @@ class _BuyerMyReviewsScreenState extends State<BuyerMyReviewsScreen> {
     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     minimumSize: Size.zero,
     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+    textStyle: const TextStyle(
+      fontFamily: 'Montserrat',
+      fontSize: 12.5,
+      fontWeight: FontWeight.w600,
+    ),
   );
 
   Widget _empty() {

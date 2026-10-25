@@ -860,76 +860,88 @@ class _ProfileTabState extends State<ProfileTab> {
     final user = FirebaseAuth.instance.currentUser;
     final name = user?.displayName ?? 'Farmer';
 
-    return AgriRefreshIndicator(
-      color: _dark,
-      onRefresh: _refreshData,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 90),
-        child: Column(
-          children: [
-            // ---- Page title, with the account menu beside it ----
-            // The menu sits on the title's own row, opposite it.
-            PageHeader(
-              title: tr(context).navProfile,
-              titleTrailing: _profileMenu(context),
-            ),
+    // The header stays put; pull-to-refresh starts under it.
+    return Column(
+      children: [
+        // The band stays put; the title (with the account menu opposite
+        // it) scrolls with the page below.
+        PageHeader(title: tr(context).navProfile, includeTitle: false),
+        Expanded(
+          child: AgriRefreshIndicator(
+            color: _dark,
+            onRefresh: _refreshData,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(bottom: 90),
+              child: Column(
+                children: [
+                  PageTitle(
+                    title: tr(context).navProfile,
+                    trailing: _profileMenu(context),
+                  ),
 
-            // ---- Avatar with edit badge ----
-            _avatarWithEditBadge(context),
-            const SizedBox(height: 10),
+                  // ---- Avatar with edit badge ----
+                  _avatarWithEditBadge(context),
+                  const SizedBox(height: 10),
 
-            // ---- Name ----
-            Text(
-              name,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.montserrat(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.black87,
+                  // ---- Name ----
+                  Text(
+                    name,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.montserrat(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+
+                  // ---- Location ----
+                  StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(user?.uid ?? 'unknown')
+                        .snapshots(),
+                    builder: (context, snap) {
+                      final data = snap.data?.data();
+                      final barangay = data?['barangay']?.toString();
+                      final muni =
+                          data?['municipality']?.toString() ?? 'Laurel';
+                      final prov = data?['province']?.toString() ?? 'Batangas';
+                      final location = (barangay != null && barangay.isNotEmpty)
+                          ? '$barangay, $muni, $prov'
+                          : '$muni, $prov';
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.location_on_outlined,
+                            size: 15,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            location,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  _farmerRatingSummary(),
+                  const SizedBox(height: 24),
+
+                  // ---- My Products ----
+                  _myProductsSection(context),
+                ],
               ),
             ),
-            const SizedBox(height: 6),
-
-            // ---- Location ----
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(user?.uid ?? 'unknown')
-                  .snapshots(),
-              builder: (context, snap) {
-                final data = snap.data?.data();
-                final barangay = data?['barangay']?.toString();
-                final muni = data?['municipality']?.toString() ?? 'Laurel';
-                final prov = data?['province']?.toString() ?? 'Batangas';
-                final location = (barangay != null && barangay.isNotEmpty)
-                    ? '$barangay, $muni, $prov'
-                    : '$muni, $prov';
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.location_on_outlined,
-                      size: 15,
-                      color: Colors.grey[600],
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      location,
-                      style: TextStyle(fontSize: 13, color: Colors.grey[600]),
-                    ),
-                  ],
-                );
-              },
-            ),
-            _farmerRatingSummary(),
-            const SizedBox(height: 24),
-
-            // ---- My Products ----
-            _myProductsSection(context),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }

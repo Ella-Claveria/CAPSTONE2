@@ -455,13 +455,6 @@ class _ModerationQueueViewState extends State<ModerationQueueView>
                               count: violationsCount,
                               icon: Icons.gavel_rounded,
                             ),
-                            (
-                              value: ViolationSection.priceFlags,
-                              label: 'Price Flags',
-                              // Counted by its own stream, inside the tab.
-                              count: null,
-                              icon: Icons.sell_outlined,
-                            ),
                           ],
                           child: Container(
                             width: double.infinity,
@@ -471,13 +464,7 @@ class _ModerationQueueViewState extends State<ModerationQueueView>
                             padding: kAdminTablePadding,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (_violationsTab ==
-                                    ViolationSection.priceFlags)
-                                  const _PriceFlagsSection()
-                                else
-                                  _buildViolationsSection(c, allRows),
-                              ],
+                              children: [_buildViolationsSection(c, allRows)],
                             ),
                           ),
                         ),
@@ -909,179 +896,6 @@ class _ReportTable extends StatelessWidget {
           }).toList(),
         ),
       ),
-    );
-  }
-}
-
-// ============================================================
-// PRICE FLAGS TAB — listings a farmer posted at a price far above the
-// AI suggested range (the `priceFlag` field add_product_screen.dart saves
-// on "Post Anyway"). Review-only: the flag is informational and never
-// hides, suspends or penalises a listing by itself.
-// ============================================================
-
-class _PriceFlagsSection extends StatefulWidget {
-  const _PriceFlagsSection();
-
-  @override
-  State<_PriceFlagsSection> createState() => _PriceFlagsSectionState();
-}
-
-class _PriceFlagsSectionState extends State<_PriceFlagsSection> {
-  // Held in state so a parent rebuild doesn't resubscribe the listener.
-  final Stream<QuerySnapshot<Map<String, dynamic>>> _flagged = FirebaseFirestore
-      .instance
-      .collection('products')
-      .where('priceFlag.type', isEqualTo: 'high_price')
-      .snapshots();
-
-  // One key per flagged price: the listing and the row's place in it.
-  final Set<String> _ticked = {};
-
-  String _peso(dynamic value) =>
-      value is num ? '₱${value.toStringAsFixed(2)}' : '—';
-
-  @override
-  Widget build(BuildContext context) {
-    final c = AdminThemeScope.of(context).palette;
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _flagged,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) return const AdminStreamError();
-        if (!snapshot.hasData) return const AdminLoadingSpinner();
-
-        final docs = [...snapshot.data!.docs]
-          ..sort((a, b) {
-            final at = a.data()['priceFlag']?['flaggedAt'];
-            final bt = b.data()['priceFlag']?['flaggedAt'];
-            return (bt is Timestamp ? bt.millisecondsSinceEpoch : 0).compareTo(
-              at is Timestamp ? at.millisecondsSinceEpoch : 0,
-            );
-          });
-        if (docs.isEmpty) {
-          return const AdminEmptyState(
-            icon: Icons.price_check_outlined,
-            title: 'No price flags.',
-            subtitle:
-                'Listings priced far above the AI suggested range will appear here.',
-          );
-        }
-
-        final rows = <DataRow>[];
-        for (final doc in docs) {
-          final product = doc.data();
-          final flag = Map<String, dynamic>.from(product['priceFlag'] as Map);
-          final unit = (flag['unit'] ?? product['unit'] ?? '').toString();
-          final flaggedAt = flag['flaggedAt'];
-          for (final raw in (flag['items'] as List? ?? const [])) {
-            final item = Map<String, dynamic>.from(raw as Map);
-            final key = '${doc.id}#${rows.length}';
-            rows.add(
-              DataRow(
-                selected: _ticked.contains(key),
-                onSelectChanged: (on) => setState(() {
-                  if (on ?? false) {
-                    _ticked.add(key);
-                  } else {
-                    _ticked.remove(key);
-                  }
-                }),
-                cells: [
-                  DataCell(
-                    Text(
-                      (flag['productName'] ?? product['name'] ?? '—')
-                          .toString(),
-                    ),
-                  ),
-                  DataCell(Text((product['farmerName'] ?? '—').toString())),
-                  DataCell(
-                    Text(_capitalize((item['pricingType'] ?? '').toString())),
-                  ),
-                  DataCell(Text('${_peso(item['enteredPrice'])} / $unit')),
-                  DataCell(
-                    Text(
-                      '${_peso(item['suggestedLowerPrice'])} – ${_peso(item['suggestedUpperPrice'])}',
-                    ),
-                  ),
-                  DataCell(
-                    AdminStatusBadge(
-                      text: '${item['percentAbove'] ?? '—'}% above',
-                      color: c.red,
-                      bg: c.redBg,
-                    ),
-                  ),
-                  DataCell(Text((item['dataAvailability'] ?? '—').toString())),
-                  DataCell(
-                    Text(
-                      [
-                        flag['label'],
-                        flag['reason'],
-                      ].whereType<String>().join(' — '),
-                    ),
-                  ),
-                  DataCell(
-                    AdminStatusBadge(
-                      text: (flag['reviewStatus'] ?? 'Price Review Required')
-                          .toString(),
-                      color: c.amber,
-                      bg: c.amberBg,
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      _formatDate(flaggedAt is Timestamp ? flaggedAt : null),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // Above the table, so it is in view without scrolling.
-            AdminSelectionNote(
-              count: _ticked.length,
-              onClear: () => setState(_ticked.clear),
-            ),
-            // 10 flagged prices a page.
-            AdminPaged<DataRow>(
-              items: rows,
-              builder: (context, page) => AdminTableFit(
-                table: DataTable(
-                  headingRowColor: WidgetStateProperty.all(
-                    adminTableHeaderColor(c),
-                  ),
-                  dataRowColor: adminTableRowColor(c),
-                  columnSpacing: kAdminTableColumnSpacing,
-                  horizontalMargin: kAdminTableMargin,
-                  headingTextStyle: adminTableHeaderStyle(c),
-                  dataTextStyle: TextStyle(
-                    fontFamily: kAdminFontFamily,
-                    color: c.textPrimary,
-                    fontSize: 13,
-                  ),
-                  columns: const [
-                    DataColumn(label: Text('Product')),
-                    DataColumn(label: Text('Farmer')),
-                    DataColumn(label: Text('Price Type')),
-                    DataColumn(label: Text('Entered Price')),
-                    DataColumn(label: Text('Suggested Range')),
-                    DataColumn(label: Text('Above Range')),
-                    DataColumn(label: Text('Data Availability')),
-                    DataColumn(label: Text('Reason')),
-                    DataColumn(label: Text('Status')),
-                    DataColumn(label: Text('Flagged')),
-                  ],
-                  rows: page,
-                ),
-              ),
-            ),
-          ],
-        );
-      },
     );
   }
 }

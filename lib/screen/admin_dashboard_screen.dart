@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:excel/excel.dart' hide Border, BorderStyle;
@@ -140,6 +141,14 @@ class AdminRadii {
   /// except the sidebar, whose items are tabs.
   static const double pill = 999;
 }
+
+/// The portal's buttons are slim pills, about 36 high — in proportion with
+/// the mobile app's small buttons.
+const EdgeInsets adminButtonPadding = EdgeInsets.symmetric(
+  horizontal: 16,
+  vertical: 8,
+);
+const Size adminButtonMinimumSize = Size(0, 36);
 
 /// Provides the current [AdminPalette] to the whole admin subtree, so any
 /// descendant widget can read `AdminThemeScope.of(context).palette`
@@ -466,13 +475,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           // app's own theme; this covers the rest, dialogs included.
           // …and, in every dialog, the same colours and font: the main
           // button dark green with white text, the others dark green text.
+          // …all of them slim (about 36 high, see adminButtonPadding), like
+          // the mobile app's.
           outlinedButtonTheme: OutlinedButtonThemeData(
             style: OutlinedButton.styleFrom(
               shape: const StadiumBorder(),
               foregroundColor: adminActionColor(palette),
               side: BorderSide(color: palette.border),
+              padding: adminButtonPadding,
+              minimumSize: adminButtonMinimumSize,
               textStyle: GoogleFonts.montserrat(
-                fontSize: 13,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -492,9 +505,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               shape: const StadiumBorder(),
               backgroundColor: adminActionColor(palette),
               foregroundColor: adminOnActionColor(palette),
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
+              padding: adminButtonPadding,
+              minimumSize: adminButtonMinimumSize,
               textStyle: GoogleFonts.montserrat(
-                fontSize: 13,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -505,9 +519,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               elevation: 0,
               backgroundColor: adminActionColor(palette),
               foregroundColor: adminOnActionColor(palette),
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 13),
+              padding: adminButtonPadding,
+              minimumSize: adminButtonMinimumSize,
               textStyle: GoogleFonts.montserrat(
-                fontSize: 13,
+                fontSize: 12.5,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -871,8 +886,6 @@ class _AdminShellState extends State<_AdminShell> {
                 AdminSubNav.accounts.value = UserAccountsSection.values[child];
               case _moderationPage:
                 AdminSubNav.moderation.value = ModerationSection.values[child];
-              case _violationsPage:
-                AdminSubNav.violations.value = ViolationSection.values[child];
               case _auditLogPage:
                 AdminSubNav.audit.value = AuditSection.values[child];
             }
@@ -1208,9 +1221,7 @@ final List<AdminSidebarEntry> _sidebarEntries = [
         _moderationPage => [
           for (final section in ModerationSection.values) section.label,
         ],
-        _violationsPage => [
-          for (final section in ViolationSection.values) section.label,
-        ],
+        // One list only (no price flags), so no submenu.
         _auditLogPage => [
           for (final section in AuditSection.values) section.label,
         ],
@@ -1357,20 +1368,33 @@ class _AdminUtilityBar extends StatelessWidget {
         children: [
           ?_menuButton(c),
           if (showBrand) ...[
-            Image.asset(
-              'assets/images/logo.png',
-              height: 34,
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) =>
-                  Icon(Icons.agriculture_rounded, color: c.green, size: 26),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              'AgriTrade+',
-              style: AppTheme.brandText(fontSize: 19).copyWith(
-                // The wordmark's own dark green would not show on the dark
-                // theme's surface.
-                color: c.isDark ? c.textPrimary : null,
+            // Logo and wordmark open the Analytics Dashboard.
+            InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: onGoHome,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Image.asset(
+                    'assets/images/logo.png',
+                    height: 34,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => Icon(
+                      Icons.agriculture_rounded,
+                      color: c.green,
+                      size: 26,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'AgriTrade+',
+                    style: AppTheme.brandText(fontSize: 19).copyWith(
+                      // The wordmark's own dark green would not show on
+                      // the dark theme's surface.
+                      color: c.isDark ? c.textPrimary : null,
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(width: 16),
@@ -1855,12 +1879,13 @@ class AdminQuickActionButton extends StatelessWidget {
     if (filled) {
       return ElevatedButton.icon(
         onPressed: onPressed,
-        icon: Icon(icon, size: 18),
+        icon: Icon(icon, size: 16),
         label: Text(label),
         style: ElevatedButton.styleFrom(
           backgroundColor: adminActionColor(c),
           foregroundColor: adminOnActionColor(c),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: adminButtonPadding,
+          minimumSize: adminButtonMinimumSize,
           shape: const StadiumBorder(),
           elevation: 0,
         ),
@@ -1872,23 +1897,28 @@ class AdminQuickActionButton extends StatelessWidget {
         backgroundColor: c.surface,
         foregroundColor: c.textPrimary,
         side: BorderSide(color: c.border),
-        padding: EdgeInsets.fromLTRB(14, 12, opensOptions ? 10 : 16, 12),
+        padding: EdgeInsets.fromLTRB(12, 8, opensOptions ? 8 : 14, 8),
+        minimumSize: adminButtonMinimumSize,
         shape: const StadiumBorder(),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 18, color: c.textPrimary),
-          const SizedBox(width: 8),
+          Icon(icon, size: 16, color: c.textPrimary),
+          const SizedBox(width: 6),
           Text(
             label,
-            style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           if (opensOptions) ...[
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
             Icon(
               Icons.keyboard_arrow_down_rounded,
-              size: 18,
+              size: 16,
               color: c.textSecondary,
             ),
           ],
@@ -2498,10 +2528,8 @@ List<WeightedLatLng> _buildDemandPoints(
   ];
 }
 
-// Pan/zoom-out limit for the heatmap — restricted to Laurel itself
-// (computed from the same barangay coordinates the heat points use, plus
-// a margin) so panning or zooming out can't drift into neighboring towns
-// across the lake (Tagaytay, Talisay, etc).
+// Laurel itself (the same barangay coordinates the heat points use, plus a
+// margin) — always inside the heatmap's pannable area.
 LatLngBounds _computeLaurelBounds() {
   var minLat = kLaurelBarangayLocations.first.lat;
   var maxLat = minLat;
@@ -2524,13 +2552,8 @@ LatLngBounds _computeLaurelBounds() {
 final LatLngBounds _laurelMapBounds = _computeLaurelBounds();
 
 // Buyers aren't restricted to Laurel (unlike farmers — see
-// register_screen.dart), so a buyer-location-based heatmap can have real
-// points outside _laurelMapBounds. This expands the pannable area to
-// include them (union, not replace) so an admin can actually pan to an
-// out-of-town buyer instead of it being permanently unreachable — while
-// the common case (every buyer still near Laurel) keeps exactly today's
-// behavior, since the union with zero outside points is just
-// _laurelMapBounds itself.
+// register_screen.dart), so the heatmap's pannable area is Laurel, every
+// buyer area and the whole country together.
 LatLngBounds _computeMapBounds(List<({double lat, double lng})> buyerPoints) {
   var minLat = _laurelMapBounds.southwest.latitude;
   var maxLat = _laurelMapBounds.northeast.latitude;
@@ -2542,27 +2565,60 @@ LatLngBounds _computeMapBounds(List<({double lat, double lng})> buyerPoints) {
     if (p.lng < minLng) minLng = p.lng;
     if (p.lng > maxLng) maxLng = p.lng;
   }
-  // In the browser this limit applies to the whole visible map, not just
-  // its centre: with a tight margin the Town view was already wider than
-  // the limit, so the map could not be dragged at all. ~28km of room keeps
-  // the map around Laurel while leaving it free to move at every preset.
-  const pad = 0.25;
+  // The map is free to move over the whole country (buyers can be from
+  // anywhere), never locked to the Laurel area; any buyer area outside
+  // the country still stays reachable.
   return LatLngBounds(
-    southwest: LatLng(minLat - pad, minLng - pad),
-    northeast: LatLng(maxLat + pad, maxLng + pad),
+    southwest: LatLng(
+      math.min(minLat, _philippines.southwest.latitude),
+      math.min(minLng, _philippines.southwest.longitude),
+    ),
+    northeast: LatLng(
+      math.max(maxLat, _philippines.northeast.latitude),
+      math.max(maxLng, _philippines.northeast.longitude),
+    ),
   );
 }
 
-// Three quick-jump zoom presets, shown as buttons alongside full free-form
+final LatLngBounds _philippines = LatLngBounds(
+  southwest: const LatLng(4.2, 116.0),
+  northeast: const LatLng(21.3, 127.0),
+);
+
+// Opening view of the Demand Heatmap: zoomed out over every area with
+// demand (Laurel included), so nothing starts off screen; Batangas-wide
+// when there is no demand yet.
+CameraPosition _frameDemand(List<({double lat, double lng})> points) {
+  const laurel = LatLng(kLaurelCenterLat, kLaurelCenterLng);
+  if (points.isEmpty) {
+    return const CameraPosition(target: laurel, zoom: _zoomProvinceLevel);
+  }
+  var minLat = laurel.latitude, maxLat = laurel.latitude;
+  var minLng = laurel.longitude, maxLng = laurel.longitude;
+  for (final p in points) {
+    minLat = math.min(minLat, p.lat);
+    maxLat = math.max(maxLat, p.lat);
+    minLng = math.min(minLng, p.lng);
+    maxLng = math.max(maxLng, p.lng);
+  }
+  // A span of s degrees fits in roughly 420 px of map at zoom
+  // log2(590 / s); never closer than a town, never wider than the region.
+  final span = math.max(math.max(maxLat - minLat, maxLng - minLng), 0.15);
+  final zoom = (math.log(590 / span) / math.ln2).clamp(7.0, 11.5);
+  return CameraPosition(
+    target: LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2),
+    zoom: zoom,
+  );
+}
+
+// Quick-jump zoom presets, shown as buttons alongside full free-form
 // zoom (mouse wheel / pinch / double-click, all enabled on the map itself
 // — see _HeatmapMap's zoomGesturesEnabled) — a convenience shortcut to a
 // curated level, not the only way to zoom.
+const double _zoomProvinceLevel = 10.0;
 const double _zoomTownLevel = 12.0;
 const double _zoomBarangayLevel = 14.0;
 const double _zoomStreetLevel = 16.0;
-
-/// What the Demand Heatmap is showing: where buyers bought, or where they
-/// searched. Two layers, never combined.
 
 class _DemandHeatmapView extends StatefulWidget {
   const _DemandHeatmapView();
@@ -2676,7 +2732,7 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
   // this is what makes the *camera position* itself carry over.)
   CameraPosition _camera = const CameraPosition(
     target: _center,
-    zoom: _zoomStreetLevel,
+    zoom: _zoomProvinceLevel,
   );
 
   // Which month/year the camera was last auto-framed for — null on first
@@ -3221,18 +3277,8 @@ class _DemandHeatmapViewState extends State<_DemandHeatmapView> {
                     // having to hunt for it by panning.
                     if (_framedMonth != _selectedMonth ||
                         _framedYear != _selectedYear) {
-                      _camera = CameraPosition(
-                        // At street level the middle of several areas can
-                        // be empty ground, so open on the area with the
-                        // most demand (the first; the list is ranked).
-                        target: buyerPoints.isEmpty
-                            ? _center
-                            : LatLng(
-                                buyerPoints.first.lat,
-                                buyerPoints.first.lng,
-                              ),
-                        zoom: _zoomStreetLevel,
-                      );
+                      // Zoomed out over every area with demand.
+                      _camera = _frameDemand(buyerPoints);
                       _framedMonth = _selectedMonth;
                       _framedYear = _selectedYear;
                     }
@@ -3525,17 +3571,34 @@ class _HeatmapMapState extends State<_HeatmapMap> {
   // the map from the app's idea of the camera, which could be out of date
   // until the map was next moved.)
   //
-  // An area is three circles of the same colour, widest and faintest
-  // first, so it fades outward like heat rather than ending in a hard
-  // edge. Their size is in metres — an area's worth of ground — so the
-  // spot grows as the map zooms in on it.
-  static const List<({double size, double opacity})> _heatRings = [
-    (size: 1.00, opacity: 0.16),
-    (size: 0.68, opacity: 0.22),
-    (size: 0.38, opacity: 0.30),
-  ];
+  // An area is a soft spot of heat: many thin circles stacked from the
+  // edge in, each adding a little colour, so it fades smoothly from a hot
+  // centre to nothing at the edge with no visible rings. The centre is the
+  // area's own heat colour; towards the edge it cools along the same
+  // scale. Neighbouring spots blend where they overlap.
+  //
+  // Its size is the area's ground (metres) when zoomed in, but never
+  // smaller on screen than [_heatMinPixels] when zoomed out, so a spot
+  // stays visible over a whole province.
+  static const int _heatSteps = 12;
   static const double _heatRadiusMetres = 900;
   static const double _heatRadiusBoostMetres = 600;
+  static const double _heatMinPixels = 26;
+  static const double _heatMinPixelsBoost = 20;
+
+  // The zoom the heat was last sized for (updated when the map settles).
+  late double _heatZoom = widget.initialCamera.zoom;
+
+  // Ground metres per screen pixel at [zoom] and [latitude].
+  static double _metresPerPixel(double zoom, double latitude) =>
+      156543.03392 * math.cos(latitude * math.pi / 180) / math.pow(2, zoom);
+
+  // How opaque the spot is at a fraction [t] of the way out (0 centre,
+  // 1 edge): a smooth bell, strongest in the middle.
+  static double _heatAlpha(double t, double strength) {
+    final f = 1 - t * t;
+    return strength * f * f;
+  }
 
   Set<Circle> _heatCircles() {
     if (widget.points.isEmpty) return const {};
@@ -3550,18 +3613,33 @@ class _HeatmapMapState extends State<_HeatmapMap> {
       final point = ordered[i];
       // Against the busiest area, never below the scale's floor.
       final intensity = demandIntensity(point.weight, busiest);
-      final color = heatColorForIntensity(intensity);
-      final radius = _heatRadiusMetres + _heatRadiusBoostMetres * intensity;
+      final radius = math.max(
+        _heatRadiusMetres + _heatRadiusBoostMetres * intensity,
+        (_heatMinPixels + _heatMinPixelsBoost * intensity) *
+            _metresPerPixel(_heatZoom, point.point.latitude),
+      );
+      final strength = 0.45 + 0.25 * intensity;
       final area = _areaAt(point.point);
-      for (var ring = 0; ring < _heatRings.length; ring++) {
+      // Circle k covers the bands from the centre out to (k + 1) / steps
+      // of the radius. Each one's opacity is worked out from the outside
+      // in, so that where they overlap the total follows _heatAlpha.
+      var outer = 0.0; // total opacity of the band just outside
+      for (var k = _heatSteps - 1; k >= 0; k--) {
+        final t = (k + 0.5) / _heatSteps;
+        final total = _heatAlpha(t, strength);
+        final alpha = (1 - (1 - total) / (1 - outer)).clamp(0.0, 1.0);
+        outer = total;
         circles.add(
           Circle(
-            circleId: CircleId('heat-$i-$ring'),
+            circleId: CircleId('heat-$i-$k'),
             center: point.point,
-            radius: radius * _heatRings[ring].size,
-            fillColor: color.withValues(alpha: _heatRings[ring].opacity),
+            radius: radius * (k + 1) / _heatSteps,
+            fillColor: heatColorForIntensity(
+              intensity * (0.55 + 0.45 * (1 - t)),
+            ).withValues(alpha: alpha),
             strokeWidth: 0,
-            zIndex: i,
+            // Inner circles over outer ones, busier areas over quieter.
+            zIndex: i * _heatSteps + (_heatSteps - k),
             // A click on an area's heat selects that area.
             consumeTapEvents: area != null && widget.onSelectArea != null,
             onTap: area == null ? null : () => widget.onSelectArea?.call(area),
@@ -3570,6 +3648,24 @@ class _HeatmapMapState extends State<_HeatmapMap> {
       }
     }
     return circles;
+  }
+
+  // Resizes the heat for the new zoom once the map settles (not on every
+  // frame of a zoom), so spots keep their on-screen size when zoomed out.
+  void _onCameraIdle() {
+    if ((_lastCamera.zoom - _heatZoom).abs() > 0.25) {
+      setState(() => _heatZoom = _lastCamera.zoom);
+    }
+    widget.onCameraIdle(_lastCamera);
+  }
+
+  // The opening view again: zoomed out over every area with demand.
+  void _showAllAreas() {
+    final frame = _frameDemand([
+      for (final p in widget.points)
+        (lat: p.point.latitude, lng: p.point.longitude),
+    ]);
+    _controller?.animateCamera(CameraUpdate.newCameraPosition(frame));
   }
 
   // The area a heat point belongs to.
@@ -3624,7 +3720,7 @@ class _HeatmapMapState extends State<_HeatmapMap> {
               circles: _heatCircles(),
               onMapCreated: (controller) => _controller = controller,
               onCameraMove: (position) => _lastCamera = position,
-              onCameraIdle: () => widget.onCameraIdle(_lastCamera),
+              onCameraIdle: _onCameraIdle,
             ),
           ),
           Positioned(
@@ -3650,11 +3746,14 @@ class _HeatmapMapState extends State<_HeatmapMap> {
                   onPressed: widget.onToggleFullscreen,
                 ),
                 const SizedBox(height: 8),
-                // Three preset zoom levels instead of free-form +/- — see
-                // the comment on _zoomTownLevel for why: it keeps the
-                // heat discs' fixed-pixel radius always looking
-                // intentional rather than landing on an odd in-between
-                // zoom.
+                // Show all areas, then three preset zoom levels (free zoom
+                // by wheel and pinch still works) — see _zoomTownLevel.
+                _MapIconButton(
+                  icon: Icons.public,
+                  tooltip: 'Show all areas',
+                  onPressed: _showAllAreas,
+                ),
+                const SizedBox(height: 4),
                 _MapIconButton(
                   icon: Icons.zoom_out_map,
                   tooltip: 'Town view',

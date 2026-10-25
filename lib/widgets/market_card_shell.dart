@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../theme/app_theme.dart';
 import '../l10n/tr.dart';
+import 'agri_app_bar.dart';
 
 /// The shared frame of the Farmer Dashboard's market cards (Best-Selling
 /// Products, Top Buyer Locations, Current Market Average):
@@ -154,14 +155,69 @@ class MarketCardLoading extends StatelessWidget {
   }
 }
 
-/// "View All" / "Show Less" under a market card's list.
-class MarketCardToggle extends StatelessWidget {
-  final bool expanded;
+/// How many rows a market card lists on the dashboard; the rest are on its
+/// own full-list screen (see [MarketCardViewAll]).
+const int kMarketCardRows = 5;
+
+/// The rows a market card lists: all of them on its full-list screen
+/// ([showAll]), else the first [kMarketCardRows], then "View all (N)" —
+/// opening that screen via [openAll] — when there are more.
+Widget marketCardRows({
+  required List<Widget> rows,
+  required bool showAll,
+  required VoidCallback openAll,
+}) {
+  final shown = showAll ? rows : rows.take(kMarketCardRows).toList();
+  return Column(
+    children: [
+      // One plain line each, a hairline between them — easy to scan.
+      for (var i = 0; i < shown.length; i++) ...[
+        if (i > 0) Divider(height: 1, color: Colors.grey[200]),
+        shown[i],
+      ],
+      if (!showAll && rows.length > kMarketCardRows)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: MarketCardViewAll(count: rows.length, onPressed: openAll),
+        ),
+    ],
+  );
+}
+
+/// Opens the full-list screen of a market card whose list is too long for
+/// the dashboard: [child] — the same card, showing every row — under an
+/// app bar titled [title].
+void openMarketCardScreen(
+  BuildContext context, {
+  required String title,
+  required Widget child,
+}) {
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        backgroundColor: AppTheme.surface,
+        appBar: AgriAppBar(title: title),
+        body: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+            child: child,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// "View all (N)" under a market card's first rows; opens its full list.
+class MarketCardViewAll extends StatelessWidget {
+  final int count;
   final VoidCallback onPressed;
 
-  const MarketCardToggle({
+  const MarketCardViewAll({
     super.key,
-    required this.expanded,
+    required this.count,
     required this.onPressed,
   });
 
@@ -172,13 +228,8 @@ class MarketCardToggle extends StatelessWidget {
       child: TextButton.icon(
         onPressed: onPressed,
         iconAlignment: IconAlignment.end,
-        icon: Icon(
-          expanded
-              ? Icons.keyboard_arrow_up_rounded
-              : Icons.keyboard_arrow_down_rounded,
-          size: 18,
-        ),
-        label: Text(expanded ? tr(context).showLess : tr(context).viewAll),
+        icon: const Icon(Icons.chevron_right_rounded, size: 18),
+        label: Text('${tr(context).viewAll} ($count)'),
         style: TextButton.styleFrom(
           foregroundColor: AppTheme.dark,
           padding: const EdgeInsets.symmetric(horizontal: 10),

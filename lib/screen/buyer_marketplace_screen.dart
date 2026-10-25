@@ -1,4 +1,3 @@
-import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/auth_service.dart';
@@ -33,17 +32,9 @@ class BuyerMarketplaceScreen extends StatefulWidget {
 }
 
 class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
-  static const Color _dark = AppTheme.dark;
   static const Color _bg = Colors.white;
 
   late int _navIndex;
-
-  // The bottom bar slides away while a long page is scrolled down
-  // (NavBarAutoHide), and is back on any scroll up or tab change.
-  bool _navHidden = false;
-  void _setNavHidden(bool hidden) {
-    if (hidden != _navHidden && mounted) setState(() => _navHidden = hidden);
-  }
 
   // Explore, for Back: a scrolled-down Explore goes back to its top first.
   final _exploreKey = GlobalKey<BuyerExploreScreenState>();
@@ -52,10 +43,7 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
   final _ordersStatus = ValueNotifier<String?>(null);
 
   void _openOrders(String status) {
-    setState(() {
-      _navIndex = 2;
-      _navHidden = false;
-    });
+    setState(() => _navIndex = 2);
     // Set again even if unchanged, so Orders follows it every time.
     _ordersStatus.value = null;
     _ordersStatus.value = status;
@@ -171,18 +159,12 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         // Like the farmer's: Back returns to Explore first, then offers to
         // close the app — it never logs out (that is in the settings menu).
         if (_navIndex != 0) {
-          setState(() {
-            _navIndex = 0;
-            _navHidden = false;
-          });
+          setState(() => _navIndex = 0);
           return;
         }
         // Scrolled down on Explore: Back returns to the top, with a fresh
         // mix of products, before it offers to close the app.
-        if (_exploreKey.currentState?.backToTop() ?? false) {
-          _setNavHidden(false);
-          return;
-        }
+        if (_exploreKey.currentState?.backToTop() ?? false) return;
         final shouldExit = await showAgriConfirm(
           context: context,
           icon: Icons.exit_to_app,
@@ -200,14 +182,18 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
         body: PageHeaderSafeArea(
           // Swipe left or right to move between the tabs, as well as
           // tapping them in the bar below.
-          child: NavBarAutoHide(
-            onHiddenChanged: _setNavHidden,
+          // The header's logo opens Explore from any tab; on Explore it
+          // goes back to the top.
+          child: HomeLogoAction(
+            onTap: _goHome,
+            // Every tab's header has the notification bell.
+            onNotifications: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+            ),
             child: SwipeableTabs(
               index: _navIndex,
-              onIndexChanged: (i) => setState(() {
-                _navIndex = i;
-                _navHidden = false;
-              }),
+              onIndexChanged: (i) => setState(() => _navIndex = i),
               children: pages,
             ),
           ),
@@ -217,11 +203,18 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     );
   }
 
+  void _goHome() {
+    if (_navIndex != 0) {
+      setState(() => _navIndex = 0);
+      return;
+    }
+    _exploreKey.currentState?.backToTop();
+  }
+
   Widget _buildBottomNavBar() {
     final t = tr(context);
-    // Docked to the bottom edge (not floating), Android-style.
+    // The small floating bar, always on screen.
     return DockedNavBar(
-      hidden: _navHidden,
       children: [
         _navItem(0, Icons.explore_outlined, Icons.explore, t.navExplore),
         _navItem(
@@ -251,37 +244,16 @@ class _BuyerMarketplaceScreenState extends State<BuyerMarketplaceScreen> {
     Key? key,
     bool showUnreadDot = false,
   }) {
-    final selected = _navIndex == index;
-    final color = selected ? _dark : const Color(0xFFAAB4AC);
-    final iconWidget = Icon(
-      selected ? activeIcon : icon,
-      color: color,
-      size: 20,
-    );
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() {
-          _navIndex = index;
-          _navHidden = false;
-        }),
-        child: Column(
-          key: key,
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            showUnreadDot ? UnreadMessagesDot(child: iconWidget) : iconWidget,
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 9.5,
-                color: color,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
+    return NavBarItem(
+      key: key,
+      icon: icon,
+      activeIcon: activeIcon,
+      label: label,
+      selected: _navIndex == index,
+      onTap: () => setState(() => _navIndex = index),
+      decorateIcon: showUnreadDot
+          ? (icon) => UnreadMessagesDot(child: icon)
+          : null,
     );
   }
 }

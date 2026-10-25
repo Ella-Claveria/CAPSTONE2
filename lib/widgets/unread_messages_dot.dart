@@ -32,27 +32,41 @@ class UnreadMessagesDot extends StatelessWidget {
             }) ??
             false;
 
-        return Stack(
-          clipBehavior: Clip.none,
-          children: [
-            child,
-            if (hasUnread)
-              Positioned(
-                top: -1,
-                right: -1,
-                child: Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    color: Colors.redAccent,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white, width: 1.5),
-                  ),
-                ),
-              ),
-          ],
-        );
+        return NavRedDot(show: hasUnread, child: child);
       },
+    );
+  }
+}
+
+/// [child] (a nav-bar icon) with the small red dot in its top-right corner
+/// while [show] is true — the bottom bar's "something new here" mark.
+class NavRedDot extends StatelessWidget {
+  final bool show;
+  final Widget child;
+
+  const NavRedDot({super.key, required this.show, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        child,
+        if (show)
+          Positioned(
+            top: -1,
+            right: -1,
+            child: Container(
+              width: 9,
+              height: 9,
+              decoration: BoxDecoration(
+                color: Colors.redAccent,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white, width: 1.5),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

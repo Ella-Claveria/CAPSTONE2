@@ -162,10 +162,12 @@ class _TermsPrivacyDialog extends StatelessWidget {
                 dividerColor: c.border,
                 labelPadding: const EdgeInsets.symmetric(horizontal: 14),
                 labelStyle: const TextStyle(
+                  fontFamily: 'Montserrat',
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
                 ),
                 unselectedLabelStyle: const TextStyle(
+                  fontFamily: 'Montserrat',
                   fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),

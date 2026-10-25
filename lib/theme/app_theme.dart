@@ -47,36 +47,35 @@ class AppTheme {
       primaryTextTheme: montserratText,
 
       // Inner screens use AgriAppBar (widgets/agri_app_bar.dart); this is
-      // the same dark green look as a fallback for any plain AppBar.
+      // the same light look as a fallback for any plain AppBar.
+      // Any plain AppBar: the same white as the app's headers.
       appBarTheme: AppBarTheme(
-        backgroundColor: dark,
+        backgroundColor: Colors.white,
         surfaceTintColor: Colors.transparent,
-        foregroundColor: Colors.white,
+        foregroundColor: dark,
         elevation: 0,
         scrolledUnderElevation: 0,
-        systemOverlayStyle: SystemUiOverlayStyle.light,
+        systemOverlayStyle: SystemUiOverlayStyle.dark,
         titleTextStyle: GoogleFonts.montserrat(
           fontSize: 18,
           fontWeight: FontWeight.bold,
-          color: Colors.white,
+          color: dark,
         ),
       ),
 
       actionIconTheme: backButtonTheme,
 
-      // Default look for every ElevatedButton in the app.
+      // Default look for every ElevatedButton in the app: a slim pill
+      // (about 40 high), in proportion with the small bottom bar.
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: dark,
           foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 16),
+          padding: buttonPadding,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(30),
           ),
-          textStyle: GoogleFonts.montserrat(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          textStyle: buttonText(),
         ),
       ),
 
@@ -92,12 +91,16 @@ class AppTheme {
         style: OutlinedButton.styleFrom(
           foregroundColor: dark,
           shape: const StadiumBorder(),
+          padding: buttonPadding,
+          textStyle: buttonText(),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: dark,
           shape: const StadiumBorder(),
+          padding: buttonPadding,
+          textStyle: buttonText(),
         ),
       ),
       iconButtonTheme: IconButtonThemeData(
@@ -111,6 +114,13 @@ class AppTheme {
         fillColor: fieldFill,
         hintStyle: GoogleFonts.montserrat(fontSize: 13.5, color: Colors.grey),
         errorStyle: GoogleFonts.montserrat(fontSize: 11.5),
+        // The "12/40" under a field with a length limit, the same on every
+        // field (nickname, review, …).
+        counterStyle: GoogleFonts.montserrat(
+          fontSize: 11,
+          fontWeight: FontWeight.w500,
+          color: Colors.grey[600],
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(24),
           borderSide: BorderSide.none,
@@ -402,8 +412,15 @@ class AppTheme {
   // display headings that use it ("Verify Your Email").
   static const String brandFontFamily = 'LilitaOne';
 
+  // Buttons app-wide are slim pills, in proportion with the small bottom
+  // bar: 14px bold text, about 40 high.
   static TextStyle buttonText() =>
-      GoogleFonts.montserrat(fontSize: 16, fontWeight: FontWeight.bold);
+      GoogleFonts.montserrat(fontSize: 14, fontWeight: FontWeight.bold);
+
+  static const EdgeInsets buttonPadding = EdgeInsets.symmetric(
+    vertical: 11,
+    horizontal: 20,
+  );
 
   // ---------- REUSABLE PIECES ----------
 
@@ -422,7 +439,7 @@ class AppTheme {
   static ButtonStyle primaryButton() => ElevatedButton.styleFrom(
     backgroundColor: dark,
     foregroundColor: Colors.white,
-    padding: const EdgeInsets.symmetric(vertical: 16),
+    padding: buttonPadding,
     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
   );
 

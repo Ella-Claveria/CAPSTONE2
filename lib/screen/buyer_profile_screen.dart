@@ -111,130 +111,143 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
     final t = tr(context);
     final user = FirebaseAuth.instance.currentUser;
 
-    return AgriRefreshIndicator(
-      color: _dark,
-      onRefresh: _refreshData,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.only(bottom: 90),
-        child: Column(
-          children: [
-            // The same settings (gear) menu as the farmer's Profile.
-            PageHeader(title: tr(context).navProfile),
-            const SizedBox(height: 4),
+    // The header stays put; pull-to-refresh starts under it.
+    return Column(
+      children: [
+        // The band stays put; the title scrolls with the page below.
+        PageHeader(title: tr(context).navProfile, includeTitle: false),
+        Expanded(
+          child: AgriRefreshIndicator(
+            color: _dark,
+            onRefresh: _refreshData,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.only(bottom: 90),
+              child: Column(
+                children: [
+                  PageTitle(title: tr(context).navProfile),
+                  const SizedBox(height: 4),
 
-            // ---- Photo, name, general location ----
-            StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-              stream: _profile,
-              builder: (context, snapshot) {
-                final data = snapshot.data?.data();
-                final name =
-                    [data?['name'], data?['fullName'], user?.displayName]
-                        .map((v) => (v ?? '').toString().trim())
-                        .firstWhere((v) => v.isNotEmpty, orElse: () => 'Buyer');
-                final photoUrl =
-                    data?['photoUrl']?.toString() ?? user?.photoURL;
-                // General area only — barangay and city, never a street
-                // address or a pin.
-                final location = [data?['barangay'], data?['municipality']]
-                    .map((v) => (v ?? '').toString().trim())
-                    .where((v) => v.isNotEmpty)
-                    .join(', ');
+                  // ---- Photo, name, general location ----
+                  StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: _profile,
+                    builder: (context, snapshot) {
+                      final data = snapshot.data?.data();
+                      final name =
+                          [data?['name'], data?['fullName'], user?.displayName]
+                              .map((v) => (v ?? '').toString().trim())
+                              .firstWhere(
+                                (v) => v.isNotEmpty,
+                                orElse: () => 'Buyer',
+                              );
+                      final photoUrl =
+                          data?['photoUrl']?.toString() ?? user?.photoURL;
+                      // General area only — barangay and city, never a street
+                      // address or a pin.
+                      final location =
+                          [data?['barangay'], data?['municipality']]
+                              .map((v) => (v ?? '').toString().trim())
+                              .where((v) => v.isNotEmpty)
+                              .join(', ');
 
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Column(
-                    children: [
-                      _avatarWithEditBadge(name, photoUrl),
-                      const SizedBox(height: 12),
-                      Text(
-                        name,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: AppTheme.heading(22),
-                      ),
-                      if (location.isNotEmpty) ...[
-                        const SizedBox(height: 4),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
                           children: [
-                            Icon(
-                              Icons.place_outlined,
-                              size: 15,
-                              color: Colors.grey[600],
+                            _avatarWithEditBadge(name, photoUrl),
+                            const SizedBox(height: 12),
+                            Text(
+                              name,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTheme.heading(22),
                             ),
-                            const SizedBox(width: 3),
-                            Flexible(
-                              child: Text(
-                                location,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: Colors.grey[700],
-                                  fontWeight: FontWeight.w500,
-                                ),
+                            if (location.isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.place_outlined,
+                                    size: 15,
+                                    color: Colors.grey[600],
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Flexible(
+                                    child: Text(
+                                      location,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.grey[700],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
+                            ],
                           ],
                         ),
-                      ],
-                    ],
+                      );
+                    },
                   ),
-                );
-              },
-            ),
 
-            _activitySummary(),
-            const SizedBox(height: 20),
+                  _activitySummary(),
+                  const SizedBox(height: 20),
 
-            // ---- Everything on the page, as plain rows in labelled
-            // groups (no cards, no gear menu); notifications themselves
-            // are behind the bell on Explore. ----
-            ProfileSectionLabel(t.sectionActivity),
-            ProfileLinkTile(
-              icon: Icons.rate_review_outlined,
-              label: t.myReviews,
-              onTap: () => _open(const BuyerMyReviewsScreen()),
+                  // ---- Everything on the page, as plain rows in labelled
+                  // groups (no cards, no gear menu); notifications themselves
+                  // are behind the bell on Explore. ----
+                  ProfileSectionLabel(t.sectionActivity),
+                  ProfileLinkTile(
+                    icon: Icons.rate_review_outlined,
+                    label: t.myReviews,
+                    onTap: () => _open(const BuyerMyReviewsScreen()),
+                  ),
+                  ProfileLinkTile(
+                    icon: Icons.favorite_border_rounded,
+                    label: t.likedProducts,
+                    onTap: () => _open(const BuyerSavedProductsScreen()),
+                  ),
+                  ProfileSectionLabel(t.sectionSettings),
+                  ProfileLinkTile(
+                    icon: Icons.local_shipping_outlined,
+                    label: t.deliveryPickupPreferences,
+                    onTap: () =>
+                        _open(const BuyerFulfillmentPreferencesScreen()),
+                  ),
+                  ProfileLinkTile(
+                    icon: Icons.notifications_none_rounded,
+                    label: t.notificationSettings,
+                    onTap: () => _open(const NotificationPreferencesScreen()),
+                  ),
+                  ProfileLinkTile(
+                    icon: Icons.manage_accounts_outlined,
+                    label: t.manageAccount,
+                    onTap: () => _open(const ManageAccountScreen()),
+                  ),
+                  ProfileSectionLabel(t.sectionSupport),
+                  ProfileLinkTile(
+                    icon: Icons.help_outline,
+                    label: t.helpSupport,
+                    onTap: () => _open(const HelpSupportScreen(farmer: false)),
+                  ),
+                  const SizedBox(height: 8),
+                  ProfileLinkTile(
+                    icon: Icons.logout,
+                    label: t.logOut,
+                    destructive: true,
+                    onTap: widget.onLogout,
+                  ),
+                ],
+              ),
             ),
-            ProfileLinkTile(
-              icon: Icons.favorite_border_rounded,
-              label: t.likedProducts,
-              onTap: () => _open(const BuyerSavedProductsScreen()),
-            ),
-            ProfileSectionLabel(t.sectionSettings),
-            ProfileLinkTile(
-              icon: Icons.local_shipping_outlined,
-              label: t.deliveryPickupPreferences,
-              onTap: () => _open(const BuyerFulfillmentPreferencesScreen()),
-            ),
-            ProfileLinkTile(
-              icon: Icons.notifications_none_rounded,
-              label: t.notificationSettings,
-              onTap: () => _open(const NotificationPreferencesScreen()),
-            ),
-            ProfileLinkTile(
-              icon: Icons.manage_accounts_outlined,
-              label: t.manageAccount,
-              onTap: () => _open(const ManageAccountScreen()),
-            ),
-            ProfileSectionLabel(t.sectionSupport),
-            ProfileLinkTile(
-              icon: Icons.help_outline,
-              label: t.helpSupport,
-              onTap: () => _open(const HelpSupportScreen(farmer: false)),
-            ),
-            const SizedBox(height: 8),
-            ProfileLinkTile(
-              icon: Icons.logout,
-              label: t.logOut,
-              destructive: true,
-              onTap: widget.onLogout,
-            ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 

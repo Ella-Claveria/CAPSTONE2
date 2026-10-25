@@ -138,19 +138,35 @@ class _AppSearchBarState extends State<AppSearchBar> {
       ],
     );
 
+    // The outline is painted on top of the pill, outside its clip, in a
+    // solid (not see-through) green-grey: drawn as part of the clipped
+    // pill, in a faint see-through colour, its curved ends and lower edge
+    // came out lighter than the rest, so it looked incomplete.
+    final outline = Color.alphaBlend(
+      AppTheme.dark.withValues(alpha: focused ? 0.6 : 0.3),
+      Colors.white,
+    );
     return SizedBox(
       height: AppSearchBar.height,
-      child: Material(
-        color: Colors.white,
-        shape: StadiumBorder(
-          side: BorderSide(
-            color: AppTheme.dark.withValues(alpha: focused ? 0.6 : 0.25),
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: ShapeDecoration(
+          shape: StadiumBorder(
+            side: BorderSide(
+              color: outline,
+              width: 1.2,
+              strokeAlign: BorderSide.strokeAlignInside,
+            ),
           ),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: widget.onTap != null
-            ? InkWell(onTap: widget.onTap, child: content)
-            : content,
+        child: Material(
+          color: Colors.white,
+          shape: const StadiumBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: widget.onTap != null
+              ? InkWell(onTap: widget.onTap, child: content)
+              : content,
+        ),
       ),
     );
   }

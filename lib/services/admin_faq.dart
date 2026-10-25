@@ -390,8 +390,8 @@ const List<AdminFaq> kDefaultAdminFaqs = [
     keywords: ['listing', 'review listing', 'product'],
     answer:
         'Listings are reviewed through reports: a report about a listing '
-        'shows the Related Listing in the Moderation Queue. Violations › '
-        'Price Flags lists listings priced far above their suggested range. '
+        'shows the Related Listing in the Moderation Queue. Prices are not '
+        'reviewed: a farmer sets their own, and buyers decide whether to buy. '
         'The portal has no separate page that lists every listing.',
   ),
   AdminFaq(

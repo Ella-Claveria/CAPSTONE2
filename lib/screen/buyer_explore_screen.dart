@@ -4,6 +4,7 @@ import '../widgets/notification_bell.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../data/commodity_master_list.dart';
 import '../services/product_service.dart';
@@ -69,7 +70,10 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
   /// (Back is handled); at the top it returns false.
   bool backToTop() {
     if (!_grid.hasClients || _grid.offset <= 0) return false;
-    setState(() => _feedMix++);
+    setState(() {
+      _feedMix++;
+      _filtersHidden = false;
+    });
     _grid.animateTo(
       0,
       duration: const Duration(milliseconds: 450),
@@ -80,8 +84,23 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
 
   String _selectedBarangay = 'All Locations';
 
-  // "Newest": the latest listings first, instead of the ranked feed.
-  bool _newestFirst = false;
+  // New posts wait for a refresh: the feed shows the listings that were
+  // there when Explore opened ([_shownIds]); one posted while the buyer is
+  // browsing appears only after pulling to refresh (or the next time the
+  // app is opened), so the grid never jumps under their finger. Changes to
+  // listings already shown (stock, price, removal) still apply at once.
+  Set<String>? _shownIds;
+
+  // Every listing in the latest data, for the next refresh.
+  Set<String> _latestIds = {};
+
+  // The posts the last refresh brought in — shown first, newest first.
+  Set<String> _freshIds = {};
+
+  // Scrolling down tucks the category and location filters away; scrolling
+  // up (or reaching the top) brings them back.
+  bool _filtersHidden = false;
+
   Map<String, String> _barangayByFarmerUid = {};
   Map<String, bool> _verifiedByFarmerUid = {};
   StreamSubscription? _usersSub;
@@ -139,10 +158,16 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
     super.dispose();
   }
 
+  // Pull to refresh: brings in the posts made since the feed was loaded,
+  // at the top.
   Future<void> _refreshProducts() async {
     await Future.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      final shown = _shownIds ?? const <String>{};
+      _freshIds = _latestIds.difference(shown);
+      _shownIds = {..._latestIds};
+    });
   }
 
   @override
@@ -162,8 +187,21 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
                 ),
         ),
         _buildSearchBar(),
-        _buildCategoryChips(),
-        _buildLocationFilter(),
+        // Tucked away while scrolling down the products (see
+        // _filtersHidden).
+        ClipRect(
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            child: _filtersHidden
+                ? const SizedBox(width: double.infinity)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [_buildCategoryChips(), _buildLocationFilter()],
+                  ),
+          ),
+        ),
         const SizedBox(height: 4),
         Expanded(child: _buildProductGrid()),
       ],
@@ -224,32 +262,49 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
   // menu straight below it (never a bottom sheet or a full-screen picker).
   final GlobalKey _locationPillKey = GlobalKey();
 
-  // The location pill, and "Newest" beside it (the latest listings first).
   Widget _buildLocationFilter() {
     final barangays = _barangayByFarmerUid.values.toSet().toList()..sort();
+    if (barangays.isEmpty) return const SizedBox.shrink();
+
     final active = _selectedBarangay != 'All Locations';
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 2, 16, 8),
-      child: Row(
-        children: [
-          if (barangays.isNotEmpty) ...[
-            _FilterPill(
-              key: _locationPillKey,
-              label: _selectedBarangay,
-              selected: active,
-              trailing: Icons.keyboard_arrow_down_rounded,
-              onTap: () => _pickLocation(['All Locations', ...barangays]),
-            ),
-            const SizedBox(width: 8),
-          ],
-          _FilterPill(
-            label: 'Newest',
-            selected: _newestFirst,
-            onTap: () => setState(() => _newestFirst = !_newestFirst),
-          ),
-        ],
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _FilterPill(
+          key: _locationPillKey,
+          label: _selectedBarangay,
+          selected: active,
+          trailing: Icons.keyboard_arrow_down_rounded,
+          onTap: () => _pickLocation(['All Locations', ...barangays]),
+        ),
       ),
     );
+  }
+
+  // Scrolling the products: down hides the filters, up or back at the top
+  // shows them.
+  bool _onGridScroll(ScrollNotification notification) {
+    if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+    bool? hide;
+    if (notification is UserScrollNotification) {
+      if (notification.direction == ScrollDirection.reverse &&
+          notification.metrics.pixels > 40) {
+        hide = true;
+      } else if (notification.direction == ScrollDirection.forward) {
+        hide = false;
+      }
+    }
+    if (notification is ScrollUpdateNotification &&
+        notification.metrics.pixels <= 0) {
+      hide = false;
+    }
+    if (hide != null && hide != _filtersHidden) {
+      setState(() => _filtersHidden = hide!);
+    }
+    return false;
   }
 
   // A floating dropdown anchored under the location pill: text-only rows,
@@ -327,15 +382,22 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
           return RetryMessage(
             message:
                 'Could not load products. Check your connection and try again.',
-            onRetry: () =>
-                setState(() => _products = _productService.allProductsStream()),
+            onRetry: () => setState(() {
+              _products = _productService.allProductsStream();
+              _shownIds = null;
+            }),
           );
         }
         var docs = snapshot.data?.docs ?? [];
 
+        // What opening Explore found is what is shown; later posts wait for
+        // a refresh (see _shownIds).
+        _latestIds = {for (final d in docs) d.id};
+        final shown = _shownIds ??= {..._latestIds};
         docs = docs
             .where(
               (doc) =>
+                  shown.contains(doc.id) &&
                   doc.data()['isArchived'] != true &&
                   doc.data()['isSuspended'] != true,
             )
@@ -372,9 +434,7 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
         // changes but well-ranked listings still tend to come first.
         int created(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
             (d.data()['createdAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
-        if (_newestFirst) {
-          docs.sort((a, b) => created(b).compareTo(created(a)));
-        } else if (_feedMix > 0) {
+        if (_feedMix > 0) {
           final nudged = {
             for (final d in docs)
               d.id:
@@ -394,6 +454,12 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
               aCreated?.millisecondsSinceEpoch ?? 0,
             );
           });
+        }
+        // The posts the last refresh brought in come first, newest first.
+        if (_freshIds.isNotEmpty) {
+          final fresh = docs.where((d) => _freshIds.contains(d.id)).toList()
+            ..sort((a, b) => created(b).compareTo(created(a)));
+          docs = [...fresh, ...docs.where((d) => !_freshIds.contains(d.id))];
         }
 
         if (docs.isEmpty) {
@@ -453,37 +519,42 @@ class BuyerExploreScreenState extends State<BuyerExploreScreen> {
               // phones.
               final cardWidth =
                   (constraints.maxWidth - padding * 2 - spacing) / 2;
-              return GridView.builder(
-                controller: _grid,
-                padding: const EdgeInsets.fromLTRB(padding, 4, padding, 12),
-                itemCount: docs.length,
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  crossAxisSpacing: spacing,
-                  mainAxisSpacing: spacing,
-                  mainAxisExtent: ExploreProductCard.extentFor(
-                    cardWidth,
-                    MediaQuery.textScalerOf(context),
-                  ),
-                ),
-                itemBuilder: (context, index) {
-                  final doc = docs[index];
-                  final data = doc.data();
-                  return ExploreProductCard(
-                    data: data,
-                    saved: LikedProducts.instance.contains(doc.id),
-                    onToggleSave: LikedProducts.instance.canLike
-                        ? () => toggleLikedProduct(context, doc.id)
-                        : null,
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            ProductDetailScreen(productId: doc.id, data: data),
-                      ),
+              return NotificationListener<ScrollNotification>(
+                onNotification: _onGridScroll,
+                child: GridView.builder(
+                  controller: _grid,
+                  padding: const EdgeInsets.fromLTRB(padding, 4, padding, 12),
+                  itemCount: docs.length,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: spacing,
+                    mainAxisSpacing: spacing,
+                    mainAxisExtent: ExploreProductCard.extentFor(
+                      cardWidth,
+                      MediaQuery.textScalerOf(context),
                     ),
-                  );
-                },
+                  ),
+                  itemBuilder: (context, index) {
+                    final doc = docs[index];
+                    final data = doc.data();
+                    return ExploreProductCard(
+                      data: data,
+                      saved: LikedProducts.instance.contains(doc.id),
+                      onToggleSave: LikedProducts.instance.canLike
+                          ? () => toggleLikedProduct(context, doc.id)
+                          : null,
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ProductDetailScreen(
+                            productId: doc.id,
+                            data: data,
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
               );
             },
           ),

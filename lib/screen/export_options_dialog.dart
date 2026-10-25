@@ -593,6 +593,7 @@ class _ExportOptionsDialogState extends State<ExportOptionsDialog> {
                               vertical: 12,
                             ),
                             textStyle: const TextStyle(
+                              fontFamily: 'Montserrat',
                               fontSize: 13.5,
                               fontWeight: FontWeight.w600,
                             ),

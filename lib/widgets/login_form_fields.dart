@@ -495,8 +495,8 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
               keyboardType: TextInputType.emailAddress,
               hint: 'admin@example.com',
               icon: Icons.email_outlined,
-              textInputAction: TextInputAction.next,
-              onSubmitted: (_) => FocusScope.of(context).nextFocus(),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => _loading ? null : _login(),
               autofillHints: const [
                 AutofillHints.email,
                 AutofillHints.username,
@@ -686,7 +686,7 @@ class _LoginFormFieldsState extends State<LoginFormFields> {
                     ? null
                     : _continueWithGoogle,
                 style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  padding: const EdgeInsets.symmetric(vertical: 11),
                   side: BorderSide(color: Colors.grey[300]!),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(30),

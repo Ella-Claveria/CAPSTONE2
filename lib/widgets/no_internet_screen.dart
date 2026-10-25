@@ -90,7 +90,7 @@ class NoInternetScreen extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.dark,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: const StadiumBorder(),
                     ),
                   ),

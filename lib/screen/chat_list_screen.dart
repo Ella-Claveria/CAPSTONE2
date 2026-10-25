@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../theme/app_theme.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -61,18 +63,33 @@ class _ChatListScreenState extends State<ChatListScreen> {
   // one of them and drop back to the loading state.
   late final Stream<QuerySnapshot<Map<String, dynamic>>> _conversationsStream =
       _messageService.myConversationsStream();
-  final Map<String, Stream<DocumentSnapshot<Map<String, dynamic>>>>
-  _profileStreams = {};
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _ownUserStream;
 
-  Stream<DocumentSnapshot<Map<String, dynamic>>> _profileStream(String uid) =>
-      _profileStreams.putIfAbsent(
-        uid,
-        () => FirebaseFirestore.instance
-            .collection('publicProfiles')
-            .doc(uid)
-            .snapshots(),
-      );
+  // Each person's public profile (name, photo, location), kept here, one
+  // subscription per person for as long as this list lives. Rows read it
+  // from here rather than each subscribing for themselves: rows are
+  // rebuilt whenever the list re-sorts, and a Firestore stream that is
+  // already being listened to sends nothing to a newcomer — so a rebuilt
+  // row could be left with no profile (initials, no photo) or, keeping its
+  // old one, show someone else's.
+  final Map<String, Map<String, dynamic>?> _profiles = {};
+  final Map<String, StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>
+  _profileSubs = {};
+
+  /// [uid]'s latest public profile; null until it has loaded.
+  Map<String, dynamic>? _profileOf(String uid) {
+    _profileSubs.putIfAbsent(
+      uid,
+      () => FirebaseFirestore.instance
+          .collection('publicProfiles')
+          .doc(uid)
+          .snapshots()
+          .listen((snap) {
+            if (mounted) setState(() => _profiles[uid] = snap.data());
+          }, onError: (_) {}),
+    );
+    return _profiles[uid];
+  }
 
   bool get _inboxMode => widget.mode == ChatListMode.inbox;
 
@@ -96,6 +113,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   @override
   void dispose() {
+    for (final sub in _profileSubs.values) {
+      sub.cancel();
+    }
     _prefs.removeListener(_onPrefsChanged);
     super.dispose();
   }
@@ -258,15 +278,21 @@ class _ChatListScreenState extends State<ChatListScreen> {
               return AgriRefreshIndicator(
                 color: _dark,
                 onRefresh: _refreshData,
+                // Flat rows on the page, a hairline between them — not
+                // floating cards.
                 child: ListView.separated(
-                  padding: EdgeInsets.fromLTRB(
-                    12,
-                    _inboxMode ? 4 : 12,
-                    12,
-                    _inboxMode ? 90 : 24,
+                  padding: EdgeInsets.only(
+                    top: _inboxMode ? 4 : 8,
+                    bottom: _inboxMode ? 90 : 24,
                   ),
                   itemCount: docs.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 4),
+                  separatorBuilder: (_, _) => Divider(
+                    height: 1,
+                    thickness: 1,
+                    indent: 16,
+                    endIndent: 16,
+                    color: Colors.grey[200],
+                  ),
                   itemBuilder: (context, i) {
                     final doc = docs[i];
                     final data = doc.data();
@@ -300,7 +326,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   Widget _searchBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: _searchField(),
     );
   }
@@ -323,7 +349,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
 
   Widget _filterChips() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Row(
         children: [
           _filterChip(tr(context).filterAll, 'all'),
@@ -490,27 +516,22 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final names = Map<String, dynamic>.from(data['participantNames'] ?? {});
     final otherName = names[otherUid]?.toString() ?? 'User';
 
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: otherUid.isEmpty ? null : _profileStream(otherUid),
-      builder: (context, snapshot) {
-        final profile = snapshot.data?.data();
-        final profileName = profile?['name']?.toString().trim();
-        final resolvedName = profileName != null && profileName.isNotEmpty
-            ? profileName
-            : otherName;
-        final photoUrl = profile?['photoUrl']?.toString();
-        final location = _profileLocation(profile);
-        return _conversationTileContent(
-          context,
-          conversationId,
-          data,
-          myUid,
-          otherUid,
-          resolvedName,
-          photoUrl,
-          location,
-        );
-      },
+    final profile = otherUid.isEmpty ? null : _profileOf(otherUid);
+    final profileName = profile?['name']?.toString().trim();
+    final resolvedName = profileName != null && profileName.isNotEmpty
+        ? profileName
+        : otherName;
+    final photoUrl = profile?['photoUrl']?.toString();
+    final location = _profileLocation(profile);
+    return _conversationTileContent(
+      context,
+      conversationId,
+      data,
+      myUid,
+      otherUid,
+      resolvedName,
+      photoUrl,
+      location,
     );
   }
 
@@ -585,7 +606,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
         ],
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
         onLongPress: () => _showConversationActions(
           conversationId,
           data,
@@ -602,19 +622,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
           otherName: otherName,
           otherPhotoUrl: otherPhotoUrl,
         ),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [
               Stack(

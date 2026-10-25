@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -94,6 +96,11 @@ class AgriDialog extends StatelessWidget {
   /// Wraps [content] in a scroll view, for long or form-like content.
   final bool scrollable;
 
+  /// Always lays the actions out one under another, full-width, main
+  /// action on top — for a dialog whose set of buttons varies, so it keeps
+  /// one layout whichever buttons it has.
+  final bool stackedActions;
+
   const AgriDialog({
     super.key,
     this.title,
@@ -102,6 +109,7 @@ class AgriDialog extends StatelessWidget {
     this.icon,
     this.tone = AgriTone.normal,
     this.scrollable = false,
+    this.stackedActions = false,
   });
 
   @override
@@ -179,9 +187,10 @@ class AgriDialog extends StatelessWidget {
     );
   }
 
-  // Two actions side by side (secondary left, primary right as passed);
-  // anything else stacked full-width.
+  // Two actions side by side (secondary left, primary right as passed)
+  // when both labels fit on one line; anything else stacked full-width.
   Widget _actionsRow(BuildContext context, {bool centered = false}) {
+    if (stackedActions) return _stacked();
     // A lone button on a wide window (the Admin Portal in a browser) is
     // only as wide as its label, centred, instead of a bar across the
     // whole popup. On a phone it stays full-width, easy to reach.
@@ -222,28 +231,48 @@ class AgriDialog extends StatelessWidget {
         ),
       );
     }
-    if (actions.length <= 2) {
-      // Equal widths, and equal heights too: when one label is long enough
-      // to wrap ("Enable Notifications"), the other button grows with it
-      // instead of sitting shorter beside it.
-      return IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < actions.length; i++) ...[
-              if (i > 0) const SizedBox(width: 10),
-              Expanded(child: actions[i]),
-            ],
-          ],
-        ),
-      );
+    if (actions.length == 1) {
+      return SizedBox(width: double.infinity, child: actions.single);
     }
+    if (actions.length > 2) return _stacked();
+    // Two equal-width, one-line pills side by side. A label too long for
+    // half the popup would wrap and make both buttons tall, so then they
+    // are stacked instead — always the same slim height.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final half = (constraints.maxWidth - _actionGap) / 2;
+        final fits = actions.every(
+          (a) => a is! AgriDialogButton || a.fitsOneLine(context, half),
+        );
+        if (!fits) return _stacked();
+        return Row(
+          children: [
+            Expanded(child: actions[0]),
+            const SizedBox(width: _actionGap),
+            Expanded(child: actions[1]),
+          ],
+        );
+      },
+    );
+  }
+
+  static const double _actionGap = 10;
+
+  // One under another, full-width: the main action (primary or
+  // destructive) first, then the rest in the order passed.
+  Widget _stacked() {
+    bool isMain(Widget a) =>
+        a is AgriDialogButton && a.kind != AgriButtonKind.secondary;
+    final ordered = [
+      ...actions.where(isMain),
+      ...actions.where((a) => !isMain(a)),
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (var i = 0; i < actions.length; i++) ...[
+        for (var i = 0; i < ordered.length; i++) ...[
           if (i > 0) const SizedBox(height: 8),
-          actions[i],
+          ordered[i],
         ],
       ],
     );
@@ -283,20 +312,37 @@ class AgriDialogButton extends StatelessWidget {
     this.compact = false,
   });
 
+  TextStyle get _textStyle => GoogleFonts.montserrat(
+    fontSize: compact ? 12.5 : 13,
+    fontWeight: FontWeight.w600,
+  );
+
+  // A slim pill (about 40 high): a popup's buttons should not outweigh
+  // its message.
+  EdgeInsets get _padding => compact
+      ? const EdgeInsets.symmetric(vertical: 6, horizontal: 16)
+      : const EdgeInsets.symmetric(vertical: 9, horizontal: 18);
+
+  /// Whether [label] fits on one line in a button [width] wide.
+  bool fitsOneLine(BuildContext context, double width) {
+    final painter = TextPainter(
+      text: TextSpan(text: label, style: _textStyle),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final fits = painter.width <= width - _padding.horizontal;
+    painter.dispose();
+    return fits;
+  }
+
   @override
   Widget build(BuildContext context) {
     final shape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(30),
     );
-    final textStyle = GoogleFonts.montserrat(
-      fontSize: compact ? 12.5 : 13,
-      fontWeight: FontWeight.w600,
-    );
-    // A slim pill (about 40 high): a popup's buttons should not outweigh
-    // its message.
-    final padding = compact
-        ? const EdgeInsets.symmetric(vertical: 6, horizontal: 16)
-        : const EdgeInsets.symmetric(vertical: 9, horizontal: 18);
+    final textStyle = _textStyle;
+    final padding = _padding;
     final minimumSize = compact ? const Size(0, 32) : const Size(0, 40);
     const tapTargetSize = MaterialTapTargetSize.shrinkWrap;
     final Widget child = loading
@@ -638,12 +684,21 @@ Future<T?> showAgriPopupMenu<T>({
         final safe = MediaQuery.viewPaddingOf(dialogContext);
         final fitsBelow =
             anchor.bottom + 2 + menuHeight <= screen.height - safe.bottom - 8;
+        // Lined up with the anchor's right edge; an anchor near the left of
+        // the screen (narrower than the menu) has it open to the right from
+        // its left edge instead, so the menu never runs off the screen.
+        final maxLeft = math.max(12.0, screen.width - width - 12);
+        final rightAligned = anchor.right - width;
+        final left = (rightAligned >= 12 ? rightAligned : anchor.left).clamp(
+          12.0,
+          maxLeft,
+        );
         return Stack(
           children: [
             Positioned(
               top: fitsBelow ? anchor.bottom + 2 : null,
               bottom: fitsBelow ? null : screen.height - anchor.top + 2,
-              right: (screen.width - anchor.right).clamp(12.0, screen.width),
+              left: left,
               width: width,
               child: card,
             ),

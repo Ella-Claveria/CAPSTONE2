@@ -602,9 +602,9 @@ class _NicknameDialogState extends State<_NicknameDialog> {
             decoration: const InputDecoration(hintText: 'Nickname'),
             onSubmitted: (value) => Navigator.pop(context, value),
           ),
+          const SizedBox(height: 6),
           Text(
-            'Only you see this nickname, and only in this conversation. '
-            'Their real name stays the same everywhere else.',
+            'Only you see this nickname, and only in this conversation.',
             textAlign: TextAlign.center,
             style: GoogleFonts.montserrat(
               fontSize: 11.5,

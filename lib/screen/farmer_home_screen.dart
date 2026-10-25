@@ -8,6 +8,7 @@ import '../widgets/agri_dialog.dart';
 import '../widgets/coach_mark.dart';
 import '../widgets/swipeable_tabs.dart';
 import '../widgets/unread_messages_dot.dart';
+import '../widgets/unseen_orders_dot.dart';
 import '../widgets/docked_nav_bar.dart';
 import '../widgets/page_header.dart';
 import 'add_product_screen.dart';
@@ -41,13 +42,6 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
 
   // 0 = Market, 1 = Messages, 2 = Orders, 3 = Profile
   late int _selectedIndex = widget.initialIndex;
-
-  // The bottom bar slides away while a long page is scrolled down
-  // (NavBarAutoHide), and is back on any scroll up or tab change.
-  bool _navHidden = false;
-  void _setNavHidden(bool hidden) {
-    if (hidden != _navHidden && mounted) setState(() => _navHidden = hidden);
-  }
 
   final _addProductKey = GlobalKey();
   final _ordersTabKey = GlobalKey();
@@ -149,9 +143,8 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
       child: Scaffold(
         backgroundColor: _bg,
         // ---- Bottom navigation bar (Market · Messages · + · Orders · Profile) ----
-        // Docked to the bottom edge (not floating), Android-style.
+        // The small floating bar, always on screen.
         bottomNavigationBar: DockedNavBar(
-          hidden: _navHidden,
           children: [
             _navItem(
               0,
@@ -173,6 +166,7 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
               Icons.shopping_bag,
               tr(context).navOrders,
               key: _ordersTabKey,
+              showUnseenOrdersDot: true,
             ),
             _navItem(
               3,
@@ -192,14 +186,14 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
         body: PageHeaderSafeArea(
           // Swipe left or right to move between the tabs, as well as
           // tapping them in the bar below.
-          child: NavBarAutoHide(
-            onHiddenChanged: _setNavHidden,
+          // The header's logo opens Market from any tab, and every tab's
+          // header has the notification bell.
+          child: HomeLogoAction(
+            onTap: () => setState(() => _selectedIndex = 0),
+            onNotifications: _openNotifications,
             child: SwipeableTabs(
               index: _selectedIndex,
-              onIndexChanged: (i) => setState(() {
-                _selectedIndex = i;
-                _navHidden = false;
-              }),
+              onIndexChanged: (i) => setState(() => _selectedIndex = i),
               children: [
                 MarketTab(
                   onNavigateToTab: (i) => setState(() => _selectedIndex = i),
@@ -223,66 +217,48 @@ class _FarmerHomeScreenState extends State<FarmerHomeScreen> {
     String label, {
     Key? key,
     bool showUnreadDot = false,
+    bool showUnseenOrdersDot = false,
   }) {
-    final selected = _selectedIndex == index;
-    final color = selected ? _dark : const Color(0xFFAAB4AC);
-    final iconWidget = Icon(
-      selected ? activeIcon : icon,
-      color: color,
-      size: 20,
-    );
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() {
-          _selectedIndex = index;
-          _navHidden = false;
-        }),
-        child: Column(
-          key: key,
-          mainAxisAlignment: MainAxisAlignment.center,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            showUnreadDot ? UnreadMessagesDot(child: iconWidget) : iconWidget,
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 9.5,
-                color: color,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-              ),
-            ),
-          ],
-        ),
-      ),
+    return NavBarItem(
+      key: key,
+      icon: icon,
+      activeIcon: activeIcon,
+      label: label,
+      selected: _selectedIndex == index,
+      onTap: () => setState(() => _selectedIndex = index),
+      decorateIcon: showUnreadDot
+          ? (icon) => UnreadMessagesDot(child: icon)
+          : showUnseenOrdersDot
+          ? (icon) => UnseenOrdersDot(child: icon)
+          : null,
     );
   }
 
   Widget _buildAddButton() {
     return Expanded(
       child: Center(
+        // Small, rising just above the floating bar.
         child: Transform.translate(
-          offset: const Offset(0, -17),
+          offset: const Offset(0, -10),
           child: InkWell(
             onTap: _openAddProduct,
             customBorder: const CircleBorder(),
             child: Container(
               key: _addProductKey,
-              width: 58,
-              height: 58,
+              width: 46,
+              height: 46,
               decoration: BoxDecoration(
                 color: _dark,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: _dark.withValues(alpha: 0.30),
-                    blurRadius: 12,
-                    spreadRadius: 1,
-                    offset: const Offset(0, 4),
+                    color: _dark.withValues(alpha: 0.28),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
                   ),
                 ],
               ),
-              child: const Icon(Icons.add, color: Colors.white, size: 31),
+              child: const Icon(Icons.add, color: Colors.white, size: 24),
             ),
           ),
         ),

@@ -695,7 +695,7 @@ class _MarketTabState extends State<MarketTab> {
                           foregroundColor: _dark,
                           side: const BorderSide(color: Color(0xFFDDE5DB)),
                           shape: const StadiumBorder(),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
                         ),
                         child: const Text('Cancel'),
                       ),
@@ -710,7 +710,7 @@ class _MarketTabState extends State<MarketTab> {
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: const StadiumBorder(),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
                         ),
                         child: const Text('Apply'),
                       ),
@@ -866,65 +866,76 @@ class _MarketTabState extends State<MarketTab> {
         }
         final productCount = _lastProductCount;
 
-        return AgriRefreshIndicator(
-          onRefresh: _refresh,
-          child: NotificationListener<ScrollNotification>(
-            onNotification: (n) {
-              if (n is ScrollUpdateNotification || n is ScrollEndNotification) {
-                _hints.onScroll(
-                  context,
-                  userScroll:
-                      n is ScrollUpdateNotification && n.dragDetails != null,
-                );
-              }
-              return false;
-            },
-            child: ListView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.only(bottom: 90),
-              children: [
-                // Same title row as Messages, Orders and Profile.
-                PageHeader(
-                  title: tr(context).navMarket,
-                  trailing: widget.onNotificationsPressed == null
-                      ? null
-                      : NotificationBell(
-                          onPressed: widget.onNotificationsPressed!,
-                          color: PageHeader.onBandColor,
-                        ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+        // The header stays put; pull-to-refresh starts under it.
+        return Column(
+          children: [
+            // The band stays put; the title scrolls with the page below.
+            PageHeader(
+              title: tr(context).navMarket,
+              includeTitle: false,
+              trailing: widget.onNotificationsPressed == null
+                  ? null
+                  : NotificationBell(
+                      onPressed: widget.onNotificationsPressed!,
+                      color: PageHeader.onBandColor,
+                    ),
+            ),
+            Expanded(
+              child: AgriRefreshIndicator(
+                onRefresh: _refresh,
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (n) {
+                    if (n is ScrollUpdateNotification ||
+                        n is ScrollEndNotification) {
+                      _hints.onScroll(
+                        context,
+                        userScroll:
+                            n is ScrollUpdateNotification &&
+                            n.dragDetails != null,
+                      );
+                    }
+                    return false;
+                  },
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 90),
                     children: [
-                      _welcomeHeader(productCount),
-                      const SizedBox(height: 16),
-                      _statRow(productCount),
-                      const SizedBox(height: 16),
-                      KeyedSubtree(
-                        key: _hints.keys[0],
-                        child: _salesPerformanceLineCard(productCount),
-                      ),
-                      const SizedBox(height: 16),
-                      // What supported products are selling for right now.
-                      KeyedSubtree(
-                        key: _hints.keys[1],
-                        child: const MarketAverageCard(),
-                      ),
-                      const SizedBox(height: 16),
-                      // Same month as the Sales Performance card above.
-                      MarketDemandCards(
-                        month: _analyticsMonth,
-                        bestSellersKey: _hints.keys[2],
-                        locationsKey: _hints.keys[3],
+                      PageTitle(title: tr(context).navMarket),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _welcomeHeader(productCount),
+                            const SizedBox(height: 16),
+                            _statRow(productCount),
+                            const SizedBox(height: 16),
+                            KeyedSubtree(
+                              key: _hints.keys[0],
+                              child: _salesPerformanceLineCard(productCount),
+                            ),
+                            const SizedBox(height: 16),
+                            // What supported products are selling for right now.
+                            KeyedSubtree(
+                              key: _hints.keys[1],
+                              child: const MarketAverageCard(),
+                            ),
+                            const SizedBox(height: 16),
+                            // Same month as the Sales Performance card above.
+                            MarketDemandCards(
+                              month: _analyticsMonth,
+                              bestSellersKey: _hints.keys[2],
+                              locationsKey: _hints.keys[3],
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
                 ),
-              ],
+              ),
             ),
-          ),
+          ],
         );
       },
     );

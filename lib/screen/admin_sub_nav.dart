@@ -23,9 +23,9 @@ extension UserAccountsSectionLabel on UserAccountsSection {
 /// The Moderation Queue's tabs: the reports, by where each stands.
 enum ModerationSection { pending, underReview, resolved }
 
-/// The Violations page's tabs: accounts with a confirmed violation, and
-/// listings priced far above their suggested range.
-enum ViolationSection { violations, priceFlags }
+/// The Violations page's tab: accounts with a confirmed violation. (Prices
+/// are not policed — a farmer sets their own — so there is no price tab.)
+enum ViolationSection { violations }
 
 /// The Audit Log's groups of actions.
 enum AuditSection { all, login, adminActions, moderation }
@@ -41,7 +41,6 @@ extension ModerationSectionLabel on ModerationSection {
 extension ViolationSectionLabel on ViolationSection {
   String get label => switch (this) {
     ViolationSection.violations => 'Violations',
-    ViolationSection.priceFlags => 'Price Flags',
   };
 }
 

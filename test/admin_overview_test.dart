@@ -159,42 +159,60 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Sales Performance shows an empty state with no sales', (
-    tester,
-  ) async {
-    await pump(
-      tester,
-      AdminSalesPerformanceCard(
-        orders: [order('pending', DateTime.now(), 500)],
-      ),
-    );
-    expect(tester.takeException(), isNull);
-    expect(
-      find.text(
-        'No completed sales data available for the selected period yet.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.byType(LineChart), findsNothing);
-    expect(find.text('Last 6 Months'), findsOneWidget);
-  });
-
-  testWidgets('Sales Performance charts completed orders and its period '
-      'filter changes the months shown', (tester) async {
-    final today = DateTime.now();
+  testWidgets('Sales Performance says so when the product has no completed '
+      'orders in the period', (tester) async {
     await pump(
       tester,
       AdminSalesPerformanceCard(
         orders: [
-          order('completed', today, 1200),
-          order('completed', today, 300),
-          order('cancelled', today, 9999),
+          {...order('pending', DateTime.now(), 500), 'productName': 'Corn'},
         ],
       ),
     );
     expect(tester.takeException(), isNull);
-    expect(find.text('₱1,500.00'), findsOneWidget);
-    expect(find.text('2 completed orders'), findsOneWidget);
+    expect(find.textContaining('No completed orders of'), findsOneWidget);
+    expect(find.byType(LineChart), findsNothing);
+    expect(find.text('Last 6 Months'), findsOneWidget);
+    expect(find.text('All Categories'), findsOneWidget);
+  });
+
+  testWidgets('Sales Performance shows one product\'s demand month by '
+      'month, opening on the best seller, and its period filter changes '
+      'the months shown', (tester) async {
+    final today = DateTime.now();
+    final lastMonth = DateTime(today.year, today.month - 1, 10);
+    Map<String, dynamic> sale(
+      String product,
+      DateTime at,
+      num quantity,
+      num total,
+    ) => {
+      ...order('completed', at, total),
+      'productName': product,
+      'quantity': quantity,
+      'unit': 'kg',
+    };
+    await pump(
+      tester,
+      AdminSalesPerformanceCard(
+        orders: [
+          sale('Corn', lastMonth, 30, 900),
+          sale('Corn', today, 10, 300),
+          sale('Corn', today, 5, 150),
+          sale('Cassava', today, 4, 100),
+          {...order('cancelled', today, 9999), 'productName': 'Corn'},
+        ],
+      ),
+    );
+    expect(tester.takeException(), isNull);
+    // Corn sold the most, so it is shown first.
+    expect(find.text('Corn'), findsOneWidget);
+    expect(find.text('45 kg sold'), findsOneWidget);
+    expect(
+      find.textContaining('₱1,350.00 · 3 completed orders'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Best month: '), findsOneWidget);
     List<FlSpot> points() => tester
         .widget<LineChart>(find.byType(LineChart))
         .data
@@ -202,7 +220,9 @@ void main() {
         .single
         .spots;
     expect(points().length, 6);
-    expect(points().last.y, 1500);
+    // 30 kg last month, down to 15 kg this month.
+    expect(points()[4].y, 30);
+    expect(points().last.y, 15);
 
     await tester.tap(find.text('Last 6 Months'));
     await tester.pumpAndSettle();
@@ -210,6 +230,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(points().length, 12);
+
+    // A category narrows the products; it opens on its own best seller.
+    await tester.tap(find.text('All Categories'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Root Crops').last);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Cassava'), findsOneWidget);
+    expect(find.text('4 kg sold'), findsOneWidget);
   });
 
   testWidgets('Sales by Category lists real categories and their shares, '

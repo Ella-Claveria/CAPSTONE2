@@ -628,6 +628,109 @@ class DashboardAnalyticsService {
     ];
   }
 
+  /// SALES PERFORMANCE by product: for each of the [months] calendar months
+  /// ending this one, the revenue and number of completed orders of every
+  /// product (its supported commodity, else the order's own product name)
+  /// — the [limit] that sold the most over the whole
+  /// period, highest first (ranked by revenue, as Top-Selling Products
+  /// is). A month in which a product sold nothing is a real 0, so a line
+  /// shows the drop.
+  static List<({String name, List<double> revenue, List<int> orders})>
+  monthlyProductSales(
+    Iterable<Map<String, dynamic>> orders, {
+    required DateTime now,
+    int months = 6,
+    int limit = 5,
+  }) {
+    final first = DateTime(now.year, now.month - (months - 1), 1);
+    final revenue = <String, List<double>>{};
+    final counts = <String, List<int>>{};
+    for (final data in orders) {
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') {
+        continue;
+      }
+      // A product not on the commodity list still has its sales charted,
+      // under its own name.
+      final productName = (data['productName'] ?? '').toString().trim();
+      final name =
+          orderCommodity(data) ?? (productName.isEmpty ? null : productName);
+      final date = _completionDate(data);
+      if (name == null || date == null) continue;
+      final index = (date.year - first.year) * 12 + (date.month - first.month);
+      if (index < 0 || index >= months) continue;
+      final total = data['total'];
+      revenue.putIfAbsent(
+        name,
+        () => List<double>.filled(months, 0),
+      )[index] += total is num
+          ? total.toDouble()
+          : double.tryParse(total?.toString() ?? '') ?? 0;
+      counts.putIfAbsent(name, () => List<int>.filled(months, 0))[index]++;
+    }
+    double sum(List<double> values) => values.fold(0, (a, b) => a + b);
+    final ranked = revenue.keys.toList()
+      ..sort((a, b) {
+        final byRevenue = sum(revenue[b]!).compareTo(sum(revenue[a]!));
+        return byRevenue != 0 ? byRevenue : a.compareTo(b);
+      });
+    return [
+      for (final name in ranked.take(limit))
+        (name: name, revenue: revenue[name]!, orders: counts[name]!),
+    ];
+  }
+
+  /// SALES PERFORMANCE for one [product]: its demand in each of the
+  /// [months] calendar months ending this one — the quantity sold in
+  /// completed orders (in the product's own unit), their revenue and how
+  /// many there were — so the months it sells best, and where it drops,
+  /// show. A month with no sale is a real 0.
+  static List<({DateTime month, double quantity, double revenue, int orders})>
+  monthlyDemandFor(
+    Iterable<Map<String, dynamic>> orders, {
+    required String product,
+    required DateTime now,
+    int months = 6,
+  }) {
+    final first = DateTime(now.year, now.month - (months - 1), 1);
+    final target = product.trim().toLowerCase();
+    final unit = unitForCommodity(product).toLowerCase();
+    final quantity = List<double>.filled(months, 0);
+    final revenue = List<double>.filled(months, 0);
+    final counts = List<int>.filled(months, 0);
+    for (final data in orders) {
+      if ((data['status'] ?? '').toString().toLowerCase() != 'completed') {
+        continue;
+      }
+      final productName = (data['productName'] ?? '').toString().trim();
+      final name = orderCommodity(data) ?? productName;
+      if (name.toLowerCase() != target) continue;
+      final date = _completionDate(data);
+      if (date == null) continue;
+      final index = (date.year - first.year) * 12 + (date.month - first.month);
+      if (index < 0 || index >= months) continue;
+      final total = data['total'];
+      revenue[index] += total is num
+          ? total.toDouble()
+          : double.tryParse(total?.toString() ?? '') ?? 0;
+      counts[index]++;
+      // Quantities only add up in one unit (never kg with heads).
+      final orderUnit = (data['unit'] ?? '').toString().trim().toLowerCase();
+      final q = data['quantity'];
+      if ((orderUnit.isEmpty || orderUnit == unit) && q is num) {
+        quantity[index] += q.toDouble();
+      }
+    }
+    return [
+      for (var i = 0; i < months; i++)
+        (
+          month: DateTime(first.year, first.month + i, 1),
+          quantity: quantity[i],
+          revenue: revenue[i],
+          orders: counts[i],
+        ),
+    ];
+  }
+
   /// The supported commodity a completed order was for: the commodity
   /// frozen on the order, or the one its product name refers to ("Native
   /// Chicken" is Chicken). Null for a product that is not on the Admin's

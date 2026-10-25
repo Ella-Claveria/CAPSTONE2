@@ -15,12 +15,13 @@ import '../services/product_service.dart';
 import '../services/cloudinary_service.dart';
 import '../services/delivery_coverage.dart';
 import '../services/harvest_info.dart';
-import '../services/price_deviation.dart';
 import '../services/price_recommendation_service.dart';
 import '../data/commodity_master_list.dart';
 import '../theme/app_theme.dart';
 import '../widgets/agri_dialog.dart';
 import '../widgets/delivery_area_picker.dart';
+import '../widgets/update_stock_dialog.dart'
+    show kMaxStock, stockInputFormatters;
 import '../widgets/profile_avatar.dart';
 import 'supported_products_screen.dart';
 
@@ -47,8 +48,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   // both null or both set — passing only the controller trips its
   // "textEditingController and focusNode must be provided" assertion.
   final _nameFocusNode = FocusNode();
-  // Leaving a price field is what triggers its price warning (see
-  // _checkPrice) — not every keystroke.
+  // A validation error focuses its price field (see _showErrorAt).
   final _priceFocusNode = FocusNode();
   final _wholesalePriceFocusNode = FocusNode();
   final _quantityFocusNode = FocusNode();
@@ -70,14 +70,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
 
   _FormIssue? get _shownIssue => _showValidation ? _issue : null;
 
-  // The last price each warning was evaluated for (see _checkPrice).
-  double? _checkedRetailPrice;
-  double? _checkedWholesalePrice;
-
-  // What the farmer already answered "Post Anyway" to, so the same
-  // warning isn't shown again unless the price changes meaningfully.
-  ({double price, PriceDeviationLevel level})? _confirmedRetail;
-  ({double price, PriceDeviationLevel level})? _confirmedWholesale;
   final _priceController = TextEditingController();
   final _wholesalePriceController = TextEditingController();
   final _wholesaleMinimumController = TextEditingController(text: '10');
@@ -457,19 +449,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     }
     _loadFarmOrigin();
     _listenToMarketData();
-
-    // An existing listing's prices count as already checked, so their
-    // notes show as soon as the market data arrives.
-    _checkedRetailPrice = double.tryParse(_priceController.text.trim());
-    _checkedWholesalePrice = double.tryParse(
-      _wholesalePriceController.text.trim(),
-    );
-    _priceFocusNode.addListener(() {
-      if (!_priceFocusNode.hasFocus) _checkPrice(wholesale: false);
-    });
-    _wholesalePriceFocusNode.addListener(() {
-      if (!_wholesalePriceFocusNode.hasFocus) _checkPrice(wholesale: true);
-    });
     _openedForm = _formSignature();
   }
 
@@ -905,6 +884,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
         _quantityFocusNode,
       );
     }
+    if (quantity.floor() > kMaxStock) {
+      return issue(
+        'Available stock can be at most 9,999 $unit.',
+        _stockKey,
+        _quantityFocusNode,
+      );
+    }
 
     if (priceText.isEmpty) {
       return issue('Retail price is required.', _priceKey, _priceFocusNode);
@@ -1021,76 +1007,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
         ? num.parse(_wholesaleMinimumController.text.trim())
         : null;
 
-    // Price checks — advisory only, never a block (see the PRICE WARNINGS
-    // section). Retail is checked against the retail range, wholesale
-    // against the wholesale range. "Post Anyway" always lets the listing
-    // through; far-above-range prices also save an internal flag for the
-    // Admin Moderation Queue.
-    //
-    // The ONLY early return in here is the farmer tapping "Adjust Price"
-    // (or dismissing the dialog). Anything going wrong inside the
-    // comparison itself is swallowed and posting carries on unflagged.
-    _checkPrice(wholesale: false);
-    if (_wholesaleEnabled) _checkPrice(wholesale: true);
-    final flaggedPrices = <Map<String, dynamic>>[];
-    for (final wholesale in [false, if (_wholesaleEnabled) true]) {
-      final entered = wholesale ? wholesalePrice! : price;
-      PriceDeviation? deviation;
-      try {
-        deviation = _deviationFor(entered, wholesale: wholesale);
-      } catch (_) {
-        deviation = null;
-      }
-      if (deviation == null) continue;
-
-      final confirmed = wholesale ? _confirmedWholesale : _confirmedRetail;
-      final alreadyConfirmed =
-          confirmed != null &&
-          deviation.coveredBy(confirmed.price, confirmed.level);
-      if (deviation.needsConfirmation && !alreadyConfirmed) {
-        final postAnyway = await _confirmPriceDeviation(
-          deviation,
-          wholesale: wholesale,
-        );
-        if (!mounted) return;
-        if (!postAnyway) {
-          // "Adjust Price": take the farmer straight to that price field.
-          _scrollTo(wholesale ? _wholesalePriceKey : _priceKey);
-          (wholesale ? _wholesalePriceFocusNode : _priceFocusNode)
-              .requestFocus();
-          return;
-        }
-        final answer = (price: entered, level: deviation.level);
-        if (wholesale) {
-          _confirmedWholesale = answer;
-        } else {
-          _confirmedRetail = answer;
-        }
-      }
-
-      if (deviation.shouldFlag) {
-        flaggedPrices.add({
-          'pricingType': wholesale ? 'wholesale' : 'retail',
-          'enteredPrice': entered,
-          'suggestedLowerPrice': deviation.lower,
-          'suggestedUpperPrice': deviation.upper,
-          'percentAbove': double.parse(deviation.percentLabel),
-          'dataAvailability': deviation.dataAvailability,
-        });
-      }
-    }
-    final Map<String, dynamic>? priceFlag = flaggedPrices.isEmpty
-        ? null
-        : {
-            'type': 'high_price',
-            'label': PriceDeviationConfig.highPriceFlagLabel,
-            'reason': PriceDeviationConfig.highPriceFlagReason,
-            'reviewStatus': PriceDeviationConfig.highPriceFlagStatus,
-            'productName': name,
-            'unit': unit,
-            'items': flaggedPrices,
-          };
-
+    // The price is the farmer's to set: it is never checked against the
+    // suggested range here, never needs confirming and never flagged — the
+    // buyer decides whether to buy at it. The suggested range stays on the
+    // form as a guide only.
     setState(() => _loading = true);
 
     String? error;
@@ -1109,6 +1029,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
         imageUrls.add(_imageUrl!);
       }
 
+      // A listing flagged for its price by an earlier version of the app
+      // loses the flag when it is next saved.
       final hadPriceFlag = widget.existingData?['priceFlag'] != null;
       // Only written when it actually changed, so an edit that doesn't
       // involve the harvest date never touches the field.
@@ -1120,7 +1042,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
           ? harvestDate == null ||
                 !DateUtils.isSameDay(storedHarvest.toDate(), harvestDate)
           : harvestDate != null;
-      Future<String?> saveProduct(Map<String, dynamic>? flag) {
+      Future<String?> saveProduct() {
         if (_isEditing) {
           return _productService.updateProduct(
             id: widget.productId!,
@@ -1139,8 +1061,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
             commodity: _selectedCommodity,
             unit: unit,
             sellingOption: _listingOption?.value,
-            priceFlag: flag,
-            clearPriceFlag: flag == null && hadPriceFlag,
+            clearPriceFlag: hadPriceFlag,
             harvestDate: harvestChanged ? harvestDate : null,
             clearHarvestDate: harvestChanged && harvestDate == null,
           );
@@ -1161,18 +1082,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
           commodity: _selectedCommodity,
           unit: unit,
           sellingOption: _listingOption?.value,
-          priceFlag: flag,
           harvestDate: harvestDate,
         );
       }
 
-      error = await saveProduct(priceFlag);
-      // The moderation flag must never be the reason a listing fails to
-      // save (e.g. rules that don't allow the field yet) — if the flagged
-      // save is rejected, post the listing itself without the flag.
-      if (error != null && priceFlag != null) {
-        error = await saveProduct(null);
-      }
+      error = await saveProduct();
     } catch (_) {
       error = 'Could not save product. Please try again.';
     } finally {
@@ -1186,563 +1100,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
     } else {
       _showError(error);
     }
-  }
-
-  // ==========================================================
-  // PRICE WARNINGS — compares the farmer's Retail Price with the retail
-  // suggested range and the Wholesale Price with the wholesale suggested
-  // range (never mixed). Reads each recommendation as-is (see
-  // _computeRecommendation, which already only pools same-unit data); it
-  // never changes how a recommendation is worked out. Thresholds live in
-  // PriceDeviationConfig (price_deviation.dart). Advisory only — nothing
-  // here blocks, hides or penalises a listing.
-  // ==========================================================
-
-  PriceRecommendation? _recoFor({required bool wholesale}) {
-    final commodity = _matchedCommodity;
-    if (commodity == null) return null;
-    return _computeRecommendation(
-      commodity,
-      pricingType: wholesale ? 'wholesale' : 'retail',
-    );
-  }
-
-  // Null when the price is inside the range, or there is no reliable range
-  // to compare against.
-  PriceDeviation? _deviationFor(double price, {required bool wholesale}) {
-    final reco = _recoFor(wholesale: wholesale);
-    if (reco == null ||
-        reco.tier == PriceDataTier.insufficient ||
-        reco.suggestedLow == null ||
-        reco.suggestedHigh == null) {
-      return null;
-    }
-    return PriceDeviation.evaluate(
-      price: price,
-      lower: reco.suggestedLow!,
-      upper: reco.suggestedHigh!,
-      dataAvailability: reco.tier.dataAvailabilityLabel,
-      limitedData: reco.tier == PriceDataTier.referenceOnly,
-    );
-  }
-
-  String _peso(double value) =>
-      '₱${value == value.roundToDouble() ? value.toStringAsFixed(0) : value.toStringAsFixed(2)}';
-
-  // Limited-data warnings stay amber whatever the percentage — the range
-  // itself is less certain, so the warning is softer.
-  Color _deviationColor(PriceDeviation deviation) {
-    if (deviation.limitedData) return Colors.amber.shade800;
-    return switch (deviation.level) {
-      PriceDeviationLevel.strong => Colors.red.shade700,
-      PriceDeviationLevel.confirm => Colors.orange.shade800,
-      PriceDeviationLevel.mild => Colors.amber.shade800,
-    };
-  }
-
-  String _deviationNote(PriceDeviation deviation) {
-    final String note;
-    if (deviation.level == PriceDeviationLevel.mild) {
-      note = 'Slightly ${deviation.directionLabel} the suggested range.';
-    } else if (deviation.isAbove) {
-      note = 'Higher pricing may reduce buyer interest.';
-    } else {
-      note =
-          'Your product may be underpriced compared with the suggested market range.';
-    }
-    return deviation.limitedData
-        ? '$note This recommendation is based on limited data.'
-        : note;
-  }
-
-  // Marks the typed price as "checked" so its note appears. Called when a
-  // price field loses focus and on Post — never per keystroke, so the
-  // warning doesn't flicker while the farmer is still typing.
-  void _checkPrice({required bool wholesale}) {
-    final price = double.tryParse(
-      (wholesale ? _wholesalePriceController : _priceController).text.trim(),
-    );
-    if (!mounted) return;
-    setState(() {
-      if (wholesale) {
-        _checkedWholesalePrice = price;
-      } else {
-        _checkedRetailPrice = price;
-      }
-    });
-  }
-
-  // The short note under a price field. Shown only for the last checked
-  // price; it disappears as soon as the farmer edits the field again and
-  // is re-evaluated the next time the field is left.
-  Widget _priceWarningBanner({required bool wholesale}) {
-    return ValueListenableBuilder<TextEditingValue>(
-      valueListenable: wholesale ? _wholesalePriceController : _priceController,
-      builder: (context, value, _) {
-        final price = double.tryParse(value.text.trim());
-        final checked = wholesale
-            ? _checkedWholesalePrice
-            : _checkedRetailPrice;
-        if (price == null || price <= 0 || price != checked) {
-          return const SizedBox.shrink();
-        }
-
-        final reco = _recoFor(wholesale: wholesale);
-        if (reco == null) return const SizedBox.shrink();
-        if (reco.tier == PriceDataTier.insufficient) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 6, left: 6),
-            child: Text(
-              'Insufficient data for price comparison.',
-              style: GoogleFonts.montserrat(
-                fontSize: 11.5,
-                color: Colors.grey[600],
-              ),
-            ),
-          );
-        }
-
-        final deviation = _deviationFor(price, wholesale: wholesale);
-        if (deviation == null) return const SizedBox.shrink();
-        final color = _deviationColor(deviation);
-        return Container(
-          margin: const EdgeInsets.only(top: 8),
-          padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color.withValues(alpha: 0.35)),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.warning_amber_rounded, size: 18, color: color),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Your price is ${deviation.percentLabel}% ${deviation.directionLabel} '
-                  'the suggested range. ${_deviationNote(deviation)}',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 11.5,
-                    color: Colors.black87,
-                    height: 1.35,
-                  ),
-                ),
-              ),
-              IconButton(
-                padding: const EdgeInsets.all(6),
-                constraints: const BoxConstraints(),
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.error_outline, size: 18, color: color),
-                tooltip: 'Why am I seeing this?',
-                onPressed: () => _showPriceCalculation(deviation),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _deviationRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: GoogleFonts.montserrat(
-                fontSize: 12.5,
-                color: Colors.black54,
-              ),
-            ),
-          ),
-          Text(
-            value,
-            style: GoogleFonts.montserrat(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: Colors.black87,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // "Why am I seeing this?" — the calculation, spelled out.
-  void _showPriceCalculation(PriceDeviation deviation) {
-    final unit = _currentUnit;
-    final entered = _peso(deviation.enteredPrice);
-    final compared = _peso(deviation.comparisonPrice);
-    final formula = deviation.isAbove
-        ? '($entered - $compared) ÷ $compared × 100'
-        : '($compared - $entered) ÷ $compared × 100';
-
-    showAgriDialog<void>(
-      context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
-        child: AgriFrostedCard(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 30,
-                      height: 30,
-                      decoration: const BoxDecoration(
-                        color: _lightGreenAccent,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(
-                        Icons.priority_high_rounded,
-                        color: _darkGreen,
-                        size: 17,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Why am I seeing this?',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  'Your price is compared with the ${deviation.isAbove ? 'upper' : 'lower'} '
-                  'end of the AI suggested range.',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 12.5,
-                    color: Colors.black87,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                _deviationRow('Entered price', '$entered/$unit'),
-                _deviationRow(
-                  deviation.isAbove
-                      ? 'Suggested upper range'
-                      : 'Suggested lower range',
-                  '$compared/$unit',
-                ),
-                _deviationRow('Data availability', deviation.dataAvailability),
-                const SizedBox(height: 8),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _lightGreenAccent.withValues(alpha: 0.35),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${deviation.percentLabel}% ${deviation.directionLabel} suggested range',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                          color: _darkGreen,
-                          height: 1.2,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '$formula = ${deviation.percentLabel}%',
-                        style: GoogleFonts.montserrat(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.black87,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  deviation.limitedData
-                      ? 'This recommendation is based on limited data. The AI suggestion is advisory. '
-                            'You still make the final pricing decision.'
-                      : 'The AI suggestion is advisory. You still make the final pricing decision.',
-                  style: GoogleFonts.montserrat(
-                    fontSize: 11,
-                    color: Colors.black45,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(dialogContext),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _darkGreen,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      minimumSize: const Size(0, 38),
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(30),
-                      ),
-                    ),
-                    child: Text(
-                      'Got it',
-                      style: GoogleFonts.montserrat(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  // Confirmation shown on Post for a price that needs one (see
-  // PriceDeviation.needsConfirmation). Returns true only for "Post Anyway".
-  Future<bool> _confirmPriceDeviation(
-    PriceDeviation deviation, {
-    required bool wholesale,
-  }) async {
-    // Orange is reserved for the warning icon and the percentage box; dark
-    // green for the title, buttons and link; the card itself stays neutral.
-    final color = Colors.orange.shade800;
-    final unit = _currentUnit;
-    final kind = wholesale ? 'wholesale' : 'retail';
-    // Neutral, "may"-worded consequences — possibilities, not predictions.
-    // Kept as separate short paragraphs rather than one dense block.
-    final explanation = deviation.isAbove
-        ? 'Proceeding with this price may reduce buyer interest and make your listing '
-              'less competitive compared with similar products.'
-        : 'Your product may be underpriced compared with the suggested market range.';
-    final notes = [
-      if (deviation.limitedData)
-        'This recommendation is based on limited data.',
-      if (deviation.shouldFlag)
-        'Because this price exceeds the moderation threshold, the listing may also be '
-            'sent to the Admin Moderation Queue for review.',
-    ];
-
-    final postAnyway = await showAgriDialog<bool>(
-      context: context,
-      builder: (dialogContext) => Dialog(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
-        child: AgriFrostedCard(
-          child: _priceWarningContent(
-            dialogContext,
-            deviation: deviation,
-            color: color,
-            unit: unit,
-            kind: kind,
-            explanation: explanation,
-            notes: notes,
-          ),
-        ),
-      ),
-    );
-    return postAnyway == true;
-  }
-
-  Widget _priceWarningContent(
-    BuildContext dialogContext, {
-    required PriceDeviation deviation,
-    required Color color,
-    required String unit,
-    required String kind,
-    required String explanation,
-    required List<String> notes,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 22, 20, 14),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.warning_amber_rounded, color: color, size: 24),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            deviation.isAbove ? 'High Price Warning' : 'Low Price Warning',
-            textAlign: TextAlign.center,
-            style: GoogleFonts.montserrat(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: _darkGreen,
-            ),
-          ),
-          const SizedBox(height: 8),
-          // The headline figure — highlighted so it reads first.
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text.rich(
-              TextSpan(
-                text: 'Your $kind price is ',
-                children: [
-                  TextSpan(
-                    text:
-                        '${deviation.percentLabel}% ${deviation.directionLabel}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const TextSpan(text: ' the suggested range.'),
-                ],
-              ),
-              textAlign: TextAlign.center,
-              style: GoogleFonts.montserrat(
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                color: color,
-                height: 1.4,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          // Price details as short aligned rows.
-          Container(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
-            decoration: BoxDecoration(
-              color: AppTheme.surface,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              children: [
-                _deviationRow(
-                  'Entered price',
-                  '${_peso(deviation.enteredPrice)}/$unit',
-                ),
-                _deviationRow(
-                  deviation.isAbove
-                      ? 'Suggested upper range'
-                      : 'Suggested lower range',
-                  '${_peso(deviation.comparisonPrice)}/$unit',
-                ),
-                _deviationRow(
-                  'Suggested range',
-                  '${_peso(deviation.lower)} – ${_peso(deviation.upper)}/$unit',
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            explanation,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.montserrat(
-              fontSize: 12.5,
-              color: Colors.black87,
-              height: 1.45,
-            ),
-          ),
-          for (final note in notes) ...[
-            const SizedBox(height: 8),
-            Text(
-              note,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.montserrat(
-                fontSize: 11.5,
-                color: Colors.black54,
-                height: 1.45,
-              ),
-            ),
-          ],
-          const SizedBox(height: 22),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton(
-                  onPressed: () => Navigator.pop(dialogContext, false),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _darkGreen,
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  child: Text(
-                    'Adjust Price',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(dialogContext, true),
-                  style: OutlinedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: _darkGreen,
-                    side: const BorderSide(color: _darkGreen, width: 1.2),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  child: Text(
-                    'Post Anyway',
-                    style: GoogleFonts.montserrat(
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          TextButton(
-            onPressed: () => _showPriceCalculation(deviation),
-            child: Text(
-              'Why am I seeing this?',
-              style: GoogleFonts.montserrat(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: _darkGreen,
-                decoration: TextDecoration.underline,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 
   Future<void> _delete() async {
@@ -3282,7 +2639,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _darkGreen,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(30),
                       ),
@@ -3480,15 +2837,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
                                 keyboardType: TextInputType.numberWithOptions(
                                   decimal: !_isCountBasedUnit,
                                 ),
-                                // Numbers only — the unit is the read-only
+                                // Numbers only, four digits at most (see
+                                // kMaxStock) — the unit is the read-only
                                 // suffix below, set by the selected product.
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.allow(
-                                    RegExp(
-                                      _isCountBasedUnit ? r'[0-9]' : r'[0-9.]',
-                                    ),
-                                  ),
-                                ],
+                                inputFormatters: stockInputFormatters(
+                                  _isCountBasedUnit,
+                                ),
                                 style: GoogleFonts.montserrat(fontSize: 14),
                                 decoration: _inputDecoration(
                                   '0',
@@ -3568,7 +2922,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                     ),
                   ),
                   _fieldError(_priceKey),
-                  _priceWarningBanner(wholesale: false),
                   const SizedBox(height: 12),
 
                   SwitchListTile(
@@ -3636,7 +2989,6 @@ class _AddProductScreenState extends State<AddProductScreen> {
                       ),
                     ),
                     _fieldError(_wholesalePriceKey),
-                    _priceWarningBanner(wholesale: true),
                     const SizedBox(height: 12),
                     _label('Minimum Wholesale Quantity', key: _wholesaleMinKey),
                     _GlowPlate(
@@ -3747,7 +3099,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
                             : Colors.grey.shade400,
                         disabledBackgroundColor: Colors.grey.shade400,
                         foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 15),
+                        padding: const EdgeInsets.symmetric(vertical: 11),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(30),
                         ),

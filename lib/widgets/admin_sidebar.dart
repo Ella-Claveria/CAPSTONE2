@@ -299,13 +299,35 @@ class _AdminSidebarState extends State<AdminSidebar> {
       padding: EdgeInsets.fromLTRB(14, 20, onToggle == null ? 14 : 10, 18),
       child: Row(
         children: [
-          logo,
-          const SizedBox(width: 4),
+          // Logo and wordmark open the first page (the Analytics
+          // Dashboard), like a website's logo.
           Expanded(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
+            child: Align(
               alignment: Alignment.centerLeft,
-              child: AgriTradeText(fontSize: 21, light: colors.lightWordmark),
+              child: Tooltip(
+                message: widget.entries.first.label,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => widget.onSelect(0),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      logo,
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: AgriTradeText(
+                            fontSize: 21,
+                            light: colors.lightWordmark,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
           if (onToggle != null) ...[

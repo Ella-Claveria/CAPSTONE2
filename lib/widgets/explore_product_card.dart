@@ -5,6 +5,7 @@ import '../services/harvest_info.dart';
 import '../services/image_helper.dart';
 import '../services/market_price_helpers.dart';
 import '../theme/app_theme.dart';
+import 'demand_badge.dart';
 import 'save_product_button.dart';
 
 /// One product in the Buyer Explore grid: image on top, then category (and
@@ -113,6 +114,17 @@ class ExploreProductCard extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   _ProductImage(data: data),
+                  // High / Moderate demand from this month's best-sellers,
+                  // as the farmers see it.
+                  Positioned(
+                    top: 7,
+                    left: 7,
+                    right: onToggleSave != null ? 44 : 7,
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: DemandBadge(productName: name),
+                    ),
+                  ),
                   if (onToggleSave != null)
                     Positioned(
                       top: 6,

@@ -109,54 +109,20 @@ Future<bool> showPermissionRationale(
           ],
         ],
       ),
+      // Side by side ("Not Now" | "Allow") when both fit on one line,
+      // else stacked with the main choice on top — see AgriDialog.
       actions: [
-        _choiceButtons(
-          allow: AgriDialogButton(
-            label: allowLabel,
-            kind: AgriButtonKind.primary,
-            onPressed: () => Navigator.pop(context, true),
-          ),
-          deny: AgriDialogButton(
-            label: denyLabel,
-            onPressed: () => Navigator.pop(context, false),
-          ),
-          sideBySide:
-              allowLabel.length <= _shortLabel &&
-              denyLabel.length <= _shortLabel,
+        AgriDialogButton(
+          label: denyLabel,
+          onPressed: () => Navigator.pop(context, false),
+        ),
+        AgriDialogButton(
+          label: allowLabel,
+          kind: AgriButtonKind.primary,
+          onPressed: () => Navigator.pop(context, true),
         ),
       ],
     ),
   );
   return result ?? false;
-}
-
-// Labels this short ("Allow", "Not Now") fit side by side on any phone.
-const _shortLabel = 10;
-
-// The two choices, always the same size. Short labels sit side by side,
-// "Not Now" on the left; longer ones ("Allow Location", "Open Settings")
-// are stacked, the main choice on top, so neither wraps onto two lines and
-// the pair stays even.
-Widget _choiceButtons({
-  required Widget allow,
-  required Widget deny,
-  required bool sideBySide,
-}) {
-  if (sideBySide) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(child: deny),
-          const SizedBox(width: 10),
-          Expanded(child: allow),
-        ],
-      ),
-    );
-  }
-  return Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [allow, const SizedBox(height: 10), deny],
-  );
 }

@@ -183,7 +183,7 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                       foregroundColor: _dark,
                       side: const BorderSide(color: _dark),
                       backgroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: const StadiumBorder(),
                     ),
                   ),
@@ -196,7 +196,7 @@ class _SetFarmLocationScreenState extends State<SetFarmLocationScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _dark,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                      padding: const EdgeInsets.symmetric(vertical: 11),
                       shape: const StadiumBorder(),
                       elevation: 0,
                     ),

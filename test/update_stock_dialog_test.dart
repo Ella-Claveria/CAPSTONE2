@@ -128,13 +128,24 @@ void main() {
     await open(tester);
     // Shown without decimals.
     expect(find.widgetWithText(TextField, '12'), findsOneWidget);
+    // A decimal point cannot even be typed for pieces.
     await tester.enterText(find.byType(TextField), '2.5');
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(host.messages.single, contains('whole number'));
+    await tester.pump();
+    expect(find.widgetWithText(TextField, '2.5'), findsNothing);
     await tester.enterText(find.byType(TextField), '30');
     await tapAndClose(tester, 'Save');
     expect(host.results, ['30']);
+  });
+
+  testWidgets('stock stops at four digits', (tester) async {
+    final host = await pump(tester, unit: 'kg', quantity: 5);
+    await open(tester);
+    await tester.enterText(find.byType(TextField), '12345');
+    await tester.pump();
+    expect(find.widgetWithText(TextField, '12345'), findsNothing);
+    await tester.enterText(find.byType(TextField), '9999.5');
+    await tapAndClose(tester, 'Save');
+    expect(host.results, ['9999.5']);
   });
 
   testWidgets('opening and cancelling repeatedly never fails', (tester) async {

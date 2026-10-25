@@ -26,7 +26,11 @@ List<MarketAverageRow> currentMarketAverages(
 
 /// The Farmer Dashboard's Current Market Average card.
 class MarketAverageCard extends StatefulWidget {
-  const MarketAverageCard({super.key});
+  /// Every commodity, on the card's own full-list screen; else the first
+  /// few and "View all".
+  final bool showAll;
+
+  const MarketAverageCard({super.key, this.showAll = false});
 
   @override
   State<MarketAverageCard> createState() => _MarketAverageCardState();
@@ -36,10 +40,6 @@ class _MarketAverageCardState extends State<MarketAverageCard> {
   // Created once — not on every dashboard rebuild.
   final Stream<QuerySnapshot<Map<String, dynamic>>> _products =
       FirebaseFirestore.instance.collection('products').snapshots();
-
-  // Rows shown before "View All".
-  static const int _collapsedTiles = 6;
-  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
@@ -79,24 +79,14 @@ class _MarketAverageCardState extends State<MarketAverageCard> {
             'here as farmers post products.',
       );
     }
-    final shown = _expanded ? rows : rows.take(_collapsedTiles).toList();
-    return Column(
-      children: [
-        // One plain line per commodity, a hairline between them — easy to
-        // scan however many there are.
-        for (var i = 0; i < shown.length; i++) ...[
-          if (i > 0) Divider(height: 1, color: Colors.grey[200]),
-          _tile(shown[i]),
-        ],
-        if (rows.length > _collapsedTiles)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: MarketCardToggle(
-              expanded: _expanded,
-              onPressed: () => setState(() => _expanded = !_expanded),
-            ),
-          ),
-      ],
+    return marketCardRows(
+      rows: [for (final row in rows) _tile(row)],
+      showAll: widget.showAll,
+      openAll: () => openMarketCardScreen(
+        context,
+        title: tr(context).currentMarketAverage,
+        child: const MarketAverageCard(showAll: true),
+      ),
     );
   }
 

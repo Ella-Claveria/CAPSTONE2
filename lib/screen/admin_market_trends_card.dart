@@ -15,9 +15,12 @@ import 'admin_dashboard_screen.dart'
         AdminLoadingSpinner,
         AdminQuickActionButton,
         AdminRadii;
+import 'admin_price_trend_chart.dart';
 import 'historical_demand_import.dart';
 
-/// Analytics Dashboard → Market Trends: for one commodity, what changed in
+/// Analytics Dashboard → Market Trends: for one commodity, its average
+/// price month by month, one year against another (see
+/// [AdminPriceTrendChart]); then what changed in
 /// its demand, local supply and price over the last 30 days against the 30
 /// before, how this month compared in previous years, and the possible
 /// factors the data points to (see [MarketDiagnosticsService]).
@@ -93,7 +96,7 @@ class _AdminMarketTrendsCardState extends State<AdminMarketTrendsCard> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          'Market Change Analysis',
+                          'Market Trends',
                           style: TextStyle(
                             color: c.textPrimary,
                             fontSize: 16,
@@ -103,9 +106,9 @@ class _AdminMarketTrendsCardState extends State<AdminMarketTrendsCard> {
                         const SizedBox(height: 3),
                         Text(
                           commodity == null
-                              ? 'Last 30 days against the 30 days before'
-                              : '$commodity · last 30 days against the 30 '
-                                    'days before',
+                              ? 'Price over the years, and the last 30 days'
+                              : '$commodity · price over the years, and the '
+                                    'last 30 days',
                           style: TextStyle(
                             color: c.textSecondary,
                             fontSize: 12.5,
@@ -153,18 +156,54 @@ class _AdminMarketTrendsCardState extends State<AdminMarketTrendsCard> {
                     if (!historical.hasData && !historical.hasError) {
                       return const AdminLoadingSpinner();
                     }
-                    return _analysis(
-                      c,
-                      MarketDiagnosticsService.diagnose(
-                        commodity: commodity,
-                        historical: historical.data ?? const [],
-                        completedOrders: [
-                          for (final d in data.orders) d.data(),
-                        ],
-                        products: [for (final d in data.products) d.data()],
-                      ),
-                      historicalMissing: historical.hasError,
-                      liveMissing: !data.hasLoadedOnce,
+                    final completedOrders = [
+                      for (final d in data.orders) d.data(),
+                    ];
+                    final products = [for (final d in data.products) d.data()];
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // The year-on-year price trend first, then the
+                        // last 30 days' changes.
+                        AdminPriceTrendChart(
+                          commodity: commodity,
+                          products: products,
+                          completedOrders: completedOrders,
+                          historical: historical.data ?? const [],
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 18),
+                          child: Divider(height: 1, color: c.border),
+                        ),
+                        Text(
+                          'Last 30 Days',
+                          style: TextStyle(
+                            color: c.textPrimary,
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Against the 30 days before',
+                          style: TextStyle(
+                            color: c.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        _analysis(
+                          c,
+                          MarketDiagnosticsService.diagnose(
+                            commodity: commodity,
+                            historical: historical.data ?? const [],
+                            completedOrders: completedOrders,
+                            products: products,
+                          ),
+                          historicalMissing: historical.hasError,
+                          liveMissing: !data.hasLoadedOnce,
+                        ),
+                      ],
                     );
                   },
                 ),

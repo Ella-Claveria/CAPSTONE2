@@ -246,7 +246,7 @@ class AdminAnnounceButton extends StatelessWidget {
         customBorder: const CircleBorder(),
         onTap: () => showAdminAnnouncementDialog(context),
         child: Container(
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.all(7),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: c.surfaceAlt,
@@ -254,7 +254,7 @@ class AdminAnnounceButton extends StatelessWidget {
           child: Icon(
             Icons.campaign_outlined,
             color: c.textSecondary,
-            size: 22,
+            size: 20,
           ),
         ),
       ),
@@ -450,7 +450,7 @@ class _AdminNotificationBellState extends State<AdminNotificationBell> {
         ),
       ],
       child: Container(
-        padding: const EdgeInsets.all(8),
+        padding: const EdgeInsets.all(7),
         decoration: BoxDecoration(shape: BoxShape.circle, color: c.surfaceAlt),
         child: Stack(
           clipBehavior: Clip.none,
@@ -458,7 +458,7 @@ class _AdminNotificationBellState extends State<AdminNotificationBell> {
             Icon(
               Icons.notifications_outlined,
               color: c.textSecondary,
-              size: 22,
+              size: 20,
             ),
             if (unread > 0)
               Positioned(
@@ -817,7 +817,7 @@ class _AnnouncementDialogState extends State<_AnnouncementDialog> {
         style: OutlinedButton.styleFrom(
           foregroundColor: scheme.onSurface,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
-          textStyle: const TextStyle(fontSize: 12.5),
+          textStyle: const TextStyle(fontFamily: 'Montserrat', fontSize: 12.5),
         ),
       ),
     );

@@ -33,7 +33,20 @@ import 'login_screen.dart';
 class PendingApprovalScreen extends StatefulWidget {
   final bool justVerified;
 
-  const PendingApprovalScreen({super.key, this.justVerified = false});
+  /// The decision already known — from the approval notification that
+  /// opened this screen ('approved' / 'rejected'), so it shows even when
+  /// the farmer is signed out and the account cannot be read.
+  final String? initialStatus;
+
+  /// The office's reason, when [initialStatus] is 'rejected'.
+  final String? initialReason;
+
+  const PendingApprovalScreen({
+    super.key,
+    this.justVerified = false,
+    this.initialStatus,
+    this.initialReason,
+  });
 
   @override
   State<PendingApprovalScreen> createState() => _PendingApprovalScreenState();
@@ -43,7 +56,10 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   final _authService = AuthService();
 
   // Possible values: 'pending', 'approved', 'rejected'
-  String _status = 'pending';
+  late String _status = switch (widget.initialStatus) {
+    'approved' || 'rejected' => widget.initialStatus!,
+    _ => 'pending',
+  };
   bool _loading = true;
   bool _checkingStatus = false;
   bool _returningToLogin = false;
@@ -51,7 +67,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _sub;
 
   // The office's reason for not approving, kept with the application.
-  String _rejectionReason = '';
+  late String _rejectionReason = (widget.initialReason ?? '').trim();
   bool _reasonAsked = false;
 
   Future<void> _loadRejectionReason() async {
@@ -106,6 +122,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     });
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) {
+      // Signed out (opened from the notification): the decision it carried
+      // is what is shown.
       setState(() => _loading = false);
       return;
     }
@@ -118,6 +136,7 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
             if (!mounted) return;
             final status = (snap.data()?['approvalStatus'] ?? 'pending')
                 .toString();
+            if (_navigated) return;
             setState(() {
               _status = status;
               _loading = false;
@@ -136,23 +155,22 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
 
   // Approved: never straight into the app. For security the farmer logs in
   // again first — however they reached this screen (just registered, a
-  // login, or the app reopened while waiting).
+  // login, the app reopened while waiting, or the approval notification).
+  // The screen shows the approval (Admin approval ticked) with a Log In
+  // button rather than jumping away, so the decision is seen.
   void _maybeEnterApp(String status) {
     if (_navigated || status != 'approved') return;
     _navigated = true;
     _sub?.cancel();
-    _requireLoginToEnter();
-  }
-
-  Future<void> _requireLoginToEnter() async {
     // That login is still this farmer's first time in the app, so the
     // walkthrough is kept for it (see LoginFormFields).
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null) await FirstEntryAfterApproval.mark(uid);
-    await _redirectToLogin(
-      'Your application is approved. Please log in to continue.',
-    );
+    if (uid != null) FirstEntryAfterApproval.mark(uid);
   }
+
+  Future<void> _logInAfterApproval() => _redirectToLogin(
+    'Your application is approved. Please log in to continue.',
+  );
 
   @override
   void dispose() {
@@ -169,7 +187,13 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
     setState(() => _checkingStatus = true);
 
     try {
-      final status = await _authService.getFarmerApprovalStatus();
+      // Spins at least a moment, so the check is seen even when the answer
+      // comes back at once.
+      final results = await Future.wait([
+        _authService.getFarmerApprovalStatus(),
+        Future<void>.delayed(const Duration(milliseconds: 800)),
+      ]);
+      final status = results.first as String;
       if (!mounted) return;
       setState(() => _status = status);
       _maybeEnterApp(status);
@@ -222,7 +246,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
   @override
   Widget build(BuildContext context) {
     final rejected = _status == 'rejected';
-    if (rejected) _loadRejectionReason();
+    final approved = _status == 'approved';
+    if (rejected && _rejectionReason.isEmpty) _loadRejectionReason();
 
     return Scaffold(
       backgroundColor: AppTheme.bgLight,
@@ -259,6 +284,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                     child: Icon(
                       rejected
                           ? Icons.cancel_outlined
+                          : approved
+                          ? Icons.verified_rounded
                           : Icons.hourglass_top_rounded,
                       size: 42,
                       color: rejected ? Colors.red[700] : AppTheme.dark,
@@ -272,6 +299,8 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                   Text(
                     rejected
                         ? 'Application not approved'
+                        : approved
+                        ? 'Application approved'
                         : 'Application under review',
                     style: AppTheme.heading(20),
                     textAlign: TextAlign.center,
@@ -283,12 +312,13 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                         ? 'The Agricultural Office of Laurel, Batangas did not '
                               'approve your application. Please contact their office '
                               'for clarification.'
-                        : "You've submitted your farmer application, "
-                              'including your verification details. An '
-                              'officer of the Agricultural Office of Laurel, '
-                              'Batangas now reviews it to confirm you\'re a '
-                              'genuine farmer before '
-                              'you can sell on AgriTrade+.',
+                        : approved
+                        ? 'The Agricultural Office of Laurel, Batangas has '
+                              'approved your farmer application. Log in to '
+                              'start selling on AgriTrade+.'
+                        : 'The Agricultural Office of Laurel, Batangas is '
+                              'reviewing your application. You can start '
+                              'selling once it is approved.',
                     style: AppTheme.body(size: 13.5),
                     textAlign: TextAlign.center,
                   ),
@@ -335,17 +365,48 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Column(
-                        children: const [
-                          _StepRow(label: 'Email verified', done: true),
-                          SizedBox(height: 10),
-                          _StepRow(label: 'Documents submitted', done: true),
-                          SizedBox(height: 10),
-                          _StepRow(label: 'Admin approval', done: false),
+                        children: [
+                          const _StepRow(label: 'Email verified', done: true),
+                          const SizedBox(height: 10),
+                          const _StepRow(
+                            label: 'Application submitted',
+                            done: true,
+                          ),
+                          const SizedBox(height: 10),
+                          _StepRow(label: 'Admin approval', done: approved),
                         ],
                       ),
                     ),
                     const SizedBox(height: 14),
+                  ],
 
+                  if (approved) ...[
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _loginRedirectStarted
+                            ? null
+                            : _logInAfterApproval,
+                        style: AppTheme.primaryButton(),
+                        child: _returningToLogin
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                'Log In to Continue',
+                                style: AppTheme.buttonText(),
+                              ),
+                      ),
+                    ),
+                  ],
+
+                  if (!rejected && !approved) ...[
                     // ---- 24-hour notice ----
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -378,15 +439,6 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                         ],
                       ),
                     ),
-                    const SizedBox(height: 14),
-
-                    Text(
-                      'Your email is verified and your required documents are '
-                      'submitted. This application is waiting for admin review. '
-                      'We will email you when a decision is made.',
-                      style: AppTheme.body(size: 12.5),
-                      textAlign: TextAlign.center,
-                    ),
                     const SizedBox(height: 20),
 
                     // ---- Manual refresh ----
@@ -397,55 +449,43 @@ class _PendingApprovalScreenState extends State<PendingApprovalScreen> {
                             ? null
                             : _checkStatus,
                         style: AppTheme.primaryButton(),
-                        child: _checkingStatus
-                            ? Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const SizedBox(
-                                    height: 18,
-                                    width: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Text(
-                                    'Refreshing status',
-                                    style: AppTheme.buttonText(),
-                                  ),
-                                ],
-                              )
-                            : Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.refresh_rounded, size: 19),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Check status',
-                                    style: AppTheme.buttonText(),
-                                  ),
-                                ],
-                              ),
+                        // The refresh icon spins while the status is checked.
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            _SpinningIcon(
+                              icon: Icons.refresh_rounded,
+                              spinning: _checkingStatus,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _checkingStatus
+                                  ? 'Checking status…'
+                                  : 'Check status',
+                              style: AppTheme.buttonText(),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ],
 
                   const SizedBox(height: 12),
 
-                  TextButton(
-                    onPressed: _loginRedirectStarted ? null : _returnToLogin,
-                    child: _returningToLogin
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Text(
-                            'Back to login page',
-                            style: AppTheme.body(size: 13),
-                          ),
-                  ),
+                  if (!approved)
+                    TextButton(
+                      onPressed: _loginRedirectStarted ? null : _returnToLogin,
+                      child: _returningToLogin
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              'Back to login page',
+                              style: AppTheme.body(size: 13),
+                            ),
+                    ),
                 ],
               ),
             ),
@@ -486,4 +526,53 @@ class _StepRow extends StatelessWidget {
       ],
     );
   }
+}
+
+// ============================================================
+// An icon that turns while [spinning] — the Check status button's refresh
+// icon, so the check is seen to be happening.
+// ============================================================
+class _SpinningIcon extends StatefulWidget {
+  final IconData icon;
+  final bool spinning;
+
+  const _SpinningIcon({required this.icon, required this.spinning});
+
+  @override
+  State<_SpinningIcon> createState() => _SpinningIconState();
+}
+
+class _SpinningIconState extends State<_SpinningIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _turn = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 800),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.spinning) _turn.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_SpinningIcon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.spinning && !_turn.isAnimating) {
+      _turn.repeat();
+    } else if (!widget.spinning && _turn.isAnimating) {
+      // Finishes the turn it is on, so it stops upright.
+      _turn.forward(from: _turn.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    _turn.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      RotationTransition(turns: _turn, child: Icon(widget.icon, size: 19));
 }

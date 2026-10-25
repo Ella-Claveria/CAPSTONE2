@@ -58,11 +58,6 @@ class ProductService {
     // Livestock only: 'live' or 'slaughtered' (SellingOption.value, see
     // commodity_master_list.dart). Null for anything else.
     String? sellingOption,
-    // Internal moderation flag, set only when the farmer chose to post at
-    // a price far above the AI suggested range (see add_product_screen's
-    // high-price warning). Never shown to buyers; exists so the Admin
-    // Moderation Queue can pick out unusually high-priced listings.
-    Map<String, dynamic>? priceFlag,
     // When this batch was harvested, as entered by the farmer (see
     // harvest_info.dart). Optional, and only for produce categories.
     DateTime? harvestDate,
@@ -106,11 +101,6 @@ class ProductService {
         // creation instead of relying on callers to treat them as absent
         // (see docs/firestore-schema-migration.md). 'rating'/'reviewCount'
         // are kept current by ReviewService.submitReview.
-        if (priceFlag != null)
-          'priceFlag': {
-            ...priceFlag,
-            'flaggedAt': FieldValue.serverTimestamp(),
-          },
         'isArchived': false,
         'isSuspended': false,
         'rating': 0.0,
@@ -146,11 +136,9 @@ class ProductService {
     String? unit,
     // See addProduct's sellingOption param — null removes it.
     String? sellingOption,
-    // See addProduct's priceFlag param.
-    Map<String, dynamic>? priceFlag,
-    // Removes an earlier flag, so a farmer who brings the price back down
-    // is no longer flagged. The field is otherwise left out of the write
-    // entirely, so an ordinary edit never touches it.
+    // Removes a high-price flag left on the listing by an earlier version
+    // of the app (prices are no longer flagged: they are the farmer's to
+    // set). The field is otherwise left out of the write entirely.
     bool clearPriceFlag = false,
     // See addProduct's harvestDate param. A new batch is recorded by
     // changing this on the same listing, not by posting a new one.
@@ -208,10 +196,7 @@ class ProductService {
         'deliveryCoverage': deliveryAvailable && deliveryCoverage != null
             ? deliveryCoverage
             : FieldValue.delete(),
-        if (priceFlag != null)
-          'priceFlag': {...priceFlag, 'flaggedAt': FieldValue.serverTimestamp()}
-        else if (clearPriceFlag)
-          'priceFlag': FieldValue.delete(),
+        if (clearPriceFlag) 'priceFlag': FieldValue.delete(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
       return null;

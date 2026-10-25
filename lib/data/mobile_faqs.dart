@@ -22,10 +22,10 @@ const List<MobileFaq> _farmerFaqs = [
         'tap Post.',
   ),
   MobileFaq(
-    'Why does AgriTrade+ warn me about my price?',
-    'Your price is compared with the current market average for that '
-        'product. If it is much higher or lower, you are told why and can '
-        'change it — or tap Post Anyway to keep it.',
+    'Who decides the price of my product?',
+    'You do. When you post, AgriTrade+ shows a suggested price range from '
+        'the current market as a guide, but you can set any price — buyers '
+        'decide whether to buy at it.',
   ),
   MobileFaq(
     'How do I update my stock?',

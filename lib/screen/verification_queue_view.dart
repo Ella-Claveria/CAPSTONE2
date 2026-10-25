@@ -482,7 +482,10 @@ class FarmerApplicationCard extends StatelessWidget {
             disabledBackgroundColor: c.border,
             minimumSize: const Size(0, 40),
             padding: const EdgeInsets.symmetric(horizontal: 18),
-            textStyle: const TextStyle(fontWeight: FontWeight.w700),
+            textStyle: const TextStyle(
+              fontFamily: 'Montserrat',
+              fontWeight: FontWeight.w700,
+            ),
           ),
           onPressed: nothingToCheck
               ? null
@@ -631,7 +634,10 @@ class FarmerApplicationCard extends StatelessWidget {
         side: BorderSide(color: border),
         minimumSize: const Size(0, 40),
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        textStyle: const TextStyle(fontWeight: FontWeight.w600),
+        textStyle: const TextStyle(
+          fontFamily: 'Montserrat',
+          fontWeight: FontWeight.w600,
+        ),
       );
 }
 

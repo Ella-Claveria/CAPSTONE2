@@ -55,11 +55,17 @@ class NotificationNavigationService {
         return;
 
       case 'verification_status':
-        // PendingApprovalScreen already reflects pending/approved/rejected
-        // live and auto-advances to Farmer Home once approved — the same
-        // screen used during the original onboarding wait.
+        // PendingApprovalScreen, the same screen used during the original
+        // wait, showing the decision this notification carries (approved:
+        // Admin approval ticked, with Log In) — also when the farmer is
+        // signed out and the account cannot be read live.
         Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const PendingApprovalScreen()),
+          MaterialPageRoute(
+            builder: (_) => PendingApprovalScreen(
+              initialStatus: data['status']?.toString(),
+              initialReason: data['reason']?.toString(),
+            ),
+          ),
         );
         return;
 

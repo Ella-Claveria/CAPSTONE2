@@ -287,6 +287,7 @@ class _HistoricalDemandPreviewDialogState
                         ),
                         elevation: 0,
                         textStyle: const TextStyle(
+                          fontFamily: 'Montserrat',
                           fontSize: 13.5,
                           fontWeight: FontWeight.w600,
                         ),

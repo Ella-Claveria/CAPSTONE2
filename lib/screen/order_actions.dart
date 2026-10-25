@@ -577,6 +577,7 @@ class _ReportDelaySheetState extends State<ReportDelaySheet> {
             ),
             decoration: _field(),
             style: const TextStyle(
+              fontFamily: 'Montserrat',
               fontSize: 13.5,
               fontWeight: FontWeight.w600,
               color: AppTheme.dark,

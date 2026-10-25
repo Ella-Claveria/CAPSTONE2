@@ -220,7 +220,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         child: OutlinedButton(
           onPressed: canResend ? _sendResetLink : null,
           style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: 11),
             side: BorderSide(
               color: canResend ? AppTheme.mid : Colors.grey.shade300,
             ),

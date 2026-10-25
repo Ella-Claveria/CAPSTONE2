@@ -178,6 +178,7 @@ class _BuyerFulfillmentPreferencesScreenState
                       selectedForegroundColor: Colors.white,
                       foregroundColor: _dark,
                       textStyle: const TextStyle(
+                        fontFamily: 'Montserrat',
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
                       ),

@@ -1,115 +1,121 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 
-/// The bottom navigation bar of the Farmer and Buyer home screens: the same
-/// soft white bar and items as before, but docked to the bottom edge, full
-/// width, the way Android bars sit, instead of a pill floating above the
-/// edge. Only its top corners are rounded. Its colour carries on under the
-/// phone's own navigation (gesture bar or buttons), so nothing shows
-/// through below it.
-///
-/// With [hidden] it slides down out of sight (and fades), giving the page
-/// the room — see [NavBarAutoHide], which hides it while a long page is
-/// scrolled down.
+import '../theme/app_theme.dart';
+
+/// The bottom navigation bar of the Farmer and Buyer home screens: a small,
+/// solid white pill floating a little above the bottom edge, inset from
+/// the sides, on a soft shadow. It sits above the phone's own navigation
+/// (gesture bar or buttons), never under it, and it stays on screen —
+/// it does not hide while a page is scrolled.
 class DockedNavBar extends StatelessWidget {
-  /// The bar's items, laid out in a [Row]; each is usually [Expanded].
+  /// The bar's items, laid out in a [Row]; each is usually a [NavBarItem].
   final List<Widget> children;
 
-  final bool hidden;
+  /// Height of the pill itself.
+  static const double height = 54;
 
-  /// Height of the item row, not counting the phone's navigation area.
-  static const double height = 64;
+  /// The bar's look — pure white, these corners, this shadow — which the
+  /// tabs' header band (PageHeader) shares.
+  static const Color color = Colors.white;
+  static const double cornerRadius = 27;
+  static final List<BoxShadow> shadow = [
+    BoxShadow(
+      color: Colors.black.withValues(alpha: 0.10),
+      blurRadius: 16,
+      offset: const Offset(0, 4),
+    ),
+  ];
 
-  static const Duration slide = Duration(milliseconds: 220);
+  static const BorderRadius _radius = BorderRadius.all(
+    Radius.circular(cornerRadius),
+  );
 
-  const DockedNavBar({super.key, required this.children, this.hidden = false});
+  const DockedNavBar({super.key, required this.children});
 
   @override
   Widget build(BuildContext context) {
-    final bar = Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.62),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.72),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF8EB99A).withValues(alpha: 0.22),
-            blurRadius: 20,
-            spreadRadius: 1,
-            // Cast upward, onto the page above the bar.
-            offset: const Offset(0, -3),
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: _radius,
+            boxShadow: shadow,
           ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SizedBox(
-          height: height,
-          child: Row(children: children),
-        ),
-      ),
-    );
-    // Shrinking the height from the top lets the bar slip below the screen
-    // edge (and the page grow into the room); the fade also hides anything
-    // that rises above the bar, like the farmer's + button.
-    return IgnorePointer(
-      ignoring: hidden,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(end: hidden ? 0 : 1),
-        duration: slide,
-        curve: Curves.easeOutCubic,
-        builder: (context, shown, child) => Opacity(
-          opacity: shown,
-          child: Align(
-            alignment: Alignment.topCenter,
-            heightFactor: shown,
-            child: child,
+          // For the items' ripples. Not clipped: the farmer's + button
+          // rises above the pill.
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: _radius,
+            clipBehavior: Clip.none,
+            child: SizedBox(
+              height: height,
+              child: Row(children: children),
+            ),
           ),
         ),
-        child: bar,
       ),
     );
   }
 }
 
-/// Watches the tab pages' vertical scrolling and decides when the bottom
-/// bar hides: scrolling down a page long enough to scroll well past it
-/// hides it; any scroll back up, or reaching the top, shows it again.
-/// Sideways swipes (between tabs) are ignored.
-class NavBarAutoHide extends StatelessWidget {
-  final Widget child;
-  final ValueChanged<bool> onHiddenChanged;
+/// One tab in [DockedNavBar] — the same small icon and label for the Farmer
+/// and the Buyer. [decorateIcon] puts a badge on the icon (the red dot
+/// for unread messages or new orders).
+class NavBarItem extends StatelessWidget {
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  final Widget Function(Widget icon)? decorateIcon;
 
-  const NavBarAutoHide({
+  const NavBarItem({
     super.key,
-    required this.child,
-    required this.onHiddenChanged,
+    required this.icon,
+    required this.activeIcon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.decorateIcon,
   });
 
-  bool _onScroll(ScrollNotification notification) {
-    final metrics = notification.metrics;
-    if (metrics.axis != Axis.vertical) return false;
-    if (notification is UserScrollNotification) {
-      final longPage = metrics.maxScrollExtent > DockedNavBar.height * 2;
-      if (notification.direction == ScrollDirection.reverse && longPage) {
-        onHiddenChanged(true);
-      } else if (notification.direction == ScrollDirection.forward) {
-        onHiddenChanged(false);
-      }
-    } else if (notification is ScrollUpdateNotification &&
-        metrics.extentBefore <= 0) {
-      onHiddenChanged(false); // Back at the top.
-    }
-    return false;
-  }
+  static const Color _unselected = Color(0xFFAAB4AC);
 
   @override
-  Widget build(BuildContext context) =>
-      NotificationListener<ScrollNotification>(
-        onNotification: _onScroll,
-        child: child,
-      );
+  Widget build(BuildContext context) {
+    final color = selected ? AppTheme.dark : _unselected;
+    final iconWidget = Icon(
+      selected ? activeIcon : icon,
+      color: color,
+      size: 19,
+    );
+    return Expanded(
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const StadiumBorder(),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            decorateIcon?.call(iconWidget) ?? iconWidget,
+            const SizedBox(height: 2),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 9,
+                color: color,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

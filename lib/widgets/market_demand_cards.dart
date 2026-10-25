@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../data/commodity_master_list.dart';
 import '../services/market_demand_service.dart';
 import '../theme/app_theme.dart';
+import 'demand_badge.dart';
 import 'market_card_shell.dart';
 import 'retry_message.dart';
 import '../l10n/tr.dart';
@@ -14,6 +15,10 @@ import '../l10n/tr.dart';
 /// and, below it, Top Buyer Locations — both for [month], the same month
 /// the Sales Performance card is showing. See [MarketDemandService] for
 /// what is counted and how demand level and trend are decided.
+///
+/// On the dashboard each card lists its first few rows and "View all";
+/// that opens a screen with just that card ([only]) listing every row
+/// ([showAll]).
 class MarketDemandCards extends StatefulWidget {
   final DateTime month;
 
@@ -21,16 +26,26 @@ class MarketDemandCards extends StatefulWidget {
   final Key? bestSellersKey;
   final Key? locationsKey;
 
+  /// Just one of the two cards; both when null.
+  final MarketDemandList? only;
+
+  /// Every row, on a card's own full-list screen.
+  final bool showAll;
+
   const MarketDemandCards({
     super.key,
     required this.month,
     this.bestSellersKey,
     this.locationsKey,
+    this.only,
+    this.showAll = false,
   });
 
   @override
   State<MarketDemandCards> createState() => _MarketDemandCardsState();
 }
+
+enum MarketDemandList { bestSellers, locations }
 
 class _MarketDemandCardsState extends State<MarketDemandCards> {
   // Created once — not on every dashboard rebuild.
@@ -39,10 +54,14 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
   Stream<QuerySnapshot<Map<String, dynamic>>> _salesStream() =>
       FirebaseFirestore.instance.collection('market_sales').snapshots();
 
-  // Rows each list shows on the dashboard before "View All".
-  static const int _collapsed = 5;
-  bool _allProducts = false;
-  bool _allLocations = false;
+  bool _shows(MarketDemandList list) =>
+      widget.only == null || widget.only == list;
+
+  void _openAll(MarketDemandList list, String title) => openMarketCardScreen(
+    context,
+    title: title,
+    child: MarketDemandCards(month: widget.month, only: list, showAll: true),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -76,50 +95,55 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
               sales: sales,
               month: widget.month,
             );
+            final bestSellersTitle = tr(context).bestSellingProducts;
+            final locationsTitle = tr(context).topBuyerLocations;
             return Column(
               children: [
-                KeyedSubtree(
-                  key: widget.bestSellersKey,
-                  child: _card(
-                    title: tr(context).bestSellingProducts,
-                    subtitle: tr(
-                      context,
-                    ).bestSellersSubtitle(MarketDemandService.bestSellerLimit),
-                    tag: tagLabel,
-                    loading: loading,
-                    emptyIcon: Icons.shopping_basket_outlined,
-                    emptyText:
-                        'No completed orders in $monthLabel yet. Popular '
-                        'products will appear here as buyers complete orders.',
-                    rows: [
-                      for (var i = 0; i < bestSellers.length; i++)
-                        _bestSellerRow(i + 1, bestSellers[i]),
-                    ],
-                    expanded: _allProducts,
-                    onToggle: () =>
-                        setState(() => _allProducts = !_allProducts),
+                if (_shows(MarketDemandList.bestSellers))
+                  KeyedSubtree(
+                    key: widget.bestSellersKey,
+                    child: _card(
+                      title: bestSellersTitle,
+                      subtitle: tr(context).bestSellersSubtitle(
+                        MarketDemandService.bestSellerLimit,
+                      ),
+                      tag: tagLabel,
+                      loading: loading,
+                      emptyIcon: Icons.shopping_basket_outlined,
+                      emptyText:
+                          'No completed orders in $monthLabel yet. Popular '
+                          'products will appear here as buyers complete '
+                          'orders.',
+                      rows: [
+                        for (var i = 0; i < bestSellers.length; i++)
+                          _bestSellerRow(i + 1, bestSellers[i]),
+                      ],
+                      openAll: () => _openAll(
+                        MarketDemandList.bestSellers,
+                        bestSellersTitle,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                KeyedSubtree(
-                  key: widget.locationsKey,
-                  child: _card(
-                    title: tr(context).topBuyerLocations,
-                    tag: tagLabel,
-                    loading: loading,
-                    emptyIcon: Icons.map_outlined,
-                    emptyText:
-                        'No buyer locations on record for completed orders in '
-                        '$monthLabel yet.',
-                    rows: [
-                      for (var i = 0; i < locations.length; i++)
-                        _locationRow(i + 1, locations[i]),
-                    ],
-                    expanded: _allLocations,
-                    onToggle: () =>
-                        setState(() => _allLocations = !_allLocations),
+                if (widget.only == null) const SizedBox(height: 16),
+                if (_shows(MarketDemandList.locations))
+                  KeyedSubtree(
+                    key: widget.locationsKey,
+                    child: _card(
+                      title: locationsTitle,
+                      tag: tagLabel,
+                      loading: loading,
+                      emptyIcon: Icons.map_outlined,
+                      emptyText:
+                          'No buyer locations on record for completed orders '
+                          'in $monthLabel yet.',
+                      rows: [
+                        for (var i = 0; i < locations.length; i++)
+                          _locationRow(i + 1, locations[i]),
+                      ],
+                      openAll: () =>
+                          _openAll(MarketDemandList.locations, locationsTitle),
+                    ),
                   ),
-                ),
               ],
             );
           },
@@ -136,8 +160,7 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
     required IconData emptyIcon,
     required String emptyText,
     required List<Widget> rows,
-    required bool expanded,
-    required VoidCallback onToggle,
+    required VoidCallback openAll,
   }) {
     return MarketCardShell(
       title: title,
@@ -147,23 +170,10 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
           ? const MarketCardLoading()
           : rows.isEmpty
           ? MarketCardEmpty(icon: emptyIcon, message: emptyText)
-          : Column(
-              children: [
-                // The dashboard shows the first few; the rest open in place.
-                for (
-                  var i = 0;
-                  i <
-                      (expanded
-                          ? rows.length
-                          : rows.length.clamp(0, _collapsed));
-                  i++
-                ) ...[
-                  if (i > 0) Divider(height: 1, color: Colors.grey[200]),
-                  rows[i],
-                ],
-                if (rows.length > _collapsed)
-                  MarketCardToggle(expanded: expanded, onPressed: onToggle),
-              ],
+          : marketCardRows(
+              rows: rows,
+              showAll: widget.showAll,
+              openAll: openAll,
             ),
     );
   }
@@ -220,13 +230,10 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
     ),
   );
 
-  // Short, so the line fits: High / Moderate / Low.
+  // Short, so the line fits: High / Moderate / Low. The same words and
+  // colours as the Buyer's product cards (see DemandBadge).
   Widget _demandTag(DemandLevel level) {
-    final (String label, Color color) = switch (level) {
-      DemandLevel.high => ('High', AppTheme.mid),
-      DemandLevel.moderate => ('Moderate', Colors.orange.shade800),
-      DemandLevel.low => ('Low', Colors.grey.shade700),
-    };
+    final (label, color) = demandLevelStyle(level);
     return _pill(label, color);
   }
 
@@ -243,19 +250,7 @@ class _MarketDemandCardsState extends State<MarketDemandCards> {
 
   // Rank, product, its trend arrow and demand — on one line.
   Widget _bestSellerRow(int rank, BestSeller item) {
-    final (String trend, IconData icon, Color color) = switch (item.trend) {
-      DemandTrend.rising => ('Rising', Icons.trending_up_rounded, AppTheme.mid),
-      DemandTrend.stable => (
-        'Stable',
-        Icons.trending_flat_rounded,
-        Colors.grey.shade600,
-      ),
-      DemandTrend.declining => (
-        'Declining',
-        Icons.trending_down_rounded,
-        Colors.red.shade700,
-      ),
-    };
+    final (trend, icon, color) = demandTrendStyle(item.trend);
     return _line(rank, item.commodity, [
       Tooltip(
         message: trend,
